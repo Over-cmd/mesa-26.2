@@ -27,17 +27,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
-      # ¡ESTE PASO ARREGLA EL NOMBRE DEL TARGET EXIGIDO POR NINJA!
-      - name: Patch Compile Script (Fix Ninja Target)
+      # ¡ESTE PASO ENGAÑA AL DOCKER INTEGRANDO UN NINJA FALSO QUE CORRIGE EL COMANDO EN CALIENTE!
+      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
         run: |
-          echo "-> Corrigiendo el objetivo de compilacion para Ninja..."
-          # Buscamos archivos como compile.sh o build.sh en la raiz y reconfiguramos la ruta del .so por el nombre de target real
-          if [ -f "compile.sh" ]; then
-            sed -i 's|src/vulkan/wrapper/libvulkan_wrapper.so|vulkan_wrapper|g' compile.sh
-            echo "-> compile.sh modificado con exito."
-          fi
-          # Ademas parchamos preventivamente el meson.build si forzara el nombre de salida
-          find . -name "meson.build" -exec sed -i "s|'src/vulkan/wrapper/libvulkan_wrapper.so'|'vulkan_wrapper'|g" {} + || true
+          echo "-> Creando interceptor de comandos para Ninja..."
+          mkdir -p bin_hijack
+          
+          # Escribimos el script interceptor
+          cat << 'EOF' > bin_hijack/ninja
+          #!/bin/bash
+          # Capturamos todos los argumentos enviados por el script interno de Docker
+          ARGS=("$@")
+          NEW_ARGS=()
+          
+          for arg in "${ARGS[@]}"; do
+            # Si el script intenta pedir la ruta rota, la cambiamos por el target limpio universal
+            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
+              NEW_ARGS+=("vulkan_wrapper")
+            else
+              NEW_ARGS+=("$arg")
+            fi
+          done
+          
+          # Ejecutamos el Ninja real del sistema con los argumentos ya corregidos
+          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
+          EOF
+          
+          chmod +x bin_hijack/ninja
+          echo "-> Interceptor Ninja creado con exito."
 
       # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL BLOQUEO ANTERIOR
       - name: Patch Meson Choices (Allow Wrapper Option)
@@ -77,8 +94,12 @@ jobs:
 
       - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
-          # El contenedor de leegao toma el mando y devora el código ya modificado de forma nativa
-          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+          # Montamos nuestra carpeta bin_hijack en la ruta /usr/local/bin/ninja del contenedor 
+          # para sobreescribir el Ninja original y forzar la correccion del comando.
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
+            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
       # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
       - name: Structure and Pack wrapper.tzst
