@@ -27,6 +27,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
+      # ¡ESTE PASO AGREGA 'WRAPPER' A LAS OPCIONES LEGALES PARA QUE EL DOCKER NATIVO NO ABORTE!
+      - name: Patch Meson Options for Wrapper Choice
+        run: |
+          echo "-> Desbloqueando la opcion 'wrapper' en las opciones oficiales de Meson..."
+          if [ -f "meson.options" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
+            echo "-> meson.options parchado con éxito."
+          elif [ -f "meson_options.txt" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
+            echo "-> meson_options.txt parchado con éxito."
+          fi
+
       # TU INYECCIÓN DE MEMORIA BALANCEADA (Evita tirones en 32/64 bits, logos y vídeos)
       - name: Surgical Silicon Modification (Anti-Overflow MALI Dual Injection)
         run: |
@@ -50,7 +62,7 @@ jobs:
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # TU PASO ORIGINAL DE DOCKER QUE SÍ FUNCIONA DE FORMA NATIVA
+      # TU PASO ORIGINAL DE DOCKER EXACTO (TAL Y COMO DEBE CORRER)
       - name: compilador-envoltorio
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
