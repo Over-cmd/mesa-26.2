@@ -1,4 +1,4 @@
-name: Mesa 26.2 Mali Packager (.tzst)
+name: Mesa 26.2 NDK Panfrost Packager (.tzst)
 
 on:
   push:
@@ -6,81 +6,134 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: compilacion
+  BUILD_DIR: build
 
 jobs:
-  build-aarch64-wrapper:
+  build-android-wrapper:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+    strategy:
+      matrix:
+        build-type: [release] # Usamos solo release para Bannerlator para máximo rendimiento
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Instalar herramientas de compresión Zstd en el servidor de GitHub
-      - name: Install Zstd Packager
+      - name: Patch anon_file.c for memfd_create
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd
+          sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTE PASO PARCHA EL ERROR DE MESON!
-      - name: Patch Meson Choices (Allow Wrapper Option)
+      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI Panfrost)
         run: |
-          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
-          if [ -f "meson.options" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
-            echo "-> meson.options parchado con exito."
-          elif [ -f "meson_options.txt" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
-            echo "-> meson_options.txt parchado con exito."
-          fi
-
-      - name: Surgical Silicon Modification (Mesa 26.2 Anti-Overflow MALI Engine)
-        run: |
-          echo "-> Rastreando el nucleo de Mesa 26.2 para inyectar la valvula de escape MALI..."
-          WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
+          echo "-> Rastreando el nucleo del driver Panfrost para inyectar la valvula MALI..."
+          # Buscamos el punto de entrada de la inicialización de Vulkan dentro de Panfrost
+          PANVK_DEVICE=$(find src/panfrost/vulkan/ -name "panvk_device.c" -o -name "panvk_vulkan.c" | head -n 1)
           
-          if [ -n "$WSI_FILES" ]; then
-            echo "-> Soldando valvula mallopt nativa y deslimitador de FPS en el motor WSI de Mesa..."
-            for file in $WSI_FILES; do
-              if [ -f "$file" ]; then
-                sed -i 's/\r$//' "$file"
-                find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
-                break
-              fi
-            done
-            echo "-> ¡Inyección completada con éxito en el árbol de Mesa 26.2!"
+          if [ -n "$PANVK_DEVICE" ] && [ -f "$PANVK_DEVICE" ]; then
+            echo "-> Soldando valvula mallopt y present mode en: $PANVK_DEVICE"
+            sed -i 's/\r$//' "$PANVK_DEVICE"
+            sed -i '1iextern int mallopt(int param, int value);' "$PANVK_DEVICE"
+            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$PANVK_DEVICE"
+            
+            # Inyectamos el mallopt estable (-1002, 0) y mailbox para que los vídeos de Deadpool no vayan a trozos
+            find src/panfrost/vulkan/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+            echo "-> Driver Panfrost modificado de forma segura."
           else
-            echo "-> Alerta: No se encontraron archivos WSI directos, aplicando inyección global preventiva..."
+            echo "-> Fallback: Aplicando inyeccion global preventiva en el arbol de origen..."
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      - name: Wrapper Compiler (Atomic Processing Docker Mesa 26.2)
-        run: |
-          # El contenedor ya no fallara porque 'wrapper' ahora es una opcion oficial aceptada
-          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              build-essential \
+              llvm-20-dev \
+              libclang-20-dev \
+              libclc-20-dev \
+              libllvmspirvlib-20-dev \
+              libelf-dev \
+              spirv-tools \
+              bison \
+              flex \
+              libdrm-dev \
+              pkg-config \
+              zstd
+          python -m pip install --upgrade pip
+          pip install mako PyYAML meson ninja packaging
+
+      - name: Generate Shims
+        run: |
+          unzip shims.zip -d ./
+
+      - name: Generate Host Tools
+        run: |
+          meson setup build-host \
+              -Dplatforms=[] \
+              -Dgallium-drivers=[] \
+              -Dvulkan-drivers=[] \
+              -Dtools=panfrost \
+              -Dprecomp-compiler=enabled \
+              -Dinstall-precomp-compiler=true \
+              -Dllvm=enabled \
+              -Dmesa-clc=enabled -Dinstall-mesa-clc=true
+          ninja -C build-host src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile
+          ln -sf "build-host/src/compiler/clc/mesa_clc" "build-host/src/compiler/clc/mesa-clc"
+          ln -sf "build-host/src/compiler/spirv/vtn_bindgen2" "build-host/src/compiler/spirv/vtn-bindgen2"
+          echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/build-host/src/compiler/spirv" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/build-host/src/panfrost/clc" >> $GITHUB_PATH
+
+      - name: Setup Meson Cross-Compilation
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/shims
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
+          envsubst < android.toml > android-cross.txt
+          meson setup ${{ env.BUILD_DIR }} --reconfigure \
+              --cross-file android-cross.txt \
+              -Dbuildtype=${{ matrix.build-type }} \
+              -Dplatforms=android,x11 \
+              -Dandroid-stub=true \
+              -Dandroid-libbacktrace=disabled \
+              -Dplatform-sdk-version=30 \
+              -Dglx=disabled \
+              -Dgbm=disabled \
+              -Degl=disabled \
+              -Dopengl=false \
+              -Dgles1=disabled \
+              -Dgles2=disabled \
+              -Dglvnd=disabled \
+              -Dvalgrind=disabled \
+              -Dgallium-drivers= \
+              -Dshared-glapi=disabled \
+              -Dzstd=disabled \
+              -Dmesa-clc=system \
+              -Dprecomp-compiler=system \
+              -Dvulkan-drivers=panfrost \
+              -Dllvm=disabled
+
+      - name: Compile Project
+        run: |
+          meson compile -C ${{ env.BUILD_DIR }}
+
+      # ESTE PASO ADAPTA EL BINARIO DE PANFROST A LA ESTRUCTURA QUE BANNERLATOR LEE
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Buscando y moviendo el driver recién compilado a usr/lib..."
-          DRIVER_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1)
-          if [ -n "$DRIVER_FILE" ]; then
-            cp "$DRIVER_FILE" pkg/usr/lib/libvulkan_wrapper.so
-          else
-            echo "-> Error crítico: No se encontró el archivo .so compilado."
-            exit 1
-          fi
+          echo "-> Moviendo libvulkan_panfrost.so a la ruta del driver..."
+          cp ${{ env.BUILD_DIR }}/src/panfrost/vulkan/libvulkan_panfrost.so pkg/usr/lib/libvulkan_wrapper.so
           
-          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
+          echo "-> Inyectando manifiesto JSON ICD oficial..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -91,16 +144,14 @@ jobs:
           }
           EOF
           
-          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
+          echo "-> Comprimiendo la estructura en formato atomico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
-          
-          echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mesa26.2-Wrapper
+          name: Bannerlator-Panfrost-Mesa26.2
           path: wrapper.tzst
           if-no-files-found: error
