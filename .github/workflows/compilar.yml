@@ -23,6 +23,18 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
+      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL ERROR DE MESON!
+      - name: Patch Meson Choices (Allow Wrapper Option in 26.2)
+        run: |
+          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
+          if [ -f "meson.options" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
+            echo "-> meson.options parchado con exito."
+          elif [ -f "meson_options.txt" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
+            echo "-> meson_options.txt parchado con exito."
+          fi
+
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Asegurando la ruta del puente de inyeccion..."
@@ -116,7 +128,7 @@ jobs:
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
           
-          # CORRECCIÓN: mesa-clc cambiado de disabled a auto para pasar la validación oficial de Mesa 26.2
+          # Al haber ejecutado el parche arriba, 'wrapper' ya es una opcion legal aceptada por Meson
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
