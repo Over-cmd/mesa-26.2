@@ -27,6 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
+      # TU INYECCIÓN DE MEMORIA BALANCEADA (Evita tirones en 32/64 bits, logos y vídeos)
       - name: Surgical Silicon Modification (Anti-Overflow MALI Dual Injection)
         run: |
           echo "-> Rastreando el corazon del Wrapper para inyectar la valvula de escape MALI..."
@@ -34,3 +35,57 @@ jobs:
           
           if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
             echo "-> Soldando valvula mallopt y soporte de 32 bits en: $WRAPPER_DEVICE"
+            sed -i 's/\r$//' "$WRAPPER_DEVICE"
+            
+            # Inyectamos prototipos estándar de gestión de memoria
+            sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
+            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$WRAPPER_DEVICE"
+            
+            # Aplicamos mallopt(-1002, 0) y present_mode mailbox de forma limpia en el punto de entrada
+            sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$WRAPPER_DEVICE"
+            
+            echo "-> Silicio de Mesa modificado con éxito (Modo fluido activo)."
+          else
+            echo "-> Archivo wrapper_device.c no encontrado en la raíz, aplicando inyección global preventiva..."
+            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+          fi
+
+      # TU PASO ORIGINAL DE DOCKER QUE SÍ FUNCIONA DE FORMA NATIVA
+      - name: compilador-envoltorio
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+
+      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
+      - name: Structure and Pack wrapper.tzst
+        run: |
+          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
+          mkdir -p pkg/usr/lib
+          mkdir -p pkg/usr/share/vulkan/icd.d
+          
+          echo "-> Moviendo el driver compilado a usr/lib..."
+          cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+          
+          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
+          cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+          {
+              "ICD": {
+                  "api_version": "1.3.289",
+                  "library_path": "libvulkan_wrapper.so"
+              },
+              "file_format_version": "1.0.0"
+          }
+          EOF
+          
+          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
+          cd pkg
+          tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
+          cd ..
+          
+          echo "-> ¡Empaquetado completado con éxito!"
+
+      - name: Upload Final wrapper.tzst for Bannerlator
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mali-Wrapper-Stable
+          path: wrapper.tzst
+          if-no-files-found: error
