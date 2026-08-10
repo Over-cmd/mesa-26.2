@@ -23,44 +23,55 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTE PASO INYECTA EL PARCHE MEDIANTE UN HEADER SEGURO SIN USAR SED PARA EL CÓDIGO!
+      # ¡ESTA INYECCIÓN POR CONSTRUCTOR SE EJECUTA SOLA AL CARGAR LA LIBRERÍA Y NO DAÑA NINGUNA FUNCIÓN!
       - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI Panfrost)
         run: |
-          echo "-> Generando parche de hardware optimizado para Mali en el T618..."
+          echo "-> Creando inyector por constructor nativo para tu Unisoc T618..."
           
-          # Creamos un archivo de cabecera con el codigo C puro y ordenado de forma nativa
-          cat << 'EOF' > src/util/mali_patch.h
-          #ifndef MALI_PATCH_H
-          #define MALI_PATCH_H
+          # Buscamos el archivo principal del driver PanVK para acoplar el constructor de arranque
+          TARGET_FILE="src/panfrost/vulkan/panvk_device.c"
           
-          extern int mallopt(int param, int value);
-          extern int setenv(const char *name, const char *value, int overwrite);
-          
-          static inline void apply_mali_optimizations(void) {
-              mallopt(-1002, 0);
-              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
-              setenv("vblank_mode", "0", 1);
-          }
-          
-          #endif
+          if [ -f "$TARGET_FILE" ]; then
+            echo "-> Soldando constructor de optimizaciones en: $TARGET_FILE"
+            sed -i 's/\r$//' "$TARGET_FILE"
+            
+            # Usamos cat para inyectar limpiamente al principio del archivo el codigo C puro
+            cat << 'EOF' > temp_patch.c
+            #include <stdio.h>
+            #include <stdlib.h>
+            
+            extern int mallopt(int param, int value);
+            extern int setenv(const char *name, const char *value, int overwrite);
+            
+            // Atributo constructor: Se ejecuta automaticamente en Android al cargar el .so
+            __attribute__((constructor)) static void init_mali_t618_driver(void) {
+                mallopt(-1002, 0);
+                setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
+                setenv("vblank_mode", "0", 1);
+            }
           EOF
-          
-          PROCESS_FILE="src/util/u_process.c"
-          if [ -f "$PROCESS_FILE" ]; then
-            echo "-> Soldando parche automatico al arranque de procesos de Mesa: $PROCESS_FILE"
-            sed -i 's/\r$//' "$PROCESS_FILE"
             
-            # Incluimos nuestra cabecera al principio del archivo u_process.c
-            sed -i '1i#include "mali_patch.h"' "$PROCESS_FILE"
-            
-            # Inyectamos la llamada a la funcion justo al inicio de util_get_process_name
-            # usando una estructura de reemplazo limpia que no deforma el codigo
-            sed -i '/util_get_process_name(void)/!b;n;i\\    apply_mali_optimizations();' "$PROCESS_FILE"
-            
-            echo "-> Parche de silicio Mesa 26.2 acoplado con éxito."
+            # Fusionamos nuestro parche al principio del archivo panvk_device.c
+            cat temp_patch.c "$TARGET_FILE" > temp_final.c
+            mv temp_final.c "$TARGET_FILE"
+            rm temp_patch.c
+            echo "-> ¡Inyección por constructor acoplada con éxito en Panfrost!"
           else
-            echo "-> Error critico: No se encontro u_process.c"
-            exit 1
+            echo "-> Fallback: No se encontro panvk_device.c, aplicando constructor global en la raiz de utilidades..."
+            FALLBACK_FILE="src/util/u_debug.c"
+            sed -i 's/\r$//' "$FALLBACK_FILE"
+            cat << 'EOF' > temp_patch.c
+            extern int mallopt(int p, int v);
+            extern int setenv(const char *n, const char *v, int o);
+            __attribute__((constructor)) static void init_mali_global(void) {
+                mallopt(-1002, 0);
+                setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
+                setenv("vblank_mode", "0", 1);
+            }
+          EOF
+            cat temp_patch.c "$FALLBACK_FILE" > temp_final.c
+            mv temp_final.c "$FALLBACK_FILE"
+            rm temp_patch.c
           fi
 
       - name: Set up Python
