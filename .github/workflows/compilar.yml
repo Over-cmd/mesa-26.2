@@ -23,30 +23,44 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTE PASO INYECTA EL CÓDIGO DE FORMA 100% SEGURA SIN ROMPER LA SINTAXIS C!
+      # ¡ESTE PASO INYECTA EL PARCHE MEDIANTE UN HEADER SEGURO SIN USAR SED PARA EL CÓDIGO!
       - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI Panfrost)
         run: |
-          echo "-> Inyectando las valvulas de escape MALI en la lectura de procesos de Mesa..."
+          echo "-> Generando parche de hardware optimizado para Mali en el T618..."
           
-          # Buscamos el gestor de procesos global de Mesa, una zona hiper segura para inyectar codigo
+          # Creamos un archivo de cabecera con el codigo C puro y ordenado de forma nativa
+          cat << 'EOF' > src/util/mali_patch.h
+          #ifndef MALI_PATCH_H
+          #define MALI_PATCH_H
+          
+          extern int mallopt(int param, int value);
+          extern int setenv(const char *name, const char *value, int overwrite);
+          
+          static inline void apply_mali_optimizations(void) {
+              mallopt(-1002, 0);
+              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
+              setenv("vblank_mode", "0", 1);
+          }
+          
+          #endif
+          EOF
+          
           PROCESS_FILE="src/util/u_process.c"
-          
           if [ -f "$PROCESS_FILE" ]; then
-            echo "-> Soldando mallopt y present mode en la inicializacion de procesos: $PROCESS_FILE"
+            echo "-> Soldando parche automatico al arranque de procesos de Mesa: $PROCESS_FILE"
             sed -i 's/\r$//' "$PROCESS_FILE"
             
-            # Inyectamos los prototipos estandard de Android al inicio del archivo
-            sed -i '1iextern int mallopt(int param, int value);' "$PROCESS_FILE"
-            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$PROCESS_FILE"
+            # Incluimos nuestra cabecera al principio del archivo u_process.c
+            sed -i '1i#include "mali_patch.h"' "$PROCESS_FILE"
             
-            # Buscamos la funcion util_get_process_name e inyectamos nuestras variables de optimizacion
-            # al abrir su primer bloque de codigo de forma limpia.
-            sed -i '/util_get_process_name(void)/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$PROCESS_FILE"
+            # Inyectamos la llamada a la funcion justo al inicio de util_get_process_name
+            # usando una estructura de reemplazo limpia que no deforma el codigo
+            sed -i '/util_get_process_name(void)/!b;n;i\\    apply_mali_optimizations();' "$PROCESS_FILE"
             
-            echo "-> Inyección en el silicio de Mesa 26.2 realizada con éxito."
+            echo "-> Parche de silicio Mesa 26.2 acoplado con éxito."
           else
-            echo "-> Error: No se encontro u_process.c, aplicando fallback seguro de inicializacion..."
-            find src/ -name "*.c" -exec sed -i 's/main(int/extern int mallopt(int p, int v); mallopt(-1002, 0); main(int/g' {} + || true
+            echo "-> Error critico: No se encontro u_process.c"
+            exit 1
           fi
 
       - name: Set up Python
