@@ -1,120 +1,65 @@
-name: Mesa Vulkan Wrapper Mali Packager (.tzst)
+name: Compilación de Termux del envoltorio Vulkan de Mesa
 
-on:
-  push:
-    branches: [ "main", "master", "26-2", "mesa-26.2" ]
-  workflow_dispatch:
-
-env:
-  BUILD_DIR: compilacion
-  IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+on: [push, pull_request]
 
 jobs:
   build-aarch64-wrapper:
     runs-on: ubuntu-latest
 
+    env:
+      BUILD_DIR: compilación
+      ETIQUETA DE IMAGEN: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+
     steps:
-      - name: Checkout Code
+      - name: Código de pago
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Configurar Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # INSTALADOR DEL EMPAQUETADOR DE BANNERLATOR Y PYTHON PARA EL SERVIDOR ESPEJO
-      - name: Install Packager and Server Tools
+      # ¡ESTE PASO BAJA EL CÓDIGO FUENTE DE EXPAT Y LO DEJA EN LA CARPETA NATIVA DE SUBPROYECTOS!
+      - name: Pre-extract Expat Subproject (Bypass Internet Download Nativo)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd curl python3
-
-      # TRUCO DE LA SCENE: LEVANTAMOS UN SERVIDOR ESPEJO LOCAL PARA QUE EXPAT NO SE QUEDE 40 MINUTOS TRABADO
-      - name: Setup Local HTTP Espejo (Bypass Descarga Expat)
-        run: |
-          mkdir -p web_mirror/libexpat/libexpat/releases/download/R_2_5_0
-          mkdir -p web_mirror/v2/expat_2.5.0-3
+          echo "-> Descargando el codigo fuente de Expat de forma externa..."
+          mkdir -p subprojects
+          curl -L "https://github.com" -o subprojects/expat-2.5.0.tar.xz
           
-          # La maquina de GitHub baja el archivo limpio de internet por fuera de la burbuja del Docker
-          curl -L "https://github.com" -o web_mirror/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz
-          curl -L "https://mesonbuild.com" -o web_mirror/v2/expat_2.5.0-3/get_patch || touch web_mirror/v2/expat_2.5.0-3/get_patch
+          echo "-> Extrayendo el subproyecto en la raiz para que Meson lo vea como local..."
+          tar -xf subprojects/expat-2.5.0.tar.xz -C subprojects/
+          mv subprojects/expat-2.5.0 subprojects/expat
           
-          # Levantamos el servidor en el puerto 8080 interno
-          cd web_mirror
-          python3 -m http.server 8080 &
-          cd ..
-          sleep 2
+          echo "-> Estructura local completada. Meson ya no tocara internet."
 
-      # REENRUTAMOS LOS ARCHIVOS .WRAP DE MESA 26.2 HACIA NUESTRA RED LOCAL INTERNA
-      - name: Route Wraps to Local HTTP Server
-        run: |
-          if [ -f "subprojects/expat.wrap" ]; then
-            sed -i 's|\r$||' subprojects/expat.wrap
-            sed -i 's|https://github.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
-            sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
-          fi
-          find subprojects/ -name "*.wrap" -exec sed -i 's|https://github.com|http://127.0.0.1:8080|g' {} + || true
-          find subprojects/ -name "*.wrap" -exec sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' {} + || true
-
-      # INTERCEPTOR DE NINJA PARA EVITAR EL CRASHEO DE TARGET DESCONOCIDO
-      - name: Create Ninja Wrapper Hijacker
-        run: |
-          mkdir -p bin_hijack
-          cat << 'EOF' > bin_hijack/ninja
-          #!/bin/bash
-          ARGS=("$@")
-          NEW_ARGS=()
-          for arg in "${ARGS[@]}"; do
-            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
-              NEW_ARGS+=("vulkan_wrapper")
-            else
-              NEW_ARGS+=("$arg")
-            fi
-          done
-          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
-          EOF
-          chmod +x bin_hijack/ninja
-
-      # HACK LEGAL DE OPCIONES DE CONFIGURACIÓN DE MESON 26.2
+      # TRUCO DE COMPATIBILIDAD OBLIGATORIO PARA LA VALIDACIÓN DE MESA 26.2
       - name: Patch Meson Options for Wrapper Choice
         run: |
           if [ -f "meson.options" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
           elif [ -f "meson_options.txt" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # SOLDADURA DEL MALLOPT(-1002, 0) Y MODO MAILBOX PARA LOS VÍDEOS DE DEADPOOL EN TU T618
-      - name: Surgical Silicon Modification (Mali 26.2 Smooth Parches)
-        run: |
-          WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
-          if [ -n "$WSI_FILES" ]; then
-            for file in $WSI_FILES; do
-              if [ -f "$file" ]; then
-                sed -i 's/\r$//' "$file"
-                find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
-                break
-              fi
-            done
-          fi
-
-      # TU COMANDO ORIGINAL DE DOCKER (Añadiendo red compartida e interceptor de Ninja)
+      # TU BLOQUE ORIGINAL DE DOCKER EXACTO (TAL Y COMO ME LO ENSEÑASTE)
       - name: compilador-envoltorio
         run: |
-          docker run --rm \
-            --network host \
-            -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
-            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
-      # RECOLECCIÓN ULTRA-RÁPIDA Y CONVERSIÓN COMPRIMIDA A WRAPPER.TZST PARA BANNERLATOR
+      # ESTE PASO ADICIONAL RECOLECTA EL RESULTADO Y TE CREA EL ARCHIVO .TZST CORREGIDO PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
+          echo "-> Armando el paquete automatico para tu Unisoc T618..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
+          
+          # Buscamos el binario final generado por Ninja de forma flexible
           SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
             cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
           fi
+          
+          # Inyectamos el manifiesto ICD oficial de la API 1.3
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -124,6 +69,9 @@ jobs:
               "file_format_version": "1.0.0"
           }
           EOF
+          
+          # Comprimimos nativamente en Zstd para Bannerlator
+          sudo apt-get update && sudo apt-get install -y zstd
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
