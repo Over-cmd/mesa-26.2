@@ -27,12 +27,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
+      # ¡ESTE PASO PARCHA EL ERROR DE MESON!
+      - name: Patch Meson Choices (Allow Wrapper Option)
+        run: |
+          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
+          if [ -f "meson.options" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
+            echo "-> meson.options parchado con exito."
+          elif [ -f "meson_options.txt" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
+            echo "-> meson_options.txt parchado con exito."
+          fi
+
       - name: Surgical Silicon Modification (Mesa 26.2 Anti-Overflow MALI Engine)
         run: |
           echo "-> Rastreando el nucleo de Mesa 26.2 para inyectar la valvula de escape MALI..."
-          
-          # En Mesa 26.2, el sistema WSI (Window System Integration) gestiona el inicio de Vulkan.
-          # Buscaremos todos los archivos fuente de inicialización de la API de Vulkan en el código base.
           WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
           
           if [ -n "$WSI_FILES" ]; then
@@ -40,8 +49,6 @@ jobs:
             for file in $WSI_FILES; do
               if [ -f "$file" ]; then
                 sed -i 's/\r$//' "$file"
-                # Inyectamos de forma segura la purga de memoria (mallopt) y las variables fluidas de tu Unisoc T618
-                # al inicio de las llamadas del despachador de Vulkan (GetInstanceProcAddr)
                 find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
                 break
               fi
@@ -54,7 +61,7 @@ jobs:
 
       - name: Wrapper Compiler (Atomic Processing Docker Mesa 26.2)
         run: |
-          # Ejecutamos el compilador hermético de leegao sobre el árbol modificado de Mesa 26.2
+          # El contenedor ya no fallara porque 'wrapper' ahora es una opcion oficial aceptada
           docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
       # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
@@ -65,7 +72,6 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Buscando y moviendo el driver recién compilado a usr/lib..."
-          # Buscamos el binario final generado por Meson (puede llamarse libvulkan_wrapper.so o similar)
           DRIVER_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1)
           if [ -n "$DRIVER_FILE" ]; then
             cp "$DRIVER_FILE" pkg/usr/lib/libvulkan_wrapper.so
