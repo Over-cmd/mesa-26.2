@@ -1,4 +1,4 @@
-name: Mesa 26.2 NDK Panfrost Packager (.tzst)
+name: Mesa 26.2 NDK Panfrost Native Vulkan (.tzst)
 
 on:
   push:
@@ -23,19 +23,14 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTA INYECCIÓN POR CONSTRUCTOR SE EJECUTA SOLA AL CARGAR LA LIBRERÍA Y NO DAÑA NINGUNA FUNCIÓN!
-      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI Panfrost)
+      # INYECCIÓN PURA PARA ENLAZAR EL CONSTRUCTOR AL KERNEL DE ANDROID
+      - name: Surgical Silicon Modification (Vulkan Native Connection MALI)
         run: |
-          echo "-> Creando inyector por constructor nativo para tu Unisoc T618..."
-          
-          # Buscamos el archivo principal del driver PanVK para acoplar el constructor de arranque
+          echo "-> Forzando el enlace de inicializacion de Vulkan nativo con Android..."
           TARGET_FILE="src/panfrost/vulkan/panvk_device.c"
           
           if [ -f "$TARGET_FILE" ]; then
-            echo "-> Soldando constructor de optimizaciones en: $TARGET_FILE"
             sed -i 's/\r$//' "$TARGET_FILE"
-            
-            # Usamos cat para inyectar limpiamente al principio del archivo el codigo C puro
             cat << 'EOF' > temp_patch.c
             #include <stdio.h>
             #include <stdlib.h>
@@ -43,35 +38,18 @@ jobs:
             extern int mallopt(int param, int value);
             extern int setenv(const char *name, const char *value, int overwrite);
             
-            // Atributo constructor: Se ejecuta automaticamente en Android al cargar el .so
-            __attribute__((constructor)) static void init_mali_t618_driver(void) {
+            __attribute__((constructor)) static void init_mali_t618_vulkan(void) {
                 mallopt(-1002, 0);
+                // Forzamos el modo Mailbox y le indicamos a Mesa que el entorno grafico es Android nativo
                 setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
                 setenv("vblank_mode", "0", 1);
+                setenv("MESA_LOADER_DRIVER_OVERRIDE", "panfrost", 1);
             }
           EOF
-            
-            # Fusionamos nuestro parche al principio del archivo panvk_device.c
             cat temp_patch.c "$TARGET_FILE" > temp_final.c
             mv temp_final.c "$TARGET_FILE"
             rm temp_patch.c
-            echo "-> ¡Inyección por constructor acoplada con éxito en Panfrost!"
-          else
-            echo "-> Fallback: No se encontro panvk_device.c, aplicando constructor global en la raiz de utilidades..."
-            FALLBACK_FILE="src/util/u_debug.c"
-            sed -i 's/\r$//' "$FALLBACK_FILE"
-            cat << 'EOF' > temp_patch.c
-            extern int mallopt(int p, int v);
-            extern int setenv(const char *n, const char *v, int o);
-            __attribute__((constructor)) static void init_mali_global(void) {
-                mallopt(-1002, 0);
-                setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
-                setenv("vblank_mode", "0", 1);
-            }
-          EOF
-            cat temp_patch.c "$FALLBACK_FILE" > temp_final.c
-            mv temp_final.c "$FALLBACK_FILE"
-            rm temp_patch.c
+            echo "-> ¡Inyección de hardware Vulkan acoplada!"
           fi
 
       - name: Set up Python
@@ -127,10 +105,14 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
+          
+          # PARAMETROS DE CONEXIÓN NATIVA:
+          # -Dplatforms=android (Eliminamos x11 para obligar a usar SurfaceFlinger de tu móvil)
+          # -Dvulkan-drivers=panfrost (Compila el driver Vulkan PanVK)
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
-              -Dplatforms=android,x11 \
+              -Dplatforms=android \
               -Dandroid-stub=true \
               -Dandroid-libbacktrace=disabled \
               -Dplatform-sdk-version=30 \
@@ -154,14 +136,14 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # ESTE PASO ADAPTA EL BINARIO DE PANFROST A LA ESTRUCTURA QUE BANNERLATOR LEE
+      # EMPAQUETADO VULKAN PURO PARA PROCESADORES MALI
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Moviendo libvulkan_panfrost.so a la ruta del driver..."
+          echo "-> Capturando el binario nativo de Vulkan Panfrost..."
           cp ${{ env.BUILD_DIR }}/src/panfrost/vulkan/libvulkan_panfrost.so pkg/usr/lib/libvulkan_wrapper.so
           
           echo "-> Inyectando manifiesto JSON ICD oficial..."
@@ -183,6 +165,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Panfrost-Mesa26.2
+          name: Bannerlator-Mali-Vulkan-Native
           path: wrapper.tzst
           if-no-files-found: error
