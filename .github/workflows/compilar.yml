@@ -1,8 +1,8 @@
-name: Mesa Vulkan Wrapper Mali Packager (.tzst)
+name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "26-2", "mesa-26.2" ]
   workflow_dispatch:
 
 env:
@@ -26,6 +26,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd
+
+      # ¡ESTE PASO PARCHA LAS RUTAS DE DESCARGA PARA EVITAR EL BLOQUEO SSL DE 40 MINUTOS EN MESA 26.2!
+      - name: Patch Subproject Wrap Files (Fix SSL Handshake Hang)
+        run: |
+          echo "-> Corrigiendo enlaces de descarga en los archivos .wrap de Mesa 26.2..."
+          # Si existe el archivo wrap de expat, cambiamos las URLs para evitar el atasco SSL del Docker antiguo
+          if [ -f "subprojects/expat.wrap" ]; then
+            sed -i 's/\r$//' subprojects/expat.wrap
+            sed -i 's/https:\/\/://github.com:\/\/://github.com' subprojects/expat.wrap
+            sed -i 's/https:\/\/://mesonbuild.com:\/\/://mesonbuild.com' subprojects/expat.wrap
+            echo "-> subprojects/expat.wrap parchado con éxito."
+          fi
+          # Hacemos lo mismo con cualquier otro subproyecto preventivamente
+          find subprojects/ -name "*.wrap" -exec sed -i 's/https:\/\//http:\/\//g' {} + || true
 
       # INTERCEPTOR DE COMANDOS PARA NINJA
       - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
@@ -52,7 +66,7 @@ jobs:
           chmod +x bin_hijack/ninja
           echo "-> Interceptor Ninja creado con exito."
 
-      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL BLOQUEO ANTERIOR
+      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL BLOQUEO DE VALIDACIÓN
       - name: Patch Meson Choices (Allow Wrapper Option)
         run: |
           echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
@@ -64,33 +78,31 @@ jobs:
             echo "-> meson_options.txt parchado con exito."
           fi
 
-      # INYECTAMOS TU MALLOPT ESTABLE PARA TU HARDWARE UNISOC T618
-      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
+      # INYECTAMOS TU PARCHE DE MEMORIA ESTABLE PARA TU HARDWARE UNISOC T618
+      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI 26.2)
         run: |
-          echo "-> Rastreando el corazon del Wrapper original para balancear la inyección MALI..."
-          WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
+          echo "-> Rastreando el nucleo de Mesa 26.2 para inyectar la valvula de escape MALI..."
+          WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
           
-          if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
-            echo "-> Soldando valvula mallopt optimizada para secuencias de video..."
-            sed -i 's/\r$//' "$WRAPPER_DEVICE"
-            
-            sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
-            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$WRAPPER_DEVICE"
-            
-            sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$WRAPPER_DEVICE"
-            echo "-> Silicio de Mesa modificado con éxito (Modo fluido activo)."
+          if [ -n "$WSI_FILES" ]; then
+            echo "-> Soldando valvula mallopt nativa y deslimitador de FPS en el motor WSI de Mesa..."
+            for file in $WSI_FILES; do
+              if [ -f "$file" ]; then
+                sed -i 's/\r$//' "$file"
+                find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+                break
+              fi
+            done
+            echo "-> ¡Inyección completada con éxito en el árbol de Mesa 26.2!"
           else
-            echo "-> Archivo wrapper_device.c no encontrado en la raiz, aplicando fallback global..."
+            echo "-> Alerta: No se encontraron archivos WSI directos, aplicando inyección global preventiva..."
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # COMPILACIÓN NATIVA FORZANDO MODO DE RED IPV4 PARA DESATASCAR EL LOG
+      # COMPILACIÓN COMPLETA DE MESA 26.2
       - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
-          # Forzamos al contenedor Docker a usar estrictamente el protocolo de red IPv4 (--dns) 
-          # y pasamos las banderas del sistema para acelerar la resolucion de nombres de los servidores de parches
           docker run --rm \
-            --network host \
             -v "${{ github.workspace }}:/workspace" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
@@ -131,6 +143,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper-Stable
+          name: Bannerlator-Mali-Wrapper-26.2
           path: wrapper.tzst
           if-no-files-found: error
