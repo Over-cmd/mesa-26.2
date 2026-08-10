@@ -23,11 +23,9 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTE PASO CREA LA CARPETA SI FALTA Y ACAPARA EL BYPASS DE FORMA SEGURA!
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Asegurando la ruta del puente de inyeccion..."
-          # Forzamos la creación del árbol de directorios para evitar el error 'No such file or directory'
           mkdir -p src/vulkan/wrapper
           
           echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
@@ -52,19 +50,17 @@ jobs:
           #endif
           EOF
           
-          # Buscamos el punto de entrada maestro de la utilidad Vulkan de Mesa para soldar el bypass
           TARGET_LOADER="src/vulkan/util/vk_util.c"
           
           if [ -f "$TARGET_LOADER" ]; then
             echo "-> Soldando el bypass de Leegao en la utilidad de Vulkan: $TARGET_LOADER"
             sed -i 's/\r$//' "$TARGET_LOADER"
-            # Inyectamos la cabecera en la linea 1 de vk_util.c de forma nativa
             cat src/vulkan/wrapper/mali_leegao_bypass.h "$TARGET_LOADER" > temp_final.c
             mv temp_final.c "$TARGET_LOADER"
             echo "-> Bypass de Leegao acoplado con éxito al cargador general."
           else
             echo "-> Alerta: No se encontro vk_util.c, buscando alternativa en el runtime..."
-            RUNTIME_FILE=$(find src/vulkan/ -name "*.c" | head -n 1)
+            RUNTIME_FILE=$(find src/vulkan/ Glastonbury -name "*.c" | head -n 1)
             if [ -n "$RUNTIME_FILE" ]; then
               cat src/vulkan/wrapper/mali_leegao_bypass.h "$RUNTIME_FILE" > temp_final.c
               mv temp_final.c "$RUNTIME_FILE"
@@ -99,6 +95,7 @@ jobs:
         run: |
           unzip shims.zip -d ./
 
+      # ¡ESTE PASO CORRIGE LA OPCIÓN DEL PRECOMPILADOR CAMBIÁNDOLA A AUTO!
       - name: Generate Host Tools
         run: |
           meson setup build-host \
@@ -106,7 +103,7 @@ jobs:
               -Dgallium-drivers=[] \
               -Dvulkan-drivers=[] \
               -Dtools= \
-              -Dprecomp-compiler=disabled \
+              -Dprecomp-compiler=auto \
               -Dllvm=disabled
           mkdir -p build-host/src/compiler/clc
           touch build-host/src/compiler/clc/mesa_clc
@@ -120,6 +117,7 @@ jobs:
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
           
+          # Cambiado precomp-compiler de disabled a auto para pasar la validación
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
@@ -139,7 +137,7 @@ jobs:
               -Dshared-glapi=disabled \
               -Dzstd=disabled \
               -Dmesa-clc=disabled \
-              -Dprecomp-compiler=disabled \
+              -Dprecomp-compiler=auto \
               -Dvulkan-drivers=wrapper \
               -Dllvm=disabled
 
@@ -147,7 +145,6 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # RECOLECTAMOS EL ARCHIVO COMPILADO DE LEEGAO
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
