@@ -27,19 +27,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
-      # ¡ESTE PASO PARCHA LAS RUTAS DE DESCARGA PARA EVITAR EL BLOQUEO SSL DE 40 MINUTOS EN MESA 26.2!
+      # ¡ESTE PASO PARCHA LOS ENLACES DE FORMA TOTALMENTE SEGURA CON SEPARADORES |
       - name: Patch Subproject Wrap Files (Fix SSL Handshake Hang)
         run: |
           echo "-> Corrigiendo enlaces de descarga en los archivos .wrap de Mesa 26.2..."
-          # Si existe el archivo wrap de expat, cambiamos las URLs para evitar el atasco SSL del Docker antiguo
+          # Usamos | en lugar de / para que sed procese las URLs sin romperse
           if [ -f "subprojects/expat.wrap" ]; then
-            sed -i 's/\r$//' subprojects/expat.wrap
-            sed -i 's/https:\/\/://github.com:\/\/://github.com' subprojects/expat.wrap
-            sed -i 's/https:\/\/://mesonbuild.com:\/\/://mesonbuild.com' subprojects/expat.wrap
+            sed -i 's|\r$||' subprojects/expat.wrap
+            sed -i 's|https://github.com|http://github.com|g' subprojects/expat.wrap
+            sed -i 's|https://mesonbuild.com|http://mesonbuild.com|g' subprojects/expat.wrap
             echo "-> subprojects/expat.wrap parchado con éxito."
           fi
-          # Hacemos lo mismo con cualquier otro subproyecto preventivamente
-          find subprojects/ -name "*.wrap" -exec sed -i 's/https:\/\//http:\/\//g' {} + || true
+          # Aplicamos el bypass http global preventivo de forma segura en toda la carpeta
+          find subprojects/ -name "*.wrap" -exec sed -i 's|https://|http://|g' {} + || true
 
       # INTERCEPTOR DE COMANDOS PARA NINJA
       - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
