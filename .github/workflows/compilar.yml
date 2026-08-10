@@ -1,84 +1,36 @@
-name: Compilación de Termux del envoltorio Vulkan de Mesa
+name: Mesa Vulkan Wrapper Mali Packager (.tzst)
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  BUILD_DIR: compilacion
 
 jobs:
   build-aarch64-wrapper:
     runs-on: ubuntu-latest
-
     env:
-      BUILD_DIR: compilación
-      ETIQUETA DE IMAGEN: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
     steps:
-      - name: Código de pago
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configurar Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ¡ESTE PASO BAJA EL CÓDIGO FUENTE DE EXPAT Y LO DEJA EN LA CARPETA NATIVA DE SUBPROYECTOS!
-      - name: Pre-extract Expat Subproject (Bypass Internet Download Nativo)
+      # Instalar herramientas de compresión Zstd en el servidor de GitHub
+      - name: Install Zstd Packager
         run: |
-          echo "-> Descargando el codigo fuente de Expat de forma externa..."
-          mkdir -p subprojects
-          curl -L "https://github.com" -o subprojects/expat-2.5.0.tar.xz
-          
-          echo "-> Extrayendo el subproyecto en la raiz para que Meson lo vea como local..."
-          tar -xf subprojects/expat-2.5.0.tar.xz -C subprojects/
-          mv subprojects/expat-2.5.0 subprojects/expat
-          
-          echo "-> Estructura local completada. Meson ya no tocara internet."
+          sudo apt-get update
+          sudo apt-get install -y zstd
 
-      # TRUCO DE COMPATIBILIDAD OBLIGATORIO PARA LA VALIDACIÓN DE MESA 26.2
-      - name: Patch Meson Options for Wrapper Choice
+      - name: Surgical Silicon Modification (Anti-Overflow MALI Dual Injection)
         run: |
-          if [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-          elif [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-          fi
-
-      # TU BLOQUE ORIGINAL DE DOCKER EXACTO (TAL Y COMO ME LO ENSEÑASTE)
-      - name: compilador-envoltorio
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
-
-      # ESTE PASO ADICIONAL RECOLECTA EL RESULTADO Y TE CREA EL ARCHIVO .TZST CORREGIDO PARA BANNERLATOR
-      - name: Structure and Pack wrapper.tzst
-        run: |
-          echo "-> Armando el paquete automatico para tu Unisoc T618..."
-          mkdir -p pkg/usr/lib
-          mkdir -p pkg/usr/share/vulkan/icd.d
+          echo "-> Rastreando el corazon del Wrapper para inyectar la valvula de escape MALI..."
+          WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
           
-          # Buscamos el binario final generado por Ninja de forma flexible
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
-          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
-            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
-          else
-            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
-          fi
-          
-          # Inyectamos el manifiesto ICD oficial de la API 1.3
-          cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
-          {
-              "ICD": {
-                  "api_version": "1.3.289",
-                  "library_path": "libvulkan_wrapper.so"
-              },
-              "file_format_version": "1.0.0"
-          }
-          EOF
-          
-          # Comprimimos nativamente en Zstd para Bannerlator
-          sudo apt-get update && sudo apt-get install -y zstd
-          cd pkg
-          tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
-          cd ..
-
-      - name: Upload Final wrapper.tzst for Bannerlator
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mali-Wrapper-26.2
-          path: wrapper.tzst
-          if-no-files-found: error
+          if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
+            echo "-> Soldando valvula mallopt y soporte de 32 bits en: $WRAPPER_DEVICE"
