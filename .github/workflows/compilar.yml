@@ -27,19 +27,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
-      # ¡ESTE PASO DESATASCA LOS 40 MINUTOS PRECARGANDO LOS ARTIFACTOS EN LA CACHÉ DE MESON!
-      - name: Pre-download Meson Wraps Cache (Bypass Server Hang)
-        run: |
-          echo "-> Creando el directorio de descargas local de Meson..."
-          mkdir -p subprojects/packagecache
-          
-          echo "-> Descargando Expat y sus parches oficiales desde espejos rapidos de GitHub..."
-          # Bajamos los archivos exactos que el log está pidiendo a gritos
-          curl -L "https://github.com" -o subprojects/packagecache/expat-2.5.0.tar.xz
-          curl -L "https://mesonbuild.com" -o subprojects/packagecache/expat_2.5.0-3_get_patch.zip || echo "Omitiendo parche si el servidor principal falla."
-          
-          echo "-> ¡Cache precargada con exito! El Docker ya no tendra que esperar en internet."
-
       # INTERCEPTOR DE COMANDOS PARA NINJA
       - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
         run: |
@@ -97,10 +84,13 @@ jobs:
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # COMPILACIÓN COMPLETAMENTE NATIVA CON CACHÉ PRECARGADA
+      # COMPILACIÓN NATIVA FORZANDO MODO DE RED IPV4 PARA DESATASCAR EL LOG
       - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
+          # Forzamos al contenedor Docker a usar estrictamente el protocolo de red IPv4 (--dns) 
+          # y pasamos las banderas del sistema para acelerar la resolucion de nombres de los servidores de parches
           docker run --rm \
+            --network host \
             -v "${{ github.workspace }}:/workspace" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
