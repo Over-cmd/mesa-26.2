@@ -1,4 +1,4 @@
-name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
+name: Mesa Vulkan Wrapper Mali Packager (.tzst)
 
 on:
   push:
@@ -6,171 +6,67 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: build
+  BUILD_DIR: compilacion
 
 jobs:
-  build-android-wrapper:
+  build-aarch64-wrapper:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        build-type: [release]
+    env:
+      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Patch anon_file.c for memfd_create
-        run: |
-          sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL ERROR DE MESON!
-      - name: Patch Meson Choices (Allow Wrapper Option in 26.2)
-        run: |
-          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
-          if [ -f "meson.options" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
-            echo "-> meson.options parchado con exito."
-          elif [ -f "meson_options.txt" ]; then
-            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
-            echo "-> meson_options.txt parchado con exito."
-          fi
-
-      - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
-        run: |
-          echo "-> Asegurando la ruta del puente de inyeccion..."
-          mkdir -p src/vulkan/wrapper
-          
-          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
-          cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
-          #ifndef MALI_LEEGAO_BYPASS_H
-          #define MALI_LEEGAO_BYPASS_H
-          
-          #include <stdio.h>
-          #include <stdlib.h>
-          
-          extern int mallopt(int param, int value);
-          extern int setenv(const char *name, const char *value, int overwrite);
-          
-          // Constructor automático enlazado al driver original de tu Mali-G52
-          __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
-              mallopt(-1002, 0);
-              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
-              setenv("vblank_mode", "0", 1);
-              setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
-          }
-          
-          #endif
-          EOF
-          
-          TARGET_LOADER="src/vulkan/util/vk_util.c"
-          
-          if [ -f "$TARGET_LOADER" ]; then
-            echo "-> Soldando el bypass de Leegao en la utilidad de Vulkan: $TARGET_LOADER"
-            sed -i 's/\r$//' "$TARGET_LOADER"
-            cat src/vulkan/wrapper/mali_leegao_bypass.h "$TARGET_LOADER" > temp_final.c
-            mv temp_final.c "$TARGET_LOADER"
-            echo "-> Bypass de Leegao acoplado con éxito al cargador general."
-          else
-            echo "-> Alerta: No se encontró vk_util.c, buscando alternativa en el runtime..."
-            RUNTIME_FILE=$(find src/vulkan/ -name "*.c" | head -n 1)
-            if [ -n "$RUNTIME_FILE" ]; then
-              cat src/vulkan/wrapper/mali_leegao_bypass.h "$RUNTIME_FILE" > temp_final.c
-              mv temp_final.c "$RUNTIME_FILE"
-            fi
-          fi
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install Build Dependencies
+      # Instalar herramientas de compresión Zstd en el servidor de GitHub
+      - name: Install Zstd Packager
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-              build-essential \
-              llvm-20-dev \
-              libclang-20-dev \
-              libclc-20-dev \
-              libllvmspirvlib-20-dev \
-              libelf-dev \
-              spirv-tools \
-              bison \
-              flex \
-              libdrm-dev \
-              pkg-config \
-              zstd
-          python -m pip install --upgrade pip
-          pip install mako PyYAML meson ninja packaging
+          sudo apt-get install -y zstd
 
-      - name: Generate Shims
+      # ESTA INYECCIÓN ES COMPATIBLE AL 100% CON EL WRAPPER ORIGINAL Y EL FILTRADO DE VIDEOS
+      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
         run: |
-          unzip shims.zip -d ./
-
-      - name: Generate Host Tools
-        run: |
-          meson setup build-host \
-              -Dplatforms=[] \
-              -Dgallium-drivers=[] \
-              -Dvulkan-drivers=[] \
-              -Dtools= \
-              -Dprecomp-compiler=auto \
-              -Dllvm=disabled
-          mkdir -p build-host/src/compiler/clc
-          touch build-host/src/compiler/clc/mesa_clc
-          echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
-
-      - name: Setup Meson Cross-Compilation
-        env:
-          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/shims
-        run: |
-          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
-          envsubst < android.toml > android-cross.txt
+          echo "-> Rastreando el corazon del Wrapper original para balancear la inyección MALI..."
+          WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
           
-          # Al haber ejecutado el parche arriba, 'wrapper' ya es una opcion legal aceptada por Meson
-          meson setup ${{ env.BUILD_DIR }} --reconfigure \
-              --cross-file android-cross.txt \
-              -Dbuildtype=${{ matrix.build-type }} \
-              -Dplatforms=android \
-              -Dandroid-stub=true \
-              -Dandroid-libbacktrace=disabled \
-              -Dplatform-sdk-version=30 \
-              -Dglx=disabled \
-              -Dgbm=disabled \
-              -Degl=disabled \
-              -Dopengl=false \
-              -Dgles1=disabled \
-              -Dgles2=disabled \
-              -Dglvnd=disabled \
-              -Dvalgrind=disabled \
-              -Dgallium-drivers= \
-              -Dshared-glapi=disabled \
-              -Dzstd=disabled \
-              -Dmesa-clc=auto \
-              -Dprecomp-compiler=auto \
-              -Dvulkan-drivers=wrapper \
-              -Dllvm=disabled
+          if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
+            echo "-> Soldando valvula mallopt optimizada para secuencias de video..."
+            sed -i 's/\r$//' "$WRAPPER_DEVICE"
+            
+            # Inyectamos prototipos estándar de gestión de memoria
+            sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
+            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$WRAPPER_DEVICE"
+            
+            # Cambiamos mallopt(-1000, 0) que rompía los videos por M_DECOMMIT (Purga suavizada de páginas vacías)
+            # Además inyectamos variables internas en el arranque de la API para silenciar el retraso de sincronización en Mali
+            sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$WRAPPER_DEVICE"
+            
+            echo "-> Silicio de Mesa modificado con éxito (Modo fluido activo)."
+          else
+            echo "-> Archivo wrapper_device.c no encontrado en la raiz, aplicando fallback global..."
+            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+          fi
 
-      - name: Compile Project
+      - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
-          meson compile -C ${{ env.BUILD_DIR }}
+          # El contenedor de leegao toma el mando y devora el código ya modificado de forma nativa
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
+      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
       - name: Structure and Pack wrapper.tzst
         run: |
-          echo "-> Creando árbol de directorios de Linux para Bannerlator..."
+          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Capturando la librería del wrapper de Leegao..."
-          WRAPPER_SO=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "libvulkan_wrapper.so" | head -n 1)
-          if [ -n "$WRAPPER_SO" ]; then
-            cp "$WRAPPER_SO" pkg/usr/lib/libvulkan_wrapper.so
-          else
-            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so
-          fi
+          echo "-> Moviendo el driver compilado a usr/lib..."
+          cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
           
-          echo "-> Inyectando manifiesto JSON ICD oficial..."
+          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -185,10 +81,12 @@ jobs:
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
+          
+          echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Leegao-Bypass-Mesa26.2
+          name: Bannerlator-Mali-Wrapper-Stable
           path: wrapper.tzst
           if-no-files-found: error
