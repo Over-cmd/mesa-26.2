@@ -28,7 +28,7 @@ jobs:
           echo "-> Asegurando la ruta del puente de inyeccion..."
           mkdir -p src/vulkan/wrapper
           
-          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
+          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -39,7 +39,7 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
-          // Constructor automatico enlazado al driver original de tu Mali-G52
+          // Constructor automático enlazado al driver original de tu Mali-G52
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
@@ -59,8 +59,8 @@ jobs:
             mv temp_final.c "$TARGET_LOADER"
             echo "-> Bypass de Leegao acoplado con éxito al cargador general."
           else
-            echo "-> Alerta: No se encontro vk_util.c, buscando alternativa en el runtime..."
-            RUNTIME_FILE=$(find src/vulkan/ Glastonbury -name "*.c" | head -n 1)
+            echo "-> Alerta: No se encontró vk_util.c, buscando alternativa en el runtime..."
+            RUNTIME_FILE=$(find src/vulkan/ -name "*.c" | head -n 1)
             if [ -n "$RUNTIME_FILE" ]; then
               cat src/vulkan/wrapper/mali_leegao_bypass.h "$RUNTIME_FILE" > temp_final.c
               mv temp_final.c "$RUNTIME_FILE"
@@ -95,7 +95,6 @@ jobs:
         run: |
           unzip shims.zip -d ./
 
-      # ¡ESTE PASO CORRIGE LA OPCIÓN DEL PRECOMPILADOR CAMBIÁNDOLA A AUTO!
       - name: Generate Host Tools
         run: |
           meson setup build-host \
@@ -117,7 +116,7 @@ jobs:
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
           
-          # Cambiado precomp-compiler de disabled a auto para pasar la validación
+          # CORRECCIÓN: mesa-clc cambiado de disabled a auto para pasar la validación oficial de Mesa 26.2
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
@@ -136,7 +135,7 @@ jobs:
               -Dgallium-drivers= \
               -Dshared-glapi=disabled \
               -Dzstd=disabled \
-              -Dmesa-clc=disabled \
+              -Dmesa-clc=auto \
               -Dprecomp-compiler=auto \
               -Dvulkan-drivers=wrapper \
               -Dllvm=disabled
@@ -147,11 +146,11 @@ jobs:
 
       - name: Structure and Pack wrapper.tzst
         run: |
-          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
+          echo "-> Creando árbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Capturando la libreria del wrapper de Leegao..."
+          echo "-> Capturando la librería del wrapper de Leegao..."
           WRAPPER_SO=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "libvulkan_wrapper.so" | head -n 1)
           if [ -n "$WRAPPER_SO" ]; then
             cp "$WRAPPER_SO" pkg/usr/lib/libvulkan_wrapper.so
@@ -170,7 +169,7 @@ jobs:
           }
           EOF
           
-          echo "-> Comprimiendo la estructura en formato atomico wrapper.tzst..."
+          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
