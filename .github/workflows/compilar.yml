@@ -1,4 +1,4 @@
-name: Mesa 26.2 NDK Panfrost Native Vulkan (.tzst)
+name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
 
 on:
   push:
@@ -23,33 +23,48 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # INYECCIÓN PURA PARA ENLAZAR EL CONSTRUCTOR AL KERNEL DE ANDROID
-      - name: Surgical Silicon Modification (Vulkan Native Connection MALI)
+      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT ESTABLE EN EL CORAZÓN DEL ENRUTADOR
+      - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
-          echo "-> Forzando el enlace de inicializacion de Vulkan nativo con Android..."
-          TARGET_FILE="src/panfrost/vulkan/panvk_device.c"
+          echo "-> Creando el puente de inyeccion de Leegao para conectar el Vulkan de fábrica..."
           
-          if [ -f "$TARGET_FILE" ]; then
-            sed -i 's/\r$//' "$TARGET_FILE"
-            cat << 'EOF' > temp_patch.c
-            #include <stdio.h>
-            #include <stdlib.h>
-            
-            extern int mallopt(int param, int value);
-            extern int setenv(const char *name, const char *value, int overwrite);
-            
-            __attribute__((constructor)) static void init_mali_t618_vulkan(void) {
-                mallopt(-1002, 0);
-                // Forzamos el modo Mailbox y le indicamos a Mesa que el entorno grafico es Android nativo
-                setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
-                setenv("vblank_mode", "0", 1);
-                setenv("MESA_LOADER_DRIVER_OVERRIDE", "panfrost", 1);
-            }
+          # Creamos la cabecera limpia con el bypass y las optimizaciones para Deadpool
+          cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
+          #ifndef MALI_LEEGAO_BYPASS_H
+          #define MALI_LEEGAO_BYPASS_H
+          
+          #include <stdio.h>
+          #include <stdlib.h>
+          
+          extern int mallopt(int param, int value);
+          extern int setenv(const char *name, const char *value, int overwrite);
+          
+          // Este constructor fuerza al puente de Leegao a abrir el Vulkan oficial de tu Unisoc T618
+          __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
+              mallopt(-1002, 0);
+              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
+              setenv("vblank_mode", "0", 1);
+              // Forzamos al wrapper a buscar el driver Vulkan original de Android en tu Mali-G52
+              setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
+          }
+          
+          #endif
           EOF
-            cat temp_patch.c "$TARGET_FILE" > temp_final.c
-            mv temp_final.c "$TARGET_FILE"
-            rm temp_patch.c
-            echo "-> ¡Inyección de hardware Vulkan acoplada!"
+          
+          # Buscamos el archivo de entrada del wrapper de Leegao en el repositorio de Mesa
+          WRAPPER_MAIN=$(find src/vulkan/wrapper/ -name "*.c" | head -n 1)
+          
+          if [ -n "$WRAPPER_MAIN" ] && [ -f "$WRAPPER_MAIN" ]; then
+            echo "-> Soldando el bypass de Leegao directamente en: $WRAPPER_MAIN"
+            sed -i 's/\r$//' "$WRAPPER_MAIN"
+            sed -i '1i#include "mali_leegao_bypass.h"' "$WRAPPER_MAIN"
+            echo "-> ¡Bypass de Leegao soldado correctamente!"
+          else
+            echo "-> Fallback: Aplicando bypass global en la carga del cargador de drivers de Mesa..."
+            FALLBACK_LOADER="src/vulkan/util/vk_icd_vulkan.c"
+            if [ -f "$FALLBACK_LOADER" ]; then
+              sed -i '1i#include "../wrapper/mali_leegao_bypass.h"' "$FALLBACK_LOADER"
+            fi
           fi
 
       - name: Set up Python
@@ -86,18 +101,14 @@ jobs:
               -Dplatforms=[] \
               -Dgallium-drivers=[] \
               -Dvulkan-drivers=[] \
-              -Dtools=panfrost \
-              -Dprecomp-compiler=enabled \
-              -Dinstall-precomp-compiler=true \
-              -Dllvm=enabled \
-              -Dmesa-clc=enabled -Dinstall-mesa-clc=true
-          ninja -C build-host src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile
-          ln -sf "build-host/src/compiler/clc/mesa_clc" "build-host/src/compiler/clc/mesa-clc"
-          ln -sf "build-host/src/compiler/spirv/vtn_bindgen2" "build-host/src/compiler/spirv/vtn-bindgen2"
+              -Dtools= \
+              -Dprecomp-compiler=disabled \
+              -Dllvm=disabled
+          mkdir -p build-host/src/compiler/clc
+          touch build-host/src/compiler/clc/mesa_clc
           echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/build-host/src/compiler/spirv" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/build-host/src/panfrost/clc" >> $GITHUB_PATH
 
+      # CONFIGURAMOS MESON PARA COMPILAR ÚNICAMENTE LA VARIANTE WRAPPER DE LEEGAO
       - name: Setup Meson Cross-Compilation
         env:
           PKG_CONFIG_LIBDIR: ${{ github.workspace }}/shims
@@ -106,9 +117,9 @@ jobs:
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
           
-          # PARAMETROS DE CONEXIÓN NATIVA:
-          # -Dplatforms=android (Eliminamos x11 para obligar a usar SurfaceFlinger de tu móvil)
-          # -Dvulkan-drivers=panfrost (Compila el driver Vulkan PanVK)
+          # MODIFICACIÓN MAESTRA:
+          # -Dvulkan-drivers=wrapper (Forzamos el componente de Leegao que conecta con tu sistema)
+          # -Dgallium-drivers= (Vacio, no queremos drivers experimentales que rompan la conexion)
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
@@ -127,24 +138,31 @@ jobs:
               -Dgallium-drivers= \
               -Dshared-glapi=disabled \
               -Dzstd=disabled \
-              -Dmesa-clc=system \
-              -Dprecomp-compiler=system \
-              -Dvulkan-drivers=panfrost \
+              -Dmesa-clc=disabled \
+              -Dprecomp-compiler=disabled \
+              -Dvulkan-drivers=wrapper \
               -Dllvm=disabled
 
       - name: Compile Project
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # EMPAQUETADO VULKAN PURO PARA PROCESADORES MALI
+      # RECOLECTAMOS EL COCHEVO DE LEEGAO EMBAJADO PARA TU BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Capturando el binario nativo de Vulkan Panfrost..."
-          cp ${{ env.BUILD_DIR }}/src/panfrost/vulkan/libvulkan_panfrost.so pkg/usr/lib/libvulkan_wrapper.so
+          echo "-> Capturando la libreria del wrapper de Leegao recien compilada..."
+          # Buscamos el archivo .so del wrapper generado en las carpetas de salida
+          WRAPPER_SO=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "libvulkan_wrapper.so" | head -n 1)
+          if [ -n "$WRAPPER_SO" ]; then
+            cp "$WRAPPER_SO" pkg/usr/lib/libvulkan_wrapper.so
+          else
+            # Si Meson lo guardo con el nombre estandar de la API, lo renombramos nosotros
+            cp ${{ env.BUILD_DIR }}/*/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so
+          fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
@@ -165,6 +183,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Vulkan-Native
+          name: Bannerlator-Leegao-Bypass-Mesa26.2
           path: wrapper.tzst
           if-no-files-found: error
