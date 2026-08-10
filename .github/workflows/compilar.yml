@@ -21,35 +21,44 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Instalar herramientas de compresión Zstd en el servidor de GitHub
+      # Instalar herramientas necesarias
       - name: Install Zstd Packager
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl
+          sudo apt-get install -y zstd curl python3
 
-      # ¡ESTE PASO BAJA EL ARCHIVO Y CREA LA CARPETA QUE COMPARTIREMOS CON EL INTERIOR DEL DOCKER!
-      - name: Pre-download Expat Tarball into Shared Cache
+      # ¡ESTE PASO LEVANTA UN SERVIDOR INTERNO PARA ENGAÑAR A LAS DESCARGAS DEL DOCKER!
+      - name: Setup Local DNS/HTTP Hijacker (Bypass Internet Hangs)
         run: |
-          echo "-> Creando directorio de transferencia de cache..."
-          mkdir -p .meson_cache/packagecache
+          echo "-> Creando estructura de servidor espejo para Expat..."
+          mkdir -p web_mirror/libexpat/libexpat/releases/download/R_2_5_0
+          mkdir -p web_mirror/v2/expat_2.5.0-3
           
-          echo "-> Pre-descargando expat desde el espejo mas veloz de GitHub..."
-          # Bajamos el binario exacto que el compilador busca desesperadamente
-          curl -L "https://github.com" -o .meson_cache/packagecache/expat-2.5.0.tar.xz
+          # Descargamos los archivos reales de forma segura desde la máquina virtual principal (que sí tiene internet)
+          curl -L "https://github.com" -o web_mirror/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz
+          curl -L "https://mesonbuild.com" -o web_mirror/v2/expat_2.5.0-3/get_patch || touch web_mirror/v2/expat_2.5.0-3/get_patch
           
-          echo "-> Estructura de cache lista para el asalto de Docker."
+          # Lanzamos un servidor HTTP en segundo plano en el puerto 8080
+          cd web_mirror
+          python3 -m http.server 8080 &
+          cd ..
+          sleep 2
+          echo "-> Servidor espejo local corriendo en segundo plano."
 
-      # ¡PARCHAMOS EL ENLACE DEL PATCH DE EXPAT PARA QUE TAMBIÉN APUNTE AL DISCO EXTERNO SI FUERA NECESARIO!
-      - name: Patch Subproject Wrap Files (Fix SSL Handshake Hang)
+      # REESCRIBIMOS EL .WRAP DE EXPAT PARA APUNTAR A NUESTRO PROPIO SERVIDOR LOCAL INTERNO
+      - name: Patch Subproject Wrap Files (Force Local HTTP Redirect)
         run: |
-          echo "-> Corrigiendo enlaces de descarga en los archivos .wrap de Mesa 26.2..."
+          echo "-> Redirigiendo las descargas hacia el servidor espejo interno de GitHub Actions..."
           if [ -f "subprojects/expat.wrap" ]; then
             sed -i 's|\r$||' subprojects/expat.wrap
-            sed -i 's|https://github.com|http://github.com|g' subprojects/expat.wrap
-            sed -i 's|https://mesonbuild.com|http://mesonbuild.com|g' subprojects/expat.wrap
-            echo "-> subprojects/expat.wrap parchado con éxito."
+            # Reemplazamos los servidores oficiales de internet por la IP interna de la maquina virtual (puerto 8080)
+            sed -i 's|https://github.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
+            sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
+            echo "-> subprojects/expat.wrap enrutado localmente."
           fi
-          find subprojects/ -name "*.wrap" -exec sed -i 's|https://|http://|g' {} + || true
+          # Forzamos el bypass de http en todos los archivos preventivamente
+          find subprojects/ -name "*.wrap" -exec sed -i 's|https://github.com|http://127.0.0.1:8080|g' {} + || true
+          find subprojects/ -name "*.wrap" -exec sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' {} + || true
 
       # INTERCEPTOR DE COMANDOS PARA NINJA
       - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
@@ -109,14 +118,13 @@ jobs:
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # COMPILACIÓN COMPLETA INYECTANDO LA CARPETA DE LA CACHÉ DIRECTAMENTE EN LA RUTA RAÍZ INTERNA DE DOCKER
+      # COMPILACIÓN USANDO LA RED RE-ENRUTADA LOCALMENTE A NUESTRO PROPIO SERVIDOR
       - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
-          # El truco maestro: Mapeamos nuestra carpeta .meson_cache/packagecache 
-          # directamente sobre la carpeta interna de subproyectos de la compilacion cruzada del Docker
+          # Compartimos la red host para que el Docker pueda comunicarse con el puerto 8080 local de la maquina
           docker run --rm \
+            --network host \
             -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/.meson_cache/packagecache:/workspace/subprojects/packagecache" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
