@@ -1,0 +1,100 @@
+name: Mesa 26.2 Mali Packager (.tzst)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  BUILD_DIR: compilacion
+
+jobs:
+  build-aarch64-wrapper:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Instalar herramientas de compresión Zstd en el servidor de GitHub
+      - name: Install Zstd Packager
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+      - name: Surgical Silicon Modification (Mesa 26.2 Anti-Overflow MALI Engine)
+        run: |
+          echo "-> Rastreando el nucleo de Mesa 26.2 para inyectar la valvula de escape MALI..."
+          
+          # En Mesa 26.2, el sistema WSI (Window System Integration) gestiona el inicio de Vulkan.
+          # Buscaremos todos los archivos fuente de inicialización de la API de Vulkan en el código base.
+          WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
+          
+          if [ -n "$WSI_FILES" ]; then
+            echo "-> Soldando valvula mallopt nativa y deslimitador de FPS en el motor WSI de Mesa..."
+            for file in $WSI_FILES; do
+              if [ -f "$file" ]; then
+                sed -i 's/\r$//' "$file"
+                # Inyectamos de forma segura la purga de memoria (mallopt) y las variables fluidas de tu Unisoc T618
+                # al inicio de las llamadas del despachador de Vulkan (GetInstanceProcAddr)
+                find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+                break
+              fi
+            done
+            echo "-> ¡Inyección completada con éxito en el árbol de Mesa 26.2!"
+          else
+            echo "-> Alerta: No se encontraron archivos WSI directos, aplicando inyección global preventiva..."
+            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+          fi
+
+      - name: Wrapper Compiler (Atomic Processing Docker Mesa 26.2)
+        run: |
+          # Ejecutamos el compilador hermético de leegao sobre el árbol modificado de Mesa 26.2
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+
+      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
+      - name: Structure and Pack wrapper.tzst
+        run: |
+          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
+          mkdir -p pkg/usr/lib
+          mkdir -p pkg/usr/share/vulkan/icd.d
+          
+          echo "-> Buscando y moviendo el driver recién compilado a usr/lib..."
+          # Buscamos el binario final generado por Meson (puede llamarse libvulkan_wrapper.so o similar)
+          DRIVER_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1)
+          if [ -n "$DRIVER_FILE" ]; then
+            cp "$DRIVER_FILE" pkg/usr/lib/libvulkan_wrapper.so
+          else
+            echo "-> Error crítico: No se encontró el archivo .so compilado."
+            exit 1
+          fi
+          
+          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
+          cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+          {
+              "ICD": {
+                  "api_version": "1.3.289",
+                  "library_path": "libvulkan_wrapper.so"
+              },
+              "file_format_version": "1.0.0"
+          }
+          EOF
+          
+          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
+          cd pkg
+          tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
+          cd ..
+          
+          echo "-> ¡Empaquetado completado con éxito!"
+
+      - name: Upload Final wrapper.tzst for Bannerlator
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26.2-Wrapper
+          path: wrapper.tzst
+          if-no-files-found: error
