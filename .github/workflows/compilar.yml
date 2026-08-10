@@ -23,12 +23,14 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT ESTABLE EN EL CORAZÓN DEL ENRUTADOR
+      # ¡ESTE PASO CREA LA CARPETA SI FALTA Y ACAPARA EL BYPASS DE FORMA SEGURA!
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
-          echo "-> Creando el puente de inyeccion de Leegao para conectar el Vulkan de fábrica..."
+          echo "-> Asegurando la ruta del puente de inyeccion..."
+          # Forzamos la creación del árbol de directorios para evitar el error 'No such file or directory'
+          mkdir -p src/vulkan/wrapper
           
-          # Creamos la cabecera limpia con el bypass y las optimizaciones para Deadpool
+          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -39,31 +41,33 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
-          // Este constructor fuerza al puente de Leegao a abrir el Vulkan oficial de tu Unisoc T618
+          // Constructor automatico enlazado al driver original de tu Mali-G52
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
               setenv("vblank_mode", "0", 1);
-              // Forzamos al wrapper a buscar el driver Vulkan original de Android en tu Mali-G52
               setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
           }
           
           #endif
           EOF
           
-          # Buscamos el archivo de entrada del wrapper de Leegao en el repositorio de Mesa
-          WRAPPER_MAIN=$(find src/vulkan/wrapper/ -name "*.c" | head -n 1)
+          # Buscamos el punto de entrada maestro de la utilidad Vulkan de Mesa para soldar el bypass
+          TARGET_LOADER="src/vulkan/util/vk_util.c"
           
-          if [ -n "$WRAPPER_MAIN" ] && [ -f "$WRAPPER_MAIN" ]; then
-            echo "-> Soldando el bypass de Leegao directamente en: $WRAPPER_MAIN"
-            sed -i 's/\r$//' "$WRAPPER_MAIN"
-            sed -i '1i#include "mali_leegao_bypass.h"' "$WRAPPER_MAIN"
-            echo "-> ¡Bypass de Leegao soldado correctamente!"
+          if [ -f "$TARGET_LOADER" ]; then
+            echo "-> Soldando el bypass de Leegao en la utilidad de Vulkan: $TARGET_LOADER"
+            sed -i 's/\r$//' "$TARGET_LOADER"
+            # Inyectamos la cabecera en la linea 1 de vk_util.c de forma nativa
+            cat src/vulkan/wrapper/mali_leegao_bypass.h "$TARGET_LOADER" > temp_final.c
+            mv temp_final.c "$TARGET_LOADER"
+            echo "-> Bypass de Leegao acoplado con éxito al cargador general."
           else
-            echo "-> Fallback: Aplicando bypass global en la carga del cargador de drivers de Mesa..."
-            FALLBACK_LOADER="src/vulkan/util/vk_icd_vulkan.c"
-            if [ -f "$FALLBACK_LOADER" ]; then
-              sed -i '1i#include "../wrapper/mali_leegao_bypass.h"' "$FALLBACK_LOADER"
+            echo "-> Alerta: No se encontro vk_util.c, buscando alternativa en el runtime..."
+            RUNTIME_FILE=$(find src/vulkan/ -name "*.c" | head -n 1)
+            if [ -n "$RUNTIME_FILE" ]; then
+              cat src/vulkan/wrapper/mali_leegao_bypass.h "$RUNTIME_FILE" > temp_final.c
+              mv temp_final.c "$RUNTIME_FILE"
             fi
           fi
 
@@ -108,7 +112,6 @@ jobs:
           touch build-host/src/compiler/clc/mesa_clc
           echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
 
-      # CONFIGURAMOS MESON PARA COMPILAR ÚNICAMENTE LA VARIANTE WRAPPER DE LEEGAO
       - name: Setup Meson Cross-Compilation
         env:
           PKG_CONFIG_LIBDIR: ${{ github.workspace }}/shims
@@ -117,9 +120,6 @@ jobs:
           export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
           envsubst < android.toml > android-cross.txt
           
-          # MODIFICACIÓN MAESTRA:
-          # -Dvulkan-drivers=wrapper (Forzamos el componente de Leegao que conecta con tu sistema)
-          # -Dgallium-drivers= (Vacio, no queremos drivers experimentales que rompan la conexion)
           meson setup ${{ env.BUILD_DIR }} --reconfigure \
               --cross-file android-cross.txt \
               -Dbuildtype=${{ matrix.build-type }} \
@@ -147,21 +147,19 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # RECOLECTAMOS EL COCHEVO DE LEEGAO EMBAJADO PARA TU BANNERLATOR
+      # RECOLECTAMOS EL ARCHIVO COMPILADO DE LEEGAO
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Capturando la libreria del wrapper de Leegao recien compilada..."
-          # Buscamos el archivo .so del wrapper generado en las carpetas de salida
+          echo "-> Capturando la libreria del wrapper de Leegao..."
           WRAPPER_SO=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "libvulkan_wrapper.so" | head -n 1)
           if [ -n "$WRAPPER_SO" ]; then
             cp "$WRAPPER_SO" pkg/usr/lib/libvulkan_wrapper.so
           else
-            # Si Meson lo guardo con el nombre estandar de la API, lo renombramos nosotros
-            cp ${{ env.BUILD_DIR }}/*/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so
+            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so
           fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial..."
