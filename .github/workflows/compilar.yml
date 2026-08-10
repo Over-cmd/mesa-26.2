@@ -27,6 +27,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
+      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' PARA LOGRAR QUE EL NUEVO DOCKER DE LEEGAO NO ABORTE!
+      - name: Patch Meson Choices (Allow Wrapper Option)
+        run: |
+          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
+          if [ -f "meson.options" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
+            echo "-> meson.options parchado con exito."
+          elif [ -f "meson_options.txt" ]; then
+            sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
+            echo "-> meson_options.txt parchado con exito."
+          fi
+
       # ESTA INYECCIÓN ES COMPATIBLE AL 100% CON EL WRAPPER ORIGINAL Y EL FILTRADO DE VIDEOS
       - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
         run: |
