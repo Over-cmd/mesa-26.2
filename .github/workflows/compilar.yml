@@ -25,20 +25,30 @@ jobs:
       - name: Install Zstd Packager
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd
+          sudo apt-get install -y zstd curl
 
-      # ¡ESTE PASO PARCHA LOS ENLACES DE FORMA TOTALMENTE SEGURA CON SEPARADORES |
+      # ¡ESTE PASO BAJA EL ARCHIVO Y CREA LA CARPETA QUE COMPARTIREMOS CON EL INTERIOR DEL DOCKER!
+      - name: Pre-download Expat Tarball into Shared Cache
+        run: |
+          echo "-> Creando directorio de transferencia de cache..."
+          mkdir -p .meson_cache/packagecache
+          
+          echo "-> Pre-descargando expat desde el espejo mas veloz de GitHub..."
+          # Bajamos el binario exacto que el compilador busca desesperadamente
+          curl -L "https://github.com" -o .meson_cache/packagecache/expat-2.5.0.tar.xz
+          
+          echo "-> Estructura de cache lista para el asalto de Docker."
+
+      # ¡PARCHAMOS EL ENLACE DEL PATCH DE EXPAT PARA QUE TAMBIÉN APUNTE AL DISCO EXTERNO SI FUERA NECESARIO!
       - name: Patch Subproject Wrap Files (Fix SSL Handshake Hang)
         run: |
           echo "-> Corrigiendo enlaces de descarga en los archivos .wrap de Mesa 26.2..."
-          # Usamos | en lugar de / para que sed procese las URLs sin romperse
           if [ -f "subprojects/expat.wrap" ]; then
             sed -i 's|\r$||' subprojects/expat.wrap
             sed -i 's|https://github.com|http://github.com|g' subprojects/expat.wrap
             sed -i 's|https://mesonbuild.com|http://mesonbuild.com|g' subprojects/expat.wrap
             echo "-> subprojects/expat.wrap parchado con éxito."
           fi
-          # Aplicamos el bypass http global preventivo de forma segura en toda la carpeta
           find subprojects/ -name "*.wrap" -exec sed -i 's|https://|http://|g' {} + || true
 
       # INTERCEPTOR DE COMANDOS PARA NINJA
@@ -99,11 +109,14 @@ jobs:
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # COMPILACIÓN COMPLETA DE MESA 26.2
+      # COMPILACIÓN COMPLETA INYECTANDO LA CARPETA DE LA CACHÉ DIRECTAMENTE EN LA RUTA RAÍZ INTERNA DE DOCKER
       - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
+          # El truco maestro: Mapeamos nuestra carpeta .meson_cache/packagecache 
+          # directamente sobre la carpeta interna de subproyectos de la compilacion cruzada del Docker
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/.meson_cache/packagecache:/workspace/subprojects/packagecache" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
