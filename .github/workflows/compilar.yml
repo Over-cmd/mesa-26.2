@@ -27,7 +27,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
-      # ¡ESTE PASO AGREGA 'WRAPPER' A LAS OPCIONES LEGALES PARA QUE EL DOCKER NATIVO NO ABORTE!
+      # ¡ESTE PASO CREA EL INTERCEPTOR QUE CORRIGE EL OBJETIVO DE NINJA EN CALIENTE!
+      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
+        run: |
+          echo "-> Creando interceptor de comandos para Ninja..."
+          mkdir -p bin_hijack
+          
+          cat << 'EOF' > bin_hijack/ninja
+          #!/bin/bash
+          ARGS=("$@")
+          NEW_ARGS=()
+          
+          for arg in "${ARGS[@]}"; do
+            # Si el script interno del Docker pide la ruta rota, la cambiamos por el target real
+            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
+              NEW_ARGS+=("vulkan_wrapper")
+            else
+              NEW_ARGS+=("$arg")
+            fi
+          done
+          
+          # Ejecutamos el Ninja real que está dentro del contenedor con los argumentos corregidos
+          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
+          EOF
+          
+          chmod +x bin_hijack/ninja
+          echo "-> Interceptor Ninja creado con éxito."
+
+      # AGREGA 'WRAPPER' A LAS OPCIONES LEGALES PARA QUE EL DOCKER NATIVO NO ABORTE
       - name: Patch Meson Options for Wrapper Choice
         run: |
           echo "-> Desbloqueando la opcion 'wrapper' en las opciones oficiales de Meson..."
@@ -62,10 +89,14 @@ jobs:
             find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # TU PASO ORIGINAL DE DOCKER EXACTO (TAL Y COMO DEBE CORRER)
+      # TU COMPILADOR OBLIGANDO A LEER NUESTRO INTERCEPTOR NINJA
       - name: compilador-envoltorio
         run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+          # Montamos el interceptor justo encima del ejecutable ninja del contenedor
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
+            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
       # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
       - name: Structure and Pack wrapper.tzst
@@ -74,8 +105,14 @@ jobs:
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Moviendo el driver compilado a usr/lib..."
-          cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+          echo "-> Buscando el driver compilado en la carpeta de salida..."
+          # Buscamos el archivo .so allá donde lo haya dejado Ninja de forma flexible
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
+          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
+            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
+          else
+            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+          fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
