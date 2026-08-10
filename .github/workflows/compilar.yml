@@ -23,24 +23,34 @@ jobs:
         run: |
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
+      # ¡ESTE PASO CORRIGE EL ERROR DE SINTAXIS EN CLANG!
       - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI Panfrost)
         run: |
-          echo "-> Rastreando el nucleo del driver Panfrost para inyectar la valvula MALI..."
-          # Buscamos el punto de entrada de la inicialización de Vulkan dentro de Panfrost
-          PANVK_DEVICE=$(find src/panfrost/vulkan/ -name "panvk_device.c" -o -name "panvk_vulkan.c" | head -n 1)
+          echo "-> Rastreando la inicializacion real de Vulkan de Mesa 26.2..."
           
-          if [ -n "$PANVK_DEVICE" ] && [ -f "$PANVK_DEVICE" ]; then
-            echo "-> Soldando valvula mallopt y present mode en: $PANVK_DEVICE"
-            sed -i 's/\r$//' "$PANVK_DEVICE"
-            sed -i '1iextern int mallopt(int param, int value);' "$PANVK_DEVICE"
-            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$PANVK_DEVICE"
+          # Buscamos el punto de entrada maestro del Driver ICD de Vulkan en Mesa
+          VK_ENTRY_FILE="src/vulkan/runtime/vk_instance.c"
+          
+          if [ -f "$VK_ENTRY_FILE" ]; then
+            echo "-> Aplicando inyección segura en la inicialización de la instancia: $VK_ENTRY_FILE"
+            sed -i 's/\r$//' "$VK_ENTRY_FILE"
             
-            # Inyectamos el mallopt estable (-1002, 0) y mailbox para que los vídeos de Deadpool no vayan a trozos
-            find src/panfrost/vulkan/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
-            echo "-> Driver Panfrost modificado de forma segura."
+            # Inyectamos prototipos estándar de gestión de memoria al principio del archivo
+            sed -i '1iextern int mallopt(int param, int value);' "$VK_ENTRY_FILE"
+            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$VK_ENTRY_FILE"
+            
+            # En lugar de romper punteros de función, inyectamos la purga de memoria mallopt(-1002, 0)
+            # y el modo mailbox justo al arrancar la creación de la instancia de Vulkan
+            sed -i '/vk_instance_init/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$VK_ENTRY_FILE"
+            echo "-> Parche inyectado de forma limpia y segura sin romper la sintaxis C."
           else
-            echo "-> Fallback: Aplicando inyeccion global preventiva en el arbol de origen..."
-            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
+            echo "-> Fallback seguro: Aplicando inyección en el punto de entrada de Panvk..."
+            PANVK_ENTRY="src/panfrost/vulkan/panvk_device.c"
+            if [ -f "$PANVK_ENTRY" ]; then
+              sed -i '1iextern int mallopt(int param, int value);' "$PANVK_ENTRY"
+              sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$PANVK_ENTRY"
+              sed -i '/panvk_CreateInstance/!b;n;i\\ mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$PANVK_ENTRY"
+            fi
           fi
 
       - name: Set up Python
