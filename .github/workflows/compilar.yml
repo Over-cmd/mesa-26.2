@@ -1,4 +1,4 @@
-name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
+name: Mesa Vulkan Wrapper Mali Packager (.tzst)
 
 on:
   push:
@@ -7,12 +7,11 @@ on:
 
 env:
   BUILD_DIR: compilacion
+  IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
 jobs:
   build-aarch64-wrapper:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
     steps:
       - name: Checkout Code
@@ -21,56 +20,47 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Instalar herramientas necesarias
-      - name: Install Zstd Packager
+      # INSTALADOR DEL EMPAQUETADOR DE BANNERLATOR Y PYTHON PARA EL SERVIDOR ESPEJO
+      - name: Install Packager and Server Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd curl python3
 
-      # ¡ESTE PASO LEVANTA UN SERVIDOR INTERNO PARA ENGAÑAR A LAS DESCARGAS DEL DOCKER!
-      - name: Setup Local DNS/HTTP Hijacker (Bypass Internet Hangs)
+      # TRUCO DE LA SCENE: LEVANTAMOS UN SERVIDOR ESPEJO LOCAL PARA QUE EXPAT NO SE QUEDE 40 MINUTOS TRABADO
+      - name: Setup Local HTTP Espejo (Bypass Descarga Expat)
         run: |
-          echo "-> Creando estructura de servidor espejo para Expat..."
           mkdir -p web_mirror/libexpat/libexpat/releases/download/R_2_5_0
           mkdir -p web_mirror/v2/expat_2.5.0-3
           
-          # Descargamos los archivos reales de forma segura desde la máquina virtual principal (que sí tiene internet)
+          # La maquina de GitHub baja el archivo limpio de internet por fuera de la burbuja del Docker
           curl -L "https://github.com" -o web_mirror/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz
           curl -L "https://mesonbuild.com" -o web_mirror/v2/expat_2.5.0-3/get_patch || touch web_mirror/v2/expat_2.5.0-3/get_patch
           
-          # Lanzamos un servidor HTTP en segundo plano en el puerto 8080
+          # Levantamos el servidor en el puerto 8080 interno
           cd web_mirror
           python3 -m http.server 8080 &
           cd ..
           sleep 2
-          echo "-> Servidor espejo local corriendo en segundo plano."
 
-      # REESCRIBIMOS EL .WRAP DE EXPAT PARA APUNTAR A NUESTRO PROPIO SERVIDOR LOCAL INTERNO
-      - name: Patch Subproject Wrap Files (Force Local HTTP Redirect)
+      # REENRUTAMOS LOS ARCHIVOS .WRAP DE MESA 26.2 HACIA NUESTRA RED LOCAL INTERNA
+      - name: Route Wraps to Local HTTP Server
         run: |
-          echo "-> Redirigiendo las descargas hacia el servidor espejo interno de GitHub Actions..."
           if [ -f "subprojects/expat.wrap" ]; then
             sed -i 's|\r$||' subprojects/expat.wrap
-            # Reemplazamos los servidores oficiales de internet por la IP interna de la maquina virtual (puerto 8080)
             sed -i 's|https://github.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
             sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' subprojects/expat.wrap
-            echo "-> subprojects/expat.wrap enrutado localmente."
           fi
-          # Forzamos el bypass de http en todos los archivos preventivamente
           find subprojects/ -name "*.wrap" -exec sed -i 's|https://github.com|http://127.0.0.1:8080|g' {} + || true
           find subprojects/ -name "*.wrap" -exec sed -i 's|https://mesonbuild.com|http://127.0.0.1:8080|g' {} + || true
 
-      # INTERCEPTOR DE COMANDOS PARA NINJA
-      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
+      # INTERCEPTOR DE NINJA PARA EVITAR EL CRASHEO DE TARGET DESCONOCIDO
+      - name: Create Ninja Wrapper Hijacker
         run: |
-          echo "-> Creando interceptor de comandos para Ninja..."
           mkdir -p bin_hijack
-          
           cat << 'EOF' > bin_hijack/ninja
           #!/bin/bash
           ARGS=("$@")
           NEW_ARGS=()
-          
           for arg in "${ARGS[@]}"; do
             if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
               NEW_ARGS+=("vulkan_wrapper")
@@ -78,33 +68,24 @@ jobs:
               NEW_ARGS+=("$arg")
             fi
           done
-          
           exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
           EOF
-          
           chmod +x bin_hijack/ninja
-          echo "-> Interceptor Ninja creado con exito."
 
-      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL BLOQUEO DE VALIDACIÓN
-      - name: Patch Meson Choices (Allow Wrapper Option)
+      # HACK LEGAL DE OPCIONES DE CONFIGURACIÓN DE MESON 26.2
+      - name: Patch Meson Options for Wrapper Choice
         run: |
-          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
           if [ -f "meson.options" ]; then
             sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson.options
-            echo "-> meson.options parchado con exito."
           elif [ -f "meson_options.txt" ]; then
             sed -i 's/choices : \[/choices : \['\''wrapper'\'', /g' meson_options.txt
-            echo "-> meson_options.txt parchado con exito."
           fi
 
-      # INYECTAMOS TU PARCHE DE MEMORIA ESTABLE PARA TU HARDWARE UNISOC T618
-      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI 26.2)
+      # SOLDADURA DEL MALLOPT(-1002, 0) Y MODO MAILBOX PARA LOS VÍDEOS DE DEADPOOL EN TU T618
+      - name: Surgical Silicon Modification (Mali 26.2 Smooth Parches)
         run: |
-          echo "-> Rastreando el nucleo de Mesa 26.2 para inyectar la valvula de escape MALI..."
           WSI_FILES=$(find src/ -name "*wsi*.c" -o -name "*device*.c")
-          
           if [ -n "$WSI_FILES" ]; then
-            echo "-> Soldando valvula mallopt nativa y deslimitador de FPS en el motor WSI de Mesa..."
             for file in $WSI_FILES; do
               if [ -f "$file" ]; then
                 sed -i 's/\r$//' "$file"
@@ -112,38 +93,28 @@ jobs:
                 break
               fi
             done
-            echo "-> ¡Inyección completada con éxito en el árbol de Mesa 26.2!"
-          else
-            echo "-> Alerta: No se encontraron archivos WSI directos, aplicando inyección global preventiva..."
-            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # COMPILACIÓN USANDO LA RED RE-ENRUTADA LOCALMENTE A NUESTRO PROPIO SERVIDOR
-      - name: Wrapper Compiler (Atomic Processing Docker MALI)
+      # TU COMANDO ORIGINAL DE DOCKER (Añadiendo red compartida e interceptor de Ninja)
+      - name: compilador-envoltorio
         run: |
-          # Compartimos la red host para que el Docker pueda comunicarse con el puerto 8080 local de la maquina
           docker run --rm \
             --network host \
             -v "${{ github.workspace }}:/workspace" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
-      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
+      # RECOLECCIÓN ULTRA-RÁPIDA Y CONVERSIÓN COMPRIMIDA A WRAPPER.TZST PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
-          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
-          
-          echo "-> Buscando el driver compilado en la carpeta de salida..."
           SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
             cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
           fi
-          
-          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -153,13 +124,9 @@ jobs:
               "file_format_version": "1.0.0"
           }
           EOF
-          
-          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
-          
-          echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
