@@ -27,7 +27,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
 
-      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' PARA LOGRAR QUE EL NUEVO DOCKER DE LEEGAO NO ABORTE!
+      # ¡ESTE PASO ARREGLA EL NOMBRE DEL TARGET EXIGIDO POR NINJA!
+      - name: Patch Compile Script (Fix Ninja Target)
+        run: |
+          echo "-> Corrigiendo el objetivo de compilacion para Ninja..."
+          # Buscamos archivos como compile.sh o build.sh en la raiz y reconfiguramos la ruta del .so por el nombre de target real
+          if [ -f "compile.sh" ]; then
+            sed -i 's|src/vulkan/wrapper/libvulkan_wrapper.so|vulkan_wrapper|g' compile.sh
+            echo "-> compile.sh modificado con exito."
+          fi
+          # Ademas parchamos preventivamente el meson.build si forzara el nombre de salida
+          find . -name "meson.build" -exec sed -i "s|'src/vulkan/wrapper/libvulkan_wrapper.so'|'vulkan_wrapper'|g" {} + || true
+
+      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL ARCHIVO DE OPCIONES PARA EVITAR EL BLOQUEO ANTERIOR
       - name: Patch Meson Choices (Allow Wrapper Option)
         run: |
           echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de Meson..."
@@ -39,7 +51,7 @@ jobs:
             echo "-> meson_options.txt parchado con exito."
           fi
 
-      # ESTA INYECCIÓN ES COMPATIBLE AL 100% CON EL WRAPPER ORIGINAL Y EL FILTRADO DE VIDEOS
+      # INYECTAMOS TU MALLOPT ESTABLE PARA TU HARDWARE UNISOC T618
       - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
         run: |
           echo "-> Rastreando el corazon del Wrapper original para balancear la inyección MALI..."
@@ -75,8 +87,14 @@ jobs:
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Moviendo el driver compilado a usr/lib..."
-          cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+          echo "-> Buscando el driver compilado en la carpeta de salida..."
+          # Buscamos de forma flexible cualquier .so generado por si cambio de subruta en la compilacion
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
+          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
+            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
+          else
+            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+          fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
