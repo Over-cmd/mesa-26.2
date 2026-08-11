@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Instalamos CMake y las dependencias de compilación cruzada en el host
+      # Instalamos CMake y las dependencias de configuración cruzada en el host
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
@@ -109,7 +109,7 @@ jobs:
           endian = 'little'
           EOF
 
-      # CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM
+      # CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM (Opción incorrecta eliminada)
       - name: Configure Meson Build
         run: |
           meson setup ${{ env.BUILD_DIR }} \
@@ -122,7 +122,6 @@ jobs:
             -Dopengl=false \
             -Dgbm=disabled \
             -Degl=disabled \
-            -Dfullscreen-vulkan=true \
             -Dgles1=disabled \
             -Dgles2=disabled \
             -Dllvm=disabled \
@@ -133,7 +132,7 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # ¡PASO ARREGLADO: FORZAMOS UN PRE-INSTALL EN CARPETA TEMPORAL PARA EXTRACCIÓN SEGURA!
+      # PASO DE INSTALACIÓN LOCAL Y CAPTURA SEGURA DEL BINARIO .SO
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
@@ -141,11 +140,9 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Ejecutando instalador local de Meson para recolectar el archivo .so..."
-          # Obligamos a Meson a meter el driver limpio en la carpeta temporal 'dest_temp'
           DESTDIR=dest_temp meson install -C ${{ env.BUILD_DIR }} --no-rebuild
           
           echo "-> Buscando el archivo .so de Vulkan dentro de la instalacion controlada..."
-          # Copiamos de forma segura la libreria de salida limpia filtrando cualquier stub de Android
           SO_FILE=$(find dest_temp/ -name "*.so" | grep -v "stub" | head -n 1)
           
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
