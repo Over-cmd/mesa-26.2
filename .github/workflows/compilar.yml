@@ -1,4 +1,4 @@
-name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
+name: Mesa 26.2 Native NDK Wrapper Packager (.tzst)
 
 on:
   push:
@@ -6,80 +6,36 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: compilacion
-  IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+  BUILD_DIR: build_output
 
 jobs:
-  build-aarch64-wrapper:
+  build-aarch64:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # Forzamos una version estable de Python para evitar el bug del parser
 
-      # Instalar herramientas para procesar el paquete final de Bannerlator
-      - name: Install Packager Tools
+      # Instalamos absolutamente todas las herramientas de compilación cruzada en el servidor de GitHub
+      - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl
+          sudo apt-get install -y \
+            build-essential ninja-build pkg-config zstd curl unzip bison flex \
+            libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrand-dev
+          python -m pip install --upgrade pip
+          pip install mako PyYAML meson ninja packaging
 
-      # ¡ESTE BLOQUE EVITA LA RECURSIÓN DE PYTHON 3.14 CREANDO UN ENTORNO PLANO VALIDO!
-      - name: Generate Local Minimal Expat Structure (Zero Downloads)
-        run: |
-          echo "-> Fabricando subproyecto Expat nativo en la raiz..."
-          mkdir -p subprojects/expat/lib
-          
-          # Escribimos las cabeceras basicas de Expat para que Mesa las encuentre
-          cat << 'EOF' > subprojects/expat/lib/expat.h
-          #ifndef EXPAT_H
-          #define EXPAT_H
-          #define XML_STATUS_OK 1
-          typedef void *XML_Parser;
-          typedef char XML_Char;
-          XML_Parser XML_ParserCreate(const XML_Char *encoding);
-          void XML_ParserFree(XML_Parser parser);
-          #endif
-          EOF
-          
-          # Escribimos el codigo fuente C plano limpio
-          cat << 'EOF' > subprojects/expat/lib/expat.c
-          #include "expat.h"
-          XML_Parser XML_ParserCreate(const XML_Char *encoding) { return (XML_Parser)1; }
-          void XML_ParserFree(XML_Parser parser) {}
-          int dummy_expat_stub(void) { return 0; }
-          EOF
-          
-          # Creamos el archivo de construccion Meson real dentro de la misma carpeta
-          cat << 'EOF' > subprojects/expat/build.meson
-          # Archivo de soporte para compilacion cruzada de Expat
-          EOF
-          
-          cat << 'EOF' > subprojects/expat/meson.build
-          project('expat', 'c', version: '2.5.0')
-          expat_inc = include_directories('lib')
-          expat_lib = static_library('expat', 'lib/expat.c', include_directories: expat_inc)
-          expat_dep = declare_dependency(link_with: expat_lib, include_directories: expat_inc)
-          meson.override_dependency('expat', expat_dep)
-          EOF
-          
-          echo "-> Reescribiendo expat.wrap con formato plano plano para evitar el bucle de Python..."
-          cat << 'EOF' > subprojects/expat.wrap
-          [wrap-file]
-          directory = expat
-          EOF
-          
-          echo "-> Parche de estructura de subproyectos completado de forma segura."
-
-      # CORREGIMOS EL ERROR DE ENTRADA CREANDO LA CARPETA SI FALTA
+      # INYECTAMOS EL BYPASS DE LEEGAO EN EL CARGADOR DE VULKAN DE MESA 26.2
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
-          echo "-> Asegurando la ruta del puente de inyeccion..."
+          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
           mkdir -p src/vulkan/wrapper
-          
-          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -90,6 +46,7 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
+          // Constructor automatico que conecta con el Vulkan oficial de tu Unisoc T618
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
@@ -100,9 +57,10 @@ jobs:
           #endif
           EOF
           
+          # Soldamos el puente directamente en la utilidad de carga de Vulkan de Mesa
           TARGET_LOADER="src/vulkan/util/vk_util.c"
           if [ -f "$TARGET_LOADER" ]; then
-            echo "-> Soldando el bypass de Leegao en la utilidad de Vulkan: $TARGET_LOADER"
+            echo "-> Soldando el bypass de Leegao en: $TARGET_LOADER"
             sed -i 's/\r$//' "$TARGET_LOADER"
             cat src/vulkan/wrapper/mali_leegao_bypass.h "$TARGET_LOADER" > temp_final.c
             mv temp_final.c "$TARGET_LOADER"
@@ -114,53 +72,76 @@ jobs:
             fi
           fi
 
-      # INTERCEPTOR DE COMANDOS PARA NINJA
-      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
+      # CONFIGURAMOS EL ARCHIVO DE COMPILACIÓN CRUZADA PARA EL ANDROID NDK OFICIAL
+      - name: Setup Android NDK Cross-File
         run: |
-          mkdir -p bin_hijack
-          cat << 'EOF' > bin_hijack/ninja
-          #!/bin/bash
-          ARGS=("$@")
-          NEW_ARGS=()
-          for arg in "${ARGS[@]}"; do
-            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
-              NEW_ARGS+=("vulkan_wrapper")
-            else
-              NEW_ARGS+=("$arg")
-            fi
-          done
-          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
+          echo "-> Generando archivo de configuracion cruzada para AArch64..."
+          # Usamos el Android NDK preinstalado de fabrica en las maquinas virtuales de GitHub
+          export NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          
+          cat << EOF > android-cross.txt
+          [binaries]
+          c = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang'
+          cpp = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang++'
+          ar = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          pkg-config = '/usr/bin/pkg-config'
+          
+          [properties]
+          needs_exe_wrapper = true
+          
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
           EOF
-          chmod +x bin_hijack/ninja
 
-      # DESBLOQUEO DE LA OPCIÓN WRAPPER EN MESON 26.2
-      - name: Patch Meson Choices (Allow Wrapper Option)
+      # LANZAMOS EL CONFIGURADOR DE MESON SOBRE EL PROPIO SERVIDOR DE GITHUB
+      - name: Configure Meson Build
         run: |
+          # Desbloqueamos la opcion 'wrapper' en caso de que lo requiera tu meson.options
           if [ -f "meson.options" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
           elif [ -f "meson_options.txt" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
+          
+          # Setup limpio e independiente de Docker, compilando unicamente el componente wrapper
+          meson setup ${{ env.BUILD_DIR }} \
+            --cross-file android-cross.txt \
+            -Dbuildtype=release \
+            -Dplatforms=android \
+            -Dvulkan-drivers=wrapper \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dgbm=disabled \
+            -Degl=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dllvm=disabled \
+            -Dxmlconfig=disabled
 
-      # TU COMANDO DE DOCKER ORIGINAL INTACTO COMIENDO LA CARPETA FICTICIA SANA
-      - name: compilador-envoltorio
+      # COMPILACIÓN AUTOMÁTICA ULTRA-RÁPIDA CON NINJA NATIVO
+      - name: Compile Mesa 26.2 Wrapper
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
-            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+          meson compile -C ${{ env.BUILD_DIR }}
 
       # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
+          echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
+          
+          echo "-> Buscando el binario generado..."
           SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+            exit 1
           fi
+          
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -170,6 +151,7 @@ jobs:
               "file_format_version": "1.0.0"
           }
           EOF
+          
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
@@ -177,6 +159,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper-26.2
+          name: Bannerlator-Mali-Wrapper-26.2-Nativo
           path: wrapper.tzst
           if-no-files-found: error
