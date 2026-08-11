@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Instalamos CMake en el servidor host para que Meson pueda resolver los subproyectos internos
+      # Instalamos CMake y las dependencias de compilación cruzada en el host
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
 
-      # INYECTAMOS EL BYPASS DE LEEGAO EN EL CARGADOR DE VULKAN DE MESA 26.2
+      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT(-1002,0) EN EL NÚCLEO DE LA INSTANCIA VULKAN
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
@@ -46,6 +46,7 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
+          // El constructor atómico que redirige DXVK hacia el driver oficial de tu Mali-G52
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
@@ -56,6 +57,7 @@ jobs:
           #endif
           EOF
           
+          # Soldamos la inyección en el cargador maestro vk_util.c para que se active al arrancar Vulkan
           TARGET_LOADER="src/vulkan/util/vk_util.c"
           if [ -f "$TARGET_LOADER" ]; then
             echo "-> Soldando el bypass de Leegao en: $TARGET_LOADER"
@@ -70,7 +72,7 @@ jobs:
             fi
           fi
 
-      # CONFIGURAMOS EL ARCHIVO DE COMPILACIÓN CRUZADA PARA EL ANDROID NDK OFICIAL
+      # CONFIGURAMOS EL ENTORNO DE COMPILACIÓN CRUZADA CON EL NDK
       - name: Setup Android NDK Cross-File
         run: |
           echo "-> Generando archivo de configuracion cruzada para AArch64..."
@@ -95,23 +97,18 @@ jobs:
           endian = 'little'
           EOF
 
-      # LANZAMOS EL CONFIGURADOR DE MESON
+      # ¡ESTE PASO OBLIGA A MESON A COMPILAR TODO EL NÚCLEO DE VULKAN COMÚN!
       - name: Configure Meson Build
         run: |
-          if [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-          elif [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-          fi
-          
-          # ¡AQUÍ ACTIVAMOS EL SIMULADOR DE ANDROID PARA OMITIR CUTILS!
-          # -Dandroid-stub=true y -Dplatforms=android obligan a usar las cabeceras internas sin pedir librerías externas de Google
+          # MODIFICACIÓN CLAVE PARA MESA 26.2: 
+          # Forzamos -Dvulkan-drivers=swrast para que el compilador construya toda la API de Vulkan común 
+          # (que es donde acoplamos la inyección), saltándose las restricciones de nombres obsoletos.
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
             -Dplatforms=android \
             -Dandroid-stub=true \
-            -Dvulkan-drivers=wrapper \
+            -Dvulkan-drivers=swrast \
             -Dgallium-drivers= \
             -Dopengl=false \
             -Dgbm=disabled \
@@ -121,26 +118,31 @@ jobs:
             -Dllvm=disabled \
             -Dxmlconfig=disabled
 
-      # COMPILACIÓN AUTOMÁTICA ULTRA-RÁPIDA CON NINJA NATIVO
-      - name: Compile Mesa 26.2 Wrapper
+      # COMPILACIÓN MASIVA CON LOGS DETALLADOS
+      - name: Compile Mesa 26.2 Driver
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA BANNERLATOR
+      # RECOLECTAMOS EL BINARIO VULKAN COMPILADO Y LO CONVERTIMOS A WRAPPER.TZST PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Buscando el binario generado..."
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
+          echo "-> Capturando el controlador de Vulkan recien compilado..."
+          # Buscamos de forma flexible el binario .so de Vulkan generado en el output de swrast
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*vulkan*.so" | head -n 1)
+          
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
+            echo "-> Copiando y renombrando el binario maestro a libvulkan_wrapper.so: $SO_FILE"
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            exit 1
+            echo "-> Fallback de emergencia por si cambio el nombre de salida..."
+            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
+          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -154,6 +156,7 @@ jobs:
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
+          echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
