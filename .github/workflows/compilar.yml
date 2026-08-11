@@ -20,29 +20,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Herramientas necesarias para la caché y el paquete final de Bannerlator
-      - name: Install Packager and Server Tools
+      # Herramientas necesarias para descargar y desempaquetar las librerías locales
+      - name: Install Packager and Download Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl python3
+          sudo apt-get install -y zstd curl tar
 
-      # DESATASCAMOS EL LOG DESCARGANDO EXPAT DIRECTAMENTE EN LA CARPETA QUE RECONOCE EL DOCKER
-      - name: Pre-download Meson Cache (Bypass Descarga Hang)
+      # ¡ESTE PASO METE EL CÓDIGO FUENTE DE EXPAT EN LA RUTA LOCAL PARA ELIMINAR LA DESCARGA DE INTERNET!
+      - name: Pre-extract Expat Subproject (Bypass 5 Hours Hang)
         run: |
-          echo "-> Creando la ruta de la cache global oculta de Meson..."
-          mkdir -p .meson_global_cache/meson/packagecache
+          echo "-> Descargando codigo fuente de Expat de forma externa..."
+          mkdir -p subprojects
+          curl -L "https://github.com/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz" -o subprojects/expat-2.5.0.tar.xz
           
-          echo "-> Descargando Expat para guardarlo en la cache del Docker..."
-          curl -L "https://github.com" -o .meson_global_cache/meson/packagecache/expat-2.5.0.tar.xz
-          curl -L "https://mesonbuild.com" -o .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip || touch .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip
+          echo "-> Extrayendo la carpeta de expat dentro del espacio de trabajo de Meson..."
+          tar -xf subprojects/expat-2.5.0.tar.xz -C subprojects/
           
-          echo "-> Directorio de cache global listo."
+          # Renombramos la carpeta extraída exactamente a 'expat' para que coincida con el nombre del subproyecto
+          mv subprojects/expat-2.5.0 subprojects/expat
+          
+          echo "-> Descargando el parche oficial de Meson WrapDB..."
+          curl -L "https://wrapdb.mesonbuild.com/v2/expat_2.5.0-3/get_patch" -o subprojects/expat_patch.zip || touch subprojects/expat_patch.zip
+          
+          # Si el parche se descargó con éxito, lo descomprimimos sobre la carpeta de expat para dejarla completa
+          if [ -s subprojects/expat_patch.zip ]; then
+            unzip -o subprojects/expat_patch.zip -d subprojects/expat/ || echo "Omitiendo parche si no es un zip valido"
+          fi
+          echo "-> Subproyecto Expat listo localmente en el disco."
 
-      # ¡AQUÍ CORREGIMOS EL ERROR DE DIRECTORIO CREANDO LA CARPETA DINÁMICAMENTE!
+      # CORREGIMOS EL ERROR DE DIRECTORIO INEXISTENTE CREANDO LA CARPETA DINÁMICAMENTE
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Asegurando la ruta del puente de inyeccion..."
-          # Forzamos la creación del árbol de carpetas para que no diga 'No such file or directory'
           mkdir -p src/vulkan/wrapper
           
           echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
@@ -110,16 +119,15 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU COMANDO DE DOCKER ORIGINAL CON LAS DOS INYECCIONES DE ENTORNO (RED Y CACHÉ)
+      # TU COMANDO DE DOCKER ORIGINAL INTACTO CON EL INTERCEPTOR DE NINJA
       - name: compilador-envoltorio
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/.meson_global_cache:/root/.cache" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
-      # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA TU UNISOC T618
+      # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
           mkdir -p pkg/usr/lib
