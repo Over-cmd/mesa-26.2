@@ -20,41 +20,33 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Descargamos las herramientas necesarias en la máquina virtual externa
+      # Instalar herramientas para procesar el parche final
       - name: Install Packager and Extractor Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl tar unzip
+          sudo apt-get install -y zstd curl unzip
 
-      # ¡ESTE PASO UTILIZA EL ENLACE ESPEJO OFICIAL QUE SÍ ESTÁ ACTIVO Y COMPRIMIDO!
+      # ¡MÉTODO INFALIBLE: CLONAMOS EL REPOSITORIO DE GIT DIRECTAMENTE EN LA ETICAQUETA R_2_5_0!
       - name: Pre-extract and Patch Expat Source Code (Bypass Extraction Freeze)
         run: |
-          echo "-> Descargando el codigo fuente de Expat desde un espejo seguro de la scene..."
+          echo "-> Clonando el codigo fuente de Expat directamente desde GitHub..."
+          # Clonamos de forma limpia la etiqueta exacta R_2_5_0 en nuestra carpeta local
+          git clone --depth 1 --branch R_2_5_0 https://github.com expat_temp_git
+          
           mkdir -p expat_local_src
+          # Movemos únicamente el subproyecto expat (el código C del core) a la carpeta destino
+          mv expat_temp_git/expat/* expat_local_src/ || cp -r expat_temp_git/* expat_local_src/
+          rm -rf expat_temp_git
           
-          # Descargamos la versión estable de Expat desde el repositorio oficial de código fuente de Debian
-          curl -L "https://debian.org" || \
-          curl -L "https://sourceforge.net" -o expat-2.5.0.tar.gz
-          
-          # Descargamos los parches oficiales de Meson WrapDB
+          echo "-> Descargando los parches oficiales de Meson WrapDB..."
           curl -L "https://mesonbuild.com" -o expat_patch.zip || touch expat_patch.zip
           
-          echo "-> Extrayendo los ficheros C..."
-          # Soporte dual: si bajamos el .gz o el .xz nativo, lo extraemos limpiamente sin fallos de formato
-          if [ -f "expat-2.5.0.tar.gz" ]; then
-            tar -xf expat-2.5.0.tar.gz --strip-components=1 -C expat_local_src/
-          else
-            # Si el archivo descargado es el espejo .tar.xz de fuentes, lo procesamos
-            curl -L "https://debian.org" -o expat-2.5.0.tar.xz
-            tar -xf expat-2.5.0.tar.xz --strip-components=1 -C expat_local_src/
-          fi
-          
-          # Aplicamos el parche de Meson sobre el codigo extraido
+          # Aplicamos el parche de Meson sobre el código fuente ya listo en el disco
           if [ -s expat_patch.zip ]; then
             unzip -o expat_patch.zip -d expat_local_src/ || echo "Omitiendo parche si no es un zip valido"
           fi
           
-          echo "-> Estructura fisica de Expat lista localmente."
+          echo "-> Estructura fisica de Expat clonada y lista localmente."
 
       # Re-escribimos el .wrap para que lea la carpeta en el disco virtual de Docker en /workspace/
       - name: Hijack Expat Wrap File (Force Local Directory Symlink)
@@ -76,7 +68,7 @@ jobs:
           echo "-> Asegurando la ruta del puente de inyeccion..."
           mkdir -p src/vulkan/wrapper
           
-          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
+          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -139,7 +131,7 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU COMANDO DE DOCKER ORIGINAL INTACTO
+      # TU COMANDO DE DOCKER ORIGINAL INTACTO CON LA CARPETA EN LOCAL YA LISTA
       - name: compilador-envoltorio
         run: |
           docker run --rm \
