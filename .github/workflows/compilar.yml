@@ -51,7 +51,8 @@ jobs:
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
               setenv("vblank_mode", "0", 1);
-              setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
+              VK_ICD_FILENAMES = "/vendor/etc/vulkan/icd.d/mali.json";
+              setenv("VK_ICD_FILENAMES", VK_ICD_FILENAMES, 1);
           }
           
           #endif
@@ -97,7 +98,7 @@ jobs:
           endian = 'little'
           EOF
 
-      # GENERAMOS LAS HERRAMIENTAS LOCALES DEL HOST PARA ASISTIR A PANFROST SIN REQUERIR LLVM EXTERNO
+      # ¡CORREGIDO: precomp-compiler cambiado de disabled a auto para pasar la validación!
       - name: Generate Host Tools
         run: |
           meson setup build-host \
@@ -105,17 +106,16 @@ jobs:
               -Dgallium-drivers=[] \
               -Dvulkan-drivers=[] \
               -Dllvm=disabled \
-              -Dprecomp-compiler=disabled \
-              -Dmesa-clc=disabled
+              -Dprecomp-compiler=auto \
+              -Dmesa-clc=auto
           mkdir -p build-host/src/compiler/clc
           touch build-host/src/compiler/clc/mesa_clc
           echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
 
-      # ¡CONFIGURACIÓN DE DRIVER REAL COMPILANDO EL NÚCLEO PANFROST DE VULKAN DIRECTO!
+      # CONFIGURACIÓN DE DRIVER REAL COMPILANDO EL NÚCLEO PANFROST DE VULKAN DIRECTO
       - name: Configure Meson Build
         run: |
-          # Cambiamos vulkan-drivers=panfrost y desactivamos OpenCL (mesa-clc=disabled) junto a LLVM
-          # Esto obliga a Meson a compilar la biblioteca de Vulkan física real inyectando tu bypass de Leegao
+          # precomp-compiler y mesa-clc cambiados a auto para evitar bloqueos en el setup cruzado
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
@@ -129,8 +129,8 @@ jobs:
             -Dgles1=disabled \
             -Dgles2=disabled \
             -Dllvm=disabled \
-            -Dmesa-clc=disabled \
-            -Dprecomp-compiler=disabled \
+            -Dmesa-clc=auto \
+            -Dprecomp-compiler=auto \
             -Dxmlconfig=disabled
 
       # COMPILACIÓN AUTOMÁTICA REAL DE LOS ELEMENTOS GRÁFICOS
@@ -146,7 +146,6 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Buscando el archivo .so real generado por Ninja..."
-          # Localizamos de forma flexible la biblioteca compartida de Vulkan compilada para Android
           SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*panfrost*.so" -o -name "*vulkan*.so" | grep -v "stub" | head -n 1)
           
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
