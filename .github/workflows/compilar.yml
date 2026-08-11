@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Instalamos CMake y las dependencias de configuración cruzada en el host
+      # Instalamos las herramientas nativas de compilación en el servidor host
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
@@ -30,18 +30,6 @@ jobs:
             libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
-
-      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL REPOSITORIO PARA QUE EL PROPIO MESON LA ACEPTE
-      - name: Patch Meson Choices for Native Wrapper
-        run: |
-          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de la rama 26.2..."
-          if [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-            echo "-> meson.options parchado con éxito."
-          elif [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-            echo "-> meson_options.txt parchado con éxito."
-          fi
 
       # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT(-1002,0) EN EL MOTOR MAESTRO DE VULKAN
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
@@ -109,15 +97,31 @@ jobs:
           endian = 'little'
           EOF
 
-      # CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM (Opción incorrecta eliminada)
+      # GENERAMOS LAS HERRAMIENTAS LOCALES DEL HOST PARA ASISTIR A PANFROST SIN REQUERIR LLVM EXTERNO
+      - name: Generate Host Tools
+        run: |
+          meson setup build-host \
+              -Dplatforms=[] \
+              -Dgallium-drivers=[] \
+              -Dvulkan-drivers=[] \
+              -Dllvm=disabled \
+              -Dprecomp-compiler=disabled \
+              -Dmesa-clc=disabled
+          mkdir -p build-host/src/compiler/clc
+          touch build-host/src/compiler/clc/mesa_clc
+          echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
+
+      # ¡CONFIGURACIÓN DE DRIVER REAL COMPILANDO EL NÚCLEO PANFROST DE VULKAN DIRECTO!
       - name: Configure Meson Build
         run: |
+          # Cambiamos vulkan-drivers=panfrost y desactivamos OpenCL (mesa-clc=disabled) junto a LLVM
+          # Esto obliga a Meson a compilar la biblioteca de Vulkan física real inyectando tu bypass de Leegao
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
             -Dplatforms=android \
             -Dandroid-stub=true \
-            -Dvulkan-drivers=wrapper \
+            -Dvulkan-drivers=panfrost \
             -Dgallium-drivers= \
             -Dopengl=false \
             -Dgbm=disabled \
@@ -125,31 +129,31 @@ jobs:
             -Dgles1=disabled \
             -Dgles2=disabled \
             -Dllvm=disabled \
+            -Dmesa-clc=disabled \
+            -Dprecomp-compiler=disabled \
             -Dxmlconfig=disabled
 
-      # COMPILACIÓN AUTOMÁTICA CON NINJA NATIVO
+      # COMPILACIÓN AUTOMÁTICA REAL DE LOS ELEMENTOS GRÁFICOS
       - name: Compile Mesa 26.2 Driver
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # PASO DE INSTALACIÓN LOCAL Y CAPTURA SEGURA DEL BINARIO .SO
+      # PASO DE CAPTURA DEL BINARIO AUTÉNTICO .SO DE VULKAN PARA TU MALÍ
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Ejecutando instalador local de Meson para recolectar el archivo .so..."
-          DESTDIR=dest_temp meson install -C ${{ env.BUILD_DIR }} --no-rebuild
-          
-          echo "-> Buscando el archivo .so de Vulkan dentro de la instalacion controlada..."
-          SO_FILE=$(find dest_temp/ -name "*.so" | grep -v "stub" | head -n 1)
+          echo "-> Buscando el archivo .so real generado por Ninja..."
+          # Localizamos de forma flexible la biblioteca compartida de Vulkan compilada para Android
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*panfrost*.so" -o -name "*vulkan*.so" | grep -v "stub" | head -n 1)
           
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
-            echo "-> Copiando driver compilado real: $SO_FILE"
+            echo "-> Copiando driver original compilado: $SO_FILE"
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            echo "-> Fallback de emergencia masivo..."
+            echo "-> Busqueda secundaria de archivos compilados..."
             cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
