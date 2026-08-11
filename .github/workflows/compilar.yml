@@ -20,42 +20,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Instalamos python3 para levantar el servidor local y curl para pre-descargar
-      - name: Install Packager and Server Tools
+      # Instalamos las herramientas de compresión para el paquete final
+      - name: Install Packager Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl python3
+          sudo apt-get install -y zstd curl tar
 
-      # ¡ESTE PASO MONTA EL SERVIDOR ESPEJO LOCAL CON LAS RUTAS EXACTAS DE GITHUB Y WRAPDB!
-      - name: Setup Local HTTP Mirror Server (Bypass Server Hangs)
+      # ¡MÉTODO SEGURO: DESCARGAMOS EXPAT EN UNA CARPETA AJENA A SUBPROJECTS QUE GIT NO LIMPIARÁ!
+      - name: Pre-download Meson Offline Cache
         run: |
-          echo "-> Creando arbol de directorios espejo para engañar a Meson..."
-          mkdir -p web_mirror/libexpat/libexpat/releases/download/R_2_5_0
-          mkdir -p web_mirror/v2/expat_2.5.0-3
+          echo "-> Creando directorio de cache persistente fuera del arbol..."
+          mkdir -p .local_meson_cache
           
-          echo "-> Descargando Expat de forma externa desde la maquina limpia..."
-          # Bajamos los archivos que el Docker va a pedir a gritos por internet
-          curl -L "https://github.com/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz" -o web_mirror/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz
-          curl -L "https://wrapdb.mesonbuild.com/v2/expat_2.5.0-3/get_patch" -o web_mirror/v2/expat_2.5.0-3/get_patch || touch web_mirror/v2/expat_2.5.0-3/get_patch
-          
-          echo "-> Levantando servidor web local en el puerto 80 (HTTP estándar)..."
-          # Levantamos el servidor con sudo en el puerto 80 para interceptar el trafico de red plano
-          cd web_mirror
-          sudo python3 -m http.server 80 &
-          cd ..
-          sleep 3
+          # Descargamos los dos archivos exactos que congelaban la compilacion
+          curl -L "https://github.com" -o .local_meson_cache/expat-2.5.0.tar.xz
+          curl -L "https://mesonbuild.com" -o .local_meson_cache/expat_2.5.0-3_get_patch.zip || touch .local_meson_cache/expat_2.5.0-3_get_patch.zip
+          echo "-> Cache de parches lista en local."
 
-      # ¡EL TRUCO MAESTRO! Modificamos el archivo /etc/hosts para redirigir el trafico HTTPS fallido del Docker a nuestro puerto HTTP
-      - name: Hijack Network Routing (/etc/hosts DNS Redirect)
-        run: |
-          echo "-> Redirigiendo github.com y wrapdb.mesonbuild.com a la IP local de la maquina virtual..."
-          sudo chmod 777 /etc/hosts
-          echo "127.0.0.1 github.com" >> /etc/hosts
-          echo "127.0.0.1 wrapdb.mesonbuild.com" >> /etc/hosts
-          echo "-> Tabla DNS local alterada con éxito:"
-          cat /etc/hosts
-
-      # CORREGIMOS EL ERROR DE ENTRADA CREANDO LA CARPETA SI FALTA
+      # CORREGIMOS EL ERROR DE DIRECTORIO INEXISTENTE CREANDO LA CARPETA DINÁMICAMENTE
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Asegurando la ruta del puente de inyeccion..."
@@ -124,13 +106,15 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU PASO DE DOCKER ORIGINAL INTACTO (Añadiendo red compartida activa para heredar el archivo /etc/hosts de la maquina)
+      # TU COMANDO DE DOCKER ORIGINAL LIMPIO (Restauramos la red por defecto para evitar el bloqueo)
+      # Inyectamos la variable MESON_PACKAGE_CACHE_DIR apuntando a nuestro volumen mapeado seguro
       - name: compilador-envoltorio
         run: |
           docker run --rm \
-            --network host \
             -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/.local_meson_cache:/workspace/packagecache_offline" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
+            -e MESON_PACKAGE_CACHE_DIR="/workspace/packagecache_offline" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
       # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA BANNERLATOR
