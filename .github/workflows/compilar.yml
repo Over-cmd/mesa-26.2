@@ -26,18 +26,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd curl unzip
 
-      # ¡CLONADO CORREGIDO EN UNA SOLA LÍNEA SIN SALTOS DE TEXTO DELICADOS!
+      # ¡MÉTODO ATÓMICO: DESCARGA DIRECTA DE ZIP DESDE SOURCEFORGE SIN USAR GIT CLONE NI TAR.XZ!
       - name: Pre-extract and Patch Expat Source Code (Bypass Extraction Freeze)
         run: |
-          echo "-> Clonando el codigo fuente de Expat directamente desde GitHub..."
-          # Clonamos de forma limpia la etiqueta exacta R_2_5_0 en una sola linea continua para evitar fallos de sintaxis
-          git clone --depth 1 --branch R_2_5_0 https://github.com expat_temp_git
-          
+          echo "-> Creando el directorio seguro para el subproyecto local..."
           mkdir -p expat_local_src
           
-          # Copiamos de forma segura el subproyecto expat que Meson exige en local
-          cp -r expat_temp_git/expat/* expat_local_src/ || cp -r expat_temp_git/* expat_local_src/
-          rm -rf expat_temp_git
+          echo "-> Descargando codigo fuente limpio de Expat 2.5.0 en formato ZIP..."
+          # Usamos un espejo oficial directo de SourceForge que entrega el código C puro listo para usar
+          curl -L "https://sourceforge.net" -o expat_src.zip || \
+          curl -L "https://sourceforge.net" -o expat_src.zip
+          
+          echo "-> Extrayendo la estructura fisica en el disco..."
+          unzip -q expat_src.zip -d expat_temp_dir
+          
+          # Movemos el contenido del núcleo a la carpeta que leerá Meson
+          mv expat_temp_dir/expat-2.5.0/* expat_local_src/ || cp -r expat_temp_dir/* expat_local_src/
+          rm -rf expat_temp_dir expat_src.zip
           
           echo "-> Descargando los parches oficiales de Meson WrapDB..."
           curl -L "https://mesonbuild.com" -o expat_patch.zip || touch expat_patch.zip
@@ -47,7 +52,7 @@ jobs:
             unzip -o expat_patch.zip -d expat_local_src/ || echo "Omitiendo parche si no es un zip valido"
           fi
           
-          echo "-> Estructura fisica de Expat clonada y lista localmente."
+          echo "-> Estructura fisica de Expat montada con éxito."
 
       # Re-escribimos el .wrap para que lea la carpeta en el disco virtual de Docker en /workspace/
       - name: Hijack Expat Wrap File (Force Local Directory Symlink)
