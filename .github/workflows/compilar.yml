@@ -122,6 +122,7 @@ jobs:
             -Dopengl=false \
             -Dgbm=disabled \
             -Degl=disabled \
+            -Dfullscreen-vulkan=true \
             -Dgles1=disabled \
             -Dgles2=disabled \
             -Dllvm=disabled \
@@ -132,23 +133,27 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # ¡PASO CORREGIDO PARA CAPTURAR EL BINARIO SEGURO SIN ERRORES DE SINTAXIS!
+      # ¡PASO ARREGLADO: FORZAMOS UN PRE-INSTALL EN CARPETA TEMPORAL PARA EXTRACCIÓN SEGURA!
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Capturando el controlador de Vulkan recien compilado..."
-          # Enlazamos el archivo .so localizado de forma quirúrgica en una variable limpia
-          TARGET_SO=$(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1)
+          echo "-> Ejecutando instalador local de Meson para recolectar el archivo .so..."
+          # Obligamos a Meson a meter el driver limpio en la carpeta temporal 'dest_temp'
+          DESTDIR=dest_temp meson install -C ${{ env.BUILD_DIR }} --no-rebuild
           
-          if [ -n "$TARGET_SO" ] && [ -f "$TARGET_SO" ]; then
-            echo "-> Moviendo binario detectado: $TARGET_SO"
-            cp "$TARGET_SO" pkg/usr/lib/libvulkan_wrapper.so
+          echo "-> Buscando el archivo .so de Vulkan dentro de la instalacion controlada..."
+          # Copiamos de forma segura la libreria de salida limpia filtrando cualquier stub de Android
+          SO_FILE=$(find dest_temp/ -name "*.so" | grep -v "stub" | head -n 1)
+          
+          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
+            echo "-> Copiando driver compilado real: $SO_FILE"
+            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            echo "-> Intentando forzar ruta estandar del modulo..."
-            cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || exit 1
+            echo "-> Fallback de emergencia masivo..."
+            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
