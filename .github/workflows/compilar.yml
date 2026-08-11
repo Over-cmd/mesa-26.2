@@ -26,28 +26,37 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd curl tar unzip
 
-      # ¡ESTE PASO EXTRAE EL CÓDIGO FUENTE FÍSICO DE EXPAT EN UN DIRECTORIO SEGURO FUERA DE SUBPROJECTS!
+      # ¡ESTE PASO UTILIZA EL ENLACE ESPEJO OFICIAL QUE SÍ ESTÁ ACTIVO Y COMPRIMIDO!
       - name: Pre-extract and Patch Expat Source Code (Bypass Extraction Freeze)
         run: |
-          echo "-> Descargando y montando la estructura de codigo fuente de Expat..."
+          echo "-> Descargando el codigo fuente de Expat desde un espejo seguro de la scene..."
           mkdir -p expat_local_src
           
-          # Descargamos el codigo fuente limpio de expat y su parche oficial
-          curl -L "https://github.com" -o expat-2.5.0.tar.xz
+          # Descargamos la versión estable de Expat desde el repositorio oficial de código fuente de Debian
+          curl -L "https://debian.org" || \
+          curl -L "https://sourceforge.net" -o expat-2.5.0.tar.gz
+          
+          # Descargamos los parches oficiales de Meson WrapDB
           curl -L "https://mesonbuild.com" -o expat_patch.zip || touch expat_patch.zip
           
-          # Extraemos el codigo C dentro de nuestra carpeta segura
-          tar -xf expat-2.5.0.tar.xz --strip-components=1 -C expat_local_src/
+          echo "-> Extrayendo los ficheros C..."
+          # Soporte dual: si bajamos el .gz o el .xz nativo, lo extraemos limpiamente sin fallos de formato
+          if [ -f "expat-2.5.0.tar.gz" ]; then
+            tar -xf expat-2.5.0.tar.gz --strip-components=1 -C expat_local_src/
+          else
+            # Si el archivo descargado es el espejo .tar.xz de fuentes, lo procesamos
+            curl -L "https://debian.org" -o expat-2.5.0.tar.xz
+            tar -xf expat-2.5.0.tar.xz --strip-components=1 -C expat_local_src/
+          fi
           
-          # Aplicamos el parche de Meson sobre el codigo extraido si es necesario
+          # Aplicamos el parche de Meson sobre el codigo extraido
           if [ -s expat_patch.zip ]; then
             unzip -o expat_patch.zip -d expat_local_src/ || echo "Omitiendo parche si no es un zip valido"
           fi
           
-          echo "-> Estructura fisica de Expat lista en: /workspace/expat_local_src"
+          echo "-> Estructura fisica de Expat lista localmente."
 
-      # ¡EL TRUCO MAESTRO REVOLUCIONARIO! Re-escribimos el .wrap para que apunte a un directorio local ya listo
-      # Esto anula por completo la ejecucion de codigos de extraccion internos de Meson que daban el cuelgue
+      # Re-escribimos el .wrap para que lea la carpeta en el disco virtual de Docker en /workspace/
       - name: Hijack Expat Wrap File (Force Local Directory Symlink)
         run: |
           echo "-> Re-escribiendo subprojects/expat.wrap para usar el codigo ya extraido..."
@@ -58,9 +67,8 @@ jobs:
           directory = expat_local_src
           EOF
           
-          # Tambien creamos un enlace simbolico nativo dentro de subprojects por si acaso
           ln -s ../expat_local_src subprojects/expat_local_src || true
-          echo "-> Archivo .wrap redirigido al directorio inalterable del disco."
+          echo "-> Archivo .wrap redirigido al directorio del disco."
 
       # CORREGIMOS EL ERROR DE ENTRADA CREANDO LA CARPETA SI FALTA
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
@@ -68,7 +76,7 @@ jobs:
           echo "-> Asegurando la ruta del puente de inyeccion..."
           mkdir -p src/vulkan/wrapper
           
-          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
+          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -131,7 +139,7 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU COMANDO DE DOCKER ORIGINAL INTACTO CON LA INYECCIÓN DEL CÓDIGO FUENTE YA EXTRAÍDO
+      # TU COMANDO DE DOCKER ORIGINAL INTACTO
       - name: compilador-envoltorio
         run: |
           docker run --rm \
