@@ -97,18 +97,23 @@ jobs:
           endian = 'little'
           EOF
 
-      # ¡ESTE PASO OBLIGA A MESON A COMPILAR TODO EL NÚCLEO DE VULKAN COMÚN!
+      # ¡ESTE PASO CAMBIA SWRAST POR PANFROST PARA EVITAR PEDIR LLVM!
       - name: Configure Meson Build
         run: |
-          # MODIFICACIÓN CLAVE PARA MESA 26.2: 
-          # Forzamos -Dvulkan-drivers=swrast para que el compilador construya toda la API de Vulkan común 
-          # (que es donde acoplamos la inyección), saltándose las restricciones de nombres obsoletos.
+          if [ -f "meson.options" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
+          elif [ -f "meson_options.txt" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
+          fi
+          
+          # Forzamos panfrost. Al ser un driver de hardware móvil, no exige Lavapipe ni LLVM,
+          # logrando que Meson pase de largo y compile todo el core de Vulkan común.
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
             -Dplatforms=android \
             -Dandroid-stub=true \
-            -Dvulkan-drivers=swrast \
+            -Dvulkan-drivers=panfrost \
             -Dgallium-drivers= \
             -Dopengl=false \
             -Dgbm=disabled \
@@ -118,7 +123,7 @@ jobs:
             -Dllvm=disabled \
             -Dxmlconfig=disabled
 
-      # COMPILACIÓN MASIVA CON LOGS DETALLADOS
+      # COMPILACIÓN MASIVA DEL NÚCLEO GRÁFICO
       - name: Compile Mesa 26.2 Driver
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
@@ -131,14 +136,14 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Capturando el controlador de Vulkan recien compilado..."
-          # Buscamos de forma flexible el binario .so de Vulkan generado en el output de swrast
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*vulkan*.so" | head -n 1)
+          # Buscamos de forma flexible el binario .so generado en las carpetas de salida
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*panfrost*.so" -o -name "*vulkan*.so" | grep -v "stub" | head -n 1)
           
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             echo "-> Copiando y renombrando el binario maestro a libvulkan_wrapper.so: $SO_FILE"
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            echo "-> Fallback de emergencia por si cambio el nombre de salida..."
+            echo "-> Fallback de emergencia en caliente..."
             cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
