@@ -20,24 +20,52 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Instalamos las herramientas de compresión para el paquete final
-      - name: Install Packager Tools
+      # Instalar herramientas para descargar los archivos que Meson necesita
+      - name: Install Packager and Download Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd curl tar
 
-      # ¡MÉTODO SEGURO: DESCARGAMOS EXPAT EN UNA CARPETA AJENA A SUBPROJECTS QUE GIT NO LIMPIARÁ!
-      - name: Pre-download Meson Offline Cache
+      # ¡ESTE PASO BAJA LOS COMPONENTES Y CREA UNA RUTA DE ARCHIVOS FILE:// INALTERABLE!
+      - name: Pre-download Expat Local Files
         run: |
-          echo "-> Creando directorio de cache persistente fuera del arbol..."
-          mkdir -p .local_meson_cache
+          echo "-> Creando directorio estatico de descargas locales..."
+          mkdir -p package_offline
           
-          # Descargamos los dos archivos exactos que congelaban la compilacion
-          curl -L "https://github.com" -o .local_meson_cache/expat-2.5.0.tar.xz
-          curl -L "https://mesonbuild.com" -o .local_meson_cache/expat_2.5.0-3_get_patch.zip || touch .local_meson_cache/expat_2.5.0-3_get_patch.zip
-          echo "-> Cache de parches lista en local."
+          # Descargamos los dos archivos exactos que congelan la compilacion en internet
+          curl -L "https://github.com/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz" -o package_offline/expat-2.5.0.tar.xz
+          curl -L "https://wrapdb.mesonbuild.com/v2/expat_2.5.0-3/get_patch" -o package_offline/expat_2.5.0-3_get_patch.zip || touch package_offline/expat_2.5.0-3_get_patch.zip
+          echo "-> Archivos descargados en el disco local de la maquina."
 
-      # CORREGIMOS EL ERROR DE DIRECTORIO INEXISTENTE CREANDO LA CARPETA DINÁMICAMENTE
+      # ¡EL TRUCO MAESTRO! Modificamos el .wrap para que busque en el disco virtual de Docker (/workspace/)
+      - name: Hijack Expat Wrap File (Force Local File Protocol)
+        run: |
+          echo "-> Modificando subprojects/expat.wrap para prohibir el uso de internet..."
+          if [ -f "subprojects/expat.wrap" ]; then
+            sed -i 's/\r$//' subprojects/expat.wrap
+            
+            # Cambiamos las URLs de internet por rutas absolutas file:// que apuntan a la carpeta compartida de Docker
+            sed -i 's|source_url = .*|source_url = file:///workspace/package_offline/expat-2.5.0.tar.xz|g' subprojects/expat.wrap
+            sed -i 's|patch_url = .*|patch_url = file:///workspace/package_offline/expat_2.5.0-3_get_patch.zip|g' subprojects/expat.wrap
+            
+            echo "-> Archivo subprojects/expat.wrap reconfigurado con éxito:"
+            cat subprojects/expat.wrap
+          else
+            echo "-> Alerta: No se encontro subprojects/expat.wrap, creandolo desde cero..."
+            mkdir -p subprojects
+            cat << 'EOF' > subprojects/expat.wrap
+          [wrap-file]
+          directory = expat-2.5.0
+          source_url = file:///workspace/package_offline/expat-2.5.0.tar.xz
+          source_filename = expat-2.5.0.tar.xz
+          source_hash = ef242ee3e3bac2692a47eec3b15f17ca8fb13428b141fd987711202ec0569e22
+          patch_url = file:///workspace/package_offline/expat_2.5.0-3_get_patch.zip
+          patch_filename = expat_2.5.0-3_get_patch.zip
+          patch_hash = 6ae67ef6df38bb5e4666cfb76922378d38ee550da64f26ca5187ee3b3e230006
+          EOF
+          fi
+
+      # CORREGIMOS EL ERROR DE ENTRADA CREANDO LA CARPETA SI FALTA
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Asegurando la ruta del puente de inyeccion..."
@@ -106,15 +134,12 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU COMANDO DE DOCKER ORIGINAL LIMPIO (Restauramos la red por defecto para evitar el bloqueo)
-      # Inyectamos la variable MESON_PACKAGE_CACHE_DIR apuntando a nuestro volumen mapeado seguro
+      # TU COMANDO DE DOCKER ORIGINAL INTACTO (Sin parámetros de red inestables que congelen el inicio)
       - name: compilador-envoltorio
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/.local_meson_cache:/workspace/packagecache_offline" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
-            -e MESON_PACKAGE_CACHE_DIR="/workspace/packagecache_offline" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
       # CONVERSIÓN COMPRIMIDA AUTOMÁTICA A WRAPPER.TZST PARA BANNERLATOR
