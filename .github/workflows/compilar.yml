@@ -26,16 +26,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd curl unzip
 
-      # ¡MÉTODO INFALIBLE: CLONAMOS EL REPOSITORIO DE GIT DIRECTAMENTE EN LA ETICAQUETA R_2_5_0!
+      # ¡CLONADO CORREGIDO EN UNA SOLA LÍNEA SIN SALTOS DE TEXTO DELICADOS!
       - name: Pre-extract and Patch Expat Source Code (Bypass Extraction Freeze)
         run: |
           echo "-> Clonando el codigo fuente de Expat directamente desde GitHub..."
-          # Clonamos de forma limpia la etiqueta exacta R_2_5_0 en nuestra carpeta local
+          # Clonamos de forma limpia la etiqueta exacta R_2_5_0 en una sola linea continua para evitar fallos de sintaxis
           git clone --depth 1 --branch R_2_5_0 https://github.com expat_temp_git
           
           mkdir -p expat_local_src
-          # Movemos únicamente el subproyecto expat (el código C del core) a la carpeta destino
-          mv expat_temp_git/expat/* expat_local_src/ || cp -r expat_temp_git/* expat_local_src/
+          
+          # Copiamos de forma segura el subproyecto expat que Meson exige en local
+          cp -r expat_temp_git/expat/* expat_local_src/ || cp -r expat_temp_git/* expat_local_src/
           rm -rf expat_temp_git
           
           echo "-> Descargando los parches oficiales de Meson WrapDB..."
