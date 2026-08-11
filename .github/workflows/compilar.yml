@@ -1,4 +1,4 @@
-name: Mesa Vulkan Wrapper Mali Packager (.tzst)
+name: Mesa 26.2 Leegao Vulkan Wrapper Mali (.tzst)
 
 on:
   push:
@@ -6,115 +6,165 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: compilacion
+  BUILD_DIR: build
 
 jobs:
-  build-aarch64-wrapper:
+  build-android-wrapper:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+    strategy:
+      matrix:
+        build-type: [release]
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Instalar herramientas de compresión Zstd en el servidor de GitHub
-      - name: Install Zstd Packager
+      - name: Patch anon_file.c for memfd_create
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd curl
+          sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
 
-      # ¡ESTE TRUCO INTERCEPTA LA CACHÉ GLOBAL DE MESON ANTES DE QUE EL DOCKER TOQUE INTERNET!
-      - name: Pre-download Meson Cache (Bypass 5 Hours Hang)
+      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT ESTABLE EN EL CORAZÓN DEL ENRUTADOR
+      - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
-          echo "-> Creando la ruta de la cache global oculta de Meson..."
-          mkdir -p .meson_global_cache/meson/packagecache
+          echo "-> Creando el puente de inyeccion de Leegao para conectar el Vulkan de fábrica..."
           
-          echo "-> Descargando Expat desde un espejo rapido para guardarlo en la cache..."
-          # Descargamos el archivo exacto que el log intenta bajar de internet
-          curl -L "https://github.com" -o .meson_global_cache/meson/packagecache/expat-2.5.0.tar.xz
-          curl -L "https://mesonbuild.com" -o .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip || touch .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip
+          # Creamos la cabecera limpia con el bypass y las optimizaciones para Deadpool
+          cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
+          #ifndef MALI_LEEGAO_BYPASS_H
+          #define MALI_LEEGAO_BYPASS_H
           
-          echo "-> Directorio de cache global listo."
-
-      # INTERCEPTOR DE COMANDOS PARA NINJA
-      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
-        run: |
-          echo "-> Creando interceptor de comandos para Ninja..."
-          mkdir -p bin_hijack
+          #include <stdio.h>
+          #include <stdlib.h>
           
-          cat << 'EOF' > bin_hijack/ninja
-          #!/bin/bash
-          ARGS=("$@")
-          NEW_ARGS=()
+          extern int mallopt(int param, int value);
+          extern int setenv(const char *name, const char *value, int overwrite);
           
-          for arg in "${ARGS[@]}"; do
-            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
-              NEW_ARGS+=("vulkan_wrapper")
-            else
-              NEW_ARGS+=("$arg")
-            fi
-          done
+          // Este constructor fuerza al puente de Leegao a abrir el Vulkan oficial de tu Unisoc T618
+          __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
+              mallopt(-1002, 0);
+              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
+              setenv("vblank_mode", "0", 1);
+              // Forzamos al wrapper a buscar el driver Vulkan original de Android en tu Mali-G52
+              setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
+          }
           
-          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
+          #endif
           EOF
           
-          chmod +x bin_hijack/ninja
-          echo "-> Interceptor Ninja creado con éxito."
-
-      # AGREGA 'WRAPPER' A LAS OPCIONES LEGALES PARA QUE EL DOCKER NATIVO NO ABORTE
-      - name: Patch Meson Options for Wrapper Choice
-        run: |
-          echo "-> Desbloqueando la opcion 'wrapper' en las opciones oficiales de Meson..."
-          if [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-          elif [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-          fi
-
-      # INYECTAMOS TU MALLOPT ESTABLE PARA TU HARDWARE UNISOC T618
-      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
-        run: |
-          echo "-> Rastreando el corazon del Wrapper original para balancear la inyección MALI..."
-          WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
+          # Buscamos el archivo de entrada del wrapper de Leegao en el repositorio de Mesa
+          WRAPPER_MAIN=$(find src/vulkan/wrapper/ -name "*.c" | head -n 1)
           
-          if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
-            sed -i 's/\r$//' "$WRAPPER_DEVICE"
-            sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
-            sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$WRAPPER_DEVICE"
-            sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$WRAPPER_DEVICE"
+          if [ -n "$WRAPPER_MAIN" ] && [ -f "$WRAPPER_MAIN" ]; then
+            echo "-> Soldando el bypass de Leegao directamente en: $WRAPPER_MAIN"
+            sed -i 's/\r$//' "$WRAPPER_MAIN"
+            sed -i '1i#include "mali_leegao_bypass.h"' "$WRAPPER_MAIN"
+            echo "-> ¡Bypass de Leegao soldado correctamente!"
+          else
+            echo "-> Fallback: Aplicando bypass global en la carga del cargador de drivers de Mesa..."
+            FALLBACK_LOADER="src/vulkan/util/vk_icd_vulkan.c"
+            if [ -f "$FALLBACK_LOADER" ]; then
+              sed -i '1i#include "../wrapper/mali_leegao_bypass.h"' "$FALLBACK_LOADER"
+            fi
           fi
 
-      # TU COMPILADOR NATIVO (Mapeando la cache oculta en la ruta root interna del Docker)
-      - name: compilador-envoltorio
-        run: |
-          # Mapeamos nuestra carpeta descargada .meson_global_cache directamente en la ruta /root/.cache del Docker
-          # De esta manera, el Meson interno verá los archivos en su caché del sistema y no usará internet
-          docker run --rm \
-            -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/.meson_global_cache:/root/.cache" \
-            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
-            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              build-essential \
+              llvm-20-dev \
+              libclang-20-dev \
+              libclc-20-dev \
+              libllvmspirvlib-20-dev \
+              libelf-dev \
+              spirv-tools \
+              bison \
+              flex \
+              libdrm-dev \
+              pkg-config \
+              zstd
+          python -m pip install --upgrade pip
+          pip install mako PyYAML meson ninja packaging
+
+      - name: Generate Shims
+        run: |
+          unzip shims.zip -d ./
+
+      - name: Generate Host Tools
+        run: |
+          meson setup build-host \
+              -Dplatforms=[] \
+              -Dgallium-drivers=[] \
+              -Dvulkan-drivers=[] \
+              -Dtools= \
+              -Dprecomp-compiler=disabled \
+              -Dllvm=disabled
+          mkdir -p build-host/src/compiler/clc
+          touch build-host/src/compiler/clc/mesa_clc
+          echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
+
+      # CONFIGURAMOS MESON PARA COMPILAR ÚNICAMENTE LA VARIANTE WRAPPER DE LEEGAO
+      - name: Setup Meson Cross-Compilation
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/shims
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export MESON_WORKING_DIR="$GITHUB_WORKSPACE"
+          envsubst < android.toml > android-cross.txt
+          
+          # MODIFICACIÓN MAESTRA:
+          # -Dvulkan-drivers=wrapper (Forzamos el componente de Leegao que conecta con tu sistema)
+          # -Dgallium-drivers= (Vacio, no queremos drivers experimentales que rompan la conexion)
+          meson setup ${{ env.BUILD_DIR }} --reconfigure \
+              --cross-file android-cross.txt \
+              -Dbuildtype=${{ matrix.build-type }} \
+              -Dplatforms=android \
+              -Dandroid-stub=true \
+              -Dandroid-libbacktrace=disabled \
+              -Dplatform-sdk-version=30 \
+              -Dglx=disabled \
+              -Dgbm=disabled \
+              -Degl=disabled \
+              -Dopengl=false \
+              -Dgles1=disabled \
+              -Dgles2=disabled \
+              -Dglvnd=disabled \
+              -Dvalgrind=disabled \
+              -Dgallium-drivers= \
+              -Dshared-glapi=disabled \
+              -Dzstd=disabled \
+              -Dmesa-clc=disabled \
+              -Dprecomp-compiler=disabled \
+              -Dvulkan-drivers=wrapper \
+              -Dllvm=disabled
+
+      - name: Compile Project
+        run: |
+          meson compile -C ${{ env.BUILD_DIR }}
+
+      # RECOLECTAMOS EL COCHEVO DE LEEGAO EMBAJADO PARA TU BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Buscando el driver compilado en la carpeta de salida..."
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
-          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
-            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
+          echo "-> Capturando la libreria del wrapper de Leegao recien compilada..."
+          # Buscamos el archivo .so del wrapper generado en las carpetas de salida
+          WRAPPER_SO=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "libvulkan_wrapper.so" | head -n 1)
+          if [ -n "$WRAPPER_SO" ]; then
+            cp "$WRAPPER_SO" pkg/usr/lib/libvulkan_wrapper.so
           else
-            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+            # Si Meson lo guardo con el nombre estandar de la API, lo renombramos nosotros
+            cp ${{ env.BUILD_DIR }}/*/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so
           fi
           
-          echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
+          echo "-> Inyectando manifiesto JSON ICD oficial..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
           {
               "ICD": {
@@ -125,6 +175,7 @@ jobs:
           }
           EOF
           
+          echo "-> Comprimiendo la estructura en formato atomico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
@@ -132,6 +183,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper-Stable
+          name: Bannerlator-Leegao-Bypass-Mesa26.2
           path: wrapper.tzst
           if-no-files-found: error
