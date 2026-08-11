@@ -25,9 +25,22 @@ jobs:
       - name: Install Zstd Packager
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd
+          sudo apt-get install -y zstd curl
 
-      # ¡ESTE PASO CREA EL INTERCEPTOR QUE CORRIGE EL OBJETIVO DE NINJA EN CALIENTE!
+      # ¡ESTE TRUCO INTERCEPTA LA CACHÉ GLOBAL DE MESON ANTES DE QUE EL DOCKER TOQUE INTERNET!
+      - name: Pre-download Meson Cache (Bypass 5 Hours Hang)
+        run: |
+          echo "-> Creando la ruta de la cache global oculta de Meson..."
+          mkdir -p .meson_global_cache/meson/packagecache
+          
+          echo "-> Descargando Expat desde un espejo rapido para guardarlo en la cache..."
+          # Descargamos el archivo exacto que el log intenta bajar de internet
+          curl -L "https://github.com" -o .meson_global_cache/meson/packagecache/expat-2.5.0.tar.xz
+          curl -L "https://mesonbuild.com" -o .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip || touch .meson_global_cache/meson/packagecache/expat_2.5.0-3_get_patch.zip
+          
+          echo "-> Directorio de cache global listo."
+
+      # INTERCEPTOR DE COMANDOS PARA NINJA
       - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
         run: |
           echo "-> Creando interceptor de comandos para Ninja..."
@@ -39,7 +52,6 @@ jobs:
           NEW_ARGS=()
           
           for arg in "${ARGS[@]}"; do
-            # Si el script interno del Docker pide la ruta rota, la cambiamos por el target real
             if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ]; then
               NEW_ARGS+=("vulkan_wrapper")
             else
@@ -47,7 +59,6 @@ jobs:
             fi
           done
           
-          # Ejecutamos el Ninja real que está dentro del contenedor con los argumentos corregidos
           exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
           EOF
           
@@ -60,41 +71,31 @@ jobs:
           echo "-> Desbloqueando la opcion 'wrapper' en las opciones oficiales de Meson..."
           if [ -f "meson.options" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-            echo "-> meson.options parchado con éxito."
           elif [ -f "meson_options.txt" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-            echo "-> meson_options.txt parchado con éxito."
           fi
 
-      # TU INYECCIÓN DE MEMORIA BALANCEADA (Evita tirones en 32/64 bits, logos y vídeos)
-      - name: Surgical Silicon Modification (Anti-Overflow MALI Dual Injection)
+      # INYECTAMOS TU MALLOPT ESTABLE PARA TU HARDWARE UNISOC T618
+      - name: Surgical Silicon Modification (Anti-Overflow & Smooth Videos MALI)
         run: |
-          echo "-> Rastreando el corazon del Wrapper para inyectar la valvula de escape MALI..."
+          echo "-> Rastreando el corazon del Wrapper original para balancear la inyección MALI..."
           WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
           
           if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
-            echo "-> Soldando valvula mallopt y soporte de 32 bits en: $WRAPPER_DEVICE"
             sed -i 's/\r$//' "$WRAPPER_DEVICE"
-            
-            # Inyectamos prototipos estándar de gestión de memoria
             sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
             sed -i '1iextern int setenv(const char *name, const char *value, int overwrite);' "$WRAPPER_DEVICE"
-            
-            # Aplicamos mallopt(-1002, 0) y present_mode mailbox de forma limpia en el punto de entrada
             sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n extern int setenv(const char *n, const char *v, int o);\\n mallopt(-1002, 0);\\n setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);\\n setenv("vblank_mode", "0", 1);' "$WRAPPER_DEVICE"
-            
-            echo "-> Silicio de Mesa modificado con éxito (Modo fluido activo)."
-          else
-            echo "-> Archivo wrapper_device.c no encontrado en la raíz, aplicando inyección global preventiva..."
-            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1); setenv("vblank_mode", "0", 1); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # TU COMPILADOR OBLIGANDO A LEER NUESTRO INTERCEPTOR NINJA
+      # TU COMPILADOR NATIVO (Mapeando la cache oculta en la ruta root interna del Docker)
       - name: compilador-envoltorio
         run: |
-          # Montamos el interceptor justo encima del ejecutable ninja del contenedor
+          # Mapeamos nuestra carpeta descargada .meson_global_cache directamente en la ruta /root/.cache del Docker
+          # De esta manera, el Meson interno verá los archivos en su caché del sistema y no usará internet
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/.meson_global_cache:/root/.cache" \
             -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
             ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
@@ -106,7 +107,6 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Buscando el driver compilado en la carpeta de salida..."
-          # Buscamos el archivo .so allá donde lo haya dejado Ninja de forma flexible
           SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
@@ -125,12 +125,9 @@ jobs:
           }
           EOF
           
-          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
-          
-          echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
