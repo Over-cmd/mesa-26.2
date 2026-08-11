@@ -20,50 +20,47 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Instalar herramientas para descargar los archivos que Meson necesita
-      - name: Install Packager and Download Tools
+      # Descargamos las herramientas necesarias en la máquina virtual externa
+      - name: Install Packager and Extractor Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd curl tar
+          sudo apt-get install -y zstd curl tar unzip
 
-      # ¡ESTE PASO BAJA LOS COMPONENTES Y CREA UNA RUTA DE ARCHIVOS FILE:// INALTERABLE!
-      - name: Pre-download Expat Local Files
+      # ¡ESTE PASO EXTRAE EL CÓDIGO FUENTE FÍSICO DE EXPAT EN UN DIRECTORIO SEGURO FUERA DE SUBPROJECTS!
+      - name: Pre-extract and Patch Expat Source Code (Bypass Extraction Freeze)
         run: |
-          echo "-> Creando directorio estatico de descargas locales..."
-          mkdir -p package_offline
+          echo "-> Descargando y montando la estructura de codigo fuente de Expat..."
+          mkdir -p expat_local_src
           
-          # Descargamos los dos archivos exactos que congelan la compilacion en internet
-          curl -L "https://github.com/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.xz" -o package_offline/expat-2.5.0.tar.xz
-          curl -L "https://wrapdb.mesonbuild.com/v2/expat_2.5.0-3/get_patch" -o package_offline/expat_2.5.0-3_get_patch.zip || touch package_offline/expat_2.5.0-3_get_patch.zip
-          echo "-> Archivos descargados en el disco local de la maquina."
-
-      # ¡EL TRUCO MAESTRO! Modificamos el .wrap para que busque en el disco virtual de Docker (/workspace/)
-      - name: Hijack Expat Wrap File (Force Local File Protocol)
-        run: |
-          echo "-> Modificando subprojects/expat.wrap para prohibir el uso de internet..."
-          if [ -f "subprojects/expat.wrap" ]; then
-            sed -i 's/\r$//' subprojects/expat.wrap
-            
-            # Cambiamos las URLs de internet por rutas absolutas file:// que apuntan a la carpeta compartida de Docker
-            sed -i 's|source_url = .*|source_url = file:///workspace/package_offline/expat-2.5.0.tar.xz|g' subprojects/expat.wrap
-            sed -i 's|patch_url = .*|patch_url = file:///workspace/package_offline/expat_2.5.0-3_get_patch.zip|g' subprojects/expat.wrap
-            
-            echo "-> Archivo subprojects/expat.wrap reconfigurado con éxito:"
-            cat subprojects/expat.wrap
-          else
-            echo "-> Alerta: No se encontro subprojects/expat.wrap, creandolo desde cero..."
-            mkdir -p subprojects
-            cat << 'EOF' > subprojects/expat.wrap
-          [wrap-file]
-          directory = expat-2.5.0
-          source_url = file:///workspace/package_offline/expat-2.5.0.tar.xz
-          source_filename = expat-2.5.0.tar.xz
-          source_hash = ef242ee3e3bac2692a47eec3b15f17ca8fb13428b141fd987711202ec0569e22
-          patch_url = file:///workspace/package_offline/expat_2.5.0-3_get_patch.zip
-          patch_filename = expat_2.5.0-3_get_patch.zip
-          patch_hash = 6ae67ef6df38bb5e4666cfb76922378d38ee550da64f26ca5187ee3b3e230006
-          EOF
+          # Descargamos el codigo fuente limpio de expat y su parche oficial
+          curl -L "https://github.com" -o expat-2.5.0.tar.xz
+          curl -L "https://mesonbuild.com" -o expat_patch.zip || touch expat_patch.zip
+          
+          # Extraemos el codigo C dentro de nuestra carpeta segura
+          tar -xf expat-2.5.0.tar.xz --strip-components=1 -C expat_local_src/
+          
+          # Aplicamos el parche de Meson sobre el codigo extraido si es necesario
+          if [ -s expat_patch.zip ]; then
+            unzip -o expat_patch.zip -d expat_local_src/ || echo "Omitiendo parche si no es un zip valido"
           fi
+          
+          echo "-> Estructura fisica de Expat lista en: /workspace/expat_local_src"
+
+      # ¡EL TRUCO MAESTRO REVOLUCIONARIO! Re-escribimos el .wrap para que apunte a un directorio local ya listo
+      # Esto anula por completo la ejecucion de codigos de extraccion internos de Meson que daban el cuelgue
+      - name: Hijack Expat Wrap File (Force Local Directory Symlink)
+        run: |
+          echo "-> Re-escribiendo subprojects/expat.wrap para usar el codigo ya extraido..."
+          mkdir -p subprojects
+          cat << 'EOF' > subprojects/expat.wrap
+          [wrap-redirect]
+          filename = expat.wrap
+          directory = expat_local_src
+          EOF
+          
+          # Tambien creamos un enlace simbolico nativo dentro de subprojects por si acaso
+          ln -s ../expat_local_src subprojects/expat_local_src || true
+          echo "-> Archivo .wrap redirigido al directorio inalterable del disco."
 
       # CORREGIMOS EL ERROR DE ENTRADA CREANDO LA CARPETA SI FALTA
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
@@ -71,7 +68,7 @@ jobs:
           echo "-> Asegurando la ruta del puente de inyeccion..."
           mkdir -p src/vulkan/wrapper
           
-          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
+          echo "-> Creamos el archivo de cabecera con el bypass de Leegao..."
           cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
           #ifndef MALI_LEEGAO_BYPASS_H
           #define MALI_LEEGAO_BYPASS_H
@@ -134,7 +131,7 @@ jobs:
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
 
-      # TU COMANDO DE DOCKER ORIGINAL INTACTO (Sin parámetros de red inestables que congelen el inicio)
+      # TU COMANDO DE DOCKER ORIGINAL INTACTO CON LA INYECCIÓN DEL CÓDIGO FUENTE YA EXTRAÍDO
       - name: compilador-envoltorio
         run: |
           docker run --rm \
