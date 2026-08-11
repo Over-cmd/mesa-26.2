@@ -19,15 +19,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11" # Forzamos una version estable de Python para evitar el bug del parser
+          python-version: "3.11" # Forzamos una versión estable de Python para evitar el bug del parser
 
-      # Instalamos absolutamente todas las herramientas de compilación cruzada en el servidor de GitHub
+      # INSTALACIÓN CORREGIDA: Cambiado libxrand-dev por libxrandr-dev
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential ninja-build pkg-config zstd curl unzip bison flex \
-            libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrand-dev
+            libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
 
@@ -46,7 +46,7 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
-          // Constructor automatico que conecta con el Vulkan oficial de tu Unisoc T618
+          // Constructor automático que conecta con el Vulkan oficial de tu Unisoc T618
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
@@ -76,7 +76,7 @@ jobs:
       - name: Setup Android NDK Cross-File
         run: |
           echo "-> Generando archivo de configuracion cruzada para AArch64..."
-          # Usamos el Android NDK preinstalado de fabrica en las maquinas virtuales de GitHub
+          # Usamos el Android NDK preinstalado de fábrica en las máquinas virtuales de GitHub
           export NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           
           cat << EOF > android-cross.txt
@@ -100,14 +100,14 @@ jobs:
       # LANZAMOS EL CONFIGURADOR DE MESON SOBRE EL PROPIO SERVIDOR DE GITHUB
       - name: Configure Meson Build
         run: |
-          # Desbloqueamos la opcion 'wrapper' en caso de que lo requiera tu meson.options
+          # Desbloqueamos la opción 'wrapper' en caso de que lo requiera tu meson.options
           if [ -f "meson.options" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
           elif [ -f "meson_options.txt" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
           
-          # Setup limpio e independiente de Docker, compilando unicamente el componente wrapper
+          # Setup limpio e independiente de Docker, compilando únicamente el componente wrapper
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
