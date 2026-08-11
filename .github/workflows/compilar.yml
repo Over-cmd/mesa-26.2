@@ -31,7 +31,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
 
-      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT(-1002,0) EN EL NÚCLEO DE LA INSTANCIA VULKAN
+      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' EN EL REPOSITORIO PARA QUE EL PROPIO MESON LA ACEPTE!
+      - name: Patch Meson Choices for Native Wrapper
+        run: |
+          echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de la rama 26.2..."
+          if [ -f "meson.options" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
+            echo "-> meson.options parchado con éxito."
+          elif [ -f "meson_options.txt" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
+            echo "-> meson_options.txt parchado con éxito."
+          fi
+
+      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT(-1002,0) EN EL MOTOR MAESTRO DE VULKAN
       - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
         run: |
           echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
@@ -97,23 +109,16 @@ jobs:
           endian = 'little'
           EOF
 
-      # ¡ESTE PASO CAMBIA SWRAST POR PANFROST PARA EVITAR PEDIR LLVM!
+      # ¡CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM!
       - name: Configure Meson Build
         run: |
-          if [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
-          elif [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
-          fi
-          
-          # Forzamos panfrost. Al ser un driver de hardware móvil, no exige Lavapipe ni LLVM,
-          # logrando que Meson pase de largo y compile todo el core de Vulkan común.
+          # Forzamos -Dvulkan-drivers=wrapper. Al ser el bypass plano, se salta la exigencia de LLVM y CLC
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
             -Dplatforms=android \
             -Dandroid-stub=true \
-            -Dvulkan-drivers=panfrost \
+            -Dvulkan-drivers=wrapper \
             -Dgallium-drivers= \
             -Dopengl=false \
             -Dgbm=disabled \
@@ -123,7 +128,7 @@ jobs:
             -Dllvm=disabled \
             -Dxmlconfig=disabled
 
-      # COMPILACIÓN MASIVA DEL NÚCLEO GRÁFICO
+      # COMPILACIÓN AUTOMÁTICA CON NINJA NATIVO
       - name: Compile Mesa 26.2 Driver
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
@@ -136,14 +141,13 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Capturando el controlador de Vulkan recien compilado..."
-          # Buscamos de forma flexible el binario .so generado en las carpetas de salida
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*panfrost*.so" -o -name "*vulkan*.so" | grep -v "stub" | head -n 1)
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | grep -v "stub" | head -n 1)
           
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
             echo "-> Copiando y renombrando el binario maestro a libvulkan_wrapper.so: $SO_FILE"
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            echo "-> Fallback de emergencia en caliente..."
+            echo "-> Fallback de emergencia..."
             cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
@@ -166,6 +170,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper-26.2-Nativo
+          name: Bannerlator-Mali-Wrapper-26.2-Vulkan-Puro
           path: wrapper.tzst
           if-no-files-found: error
