@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
 
-      # ¡ESTE PASO INYECTA LA OPCIÓN 'WRAPPER' EN EL REPOSITORIO PARA QUE EL PROPIO MESON LA ACEPTE!
+      # INYECTAMOS LA OPCIÓN 'WRAPPER' EN EL REPOSITORIO PARA QUE EL PROPIO MESON LA ACEPTE
       - name: Patch Meson Choices for Native Wrapper
         run: |
           echo "-> Insertando la opcion 'wrapper' en las opciones oficiales de la rama 26.2..."
@@ -109,10 +109,9 @@ jobs:
           endian = 'little'
           EOF
 
-      # ¡CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM!
+      # CONFIGURACIÓN DE VULKAN DIRECTO SIN PEDIR LLVM
       - name: Configure Meson Build
         run: |
-          # Forzamos -Dvulkan-drivers=wrapper. Al ser el bypass plano, se salta la exigencia de LLVM y CLC
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
@@ -133,7 +132,7 @@ jobs:
         run: |
           meson compile -C ${{ env.BUILD_DIR }}
 
-      # RECOLECTAMOS EL BINARIO VULKAN COMPILADO Y LO CONVERTIMOS A WRAPPER.TZST PARA BANNERLATOR
+      # ¡PASO CORREGIDO PARA CAPTURAR EL BINARIO SEGURO SIN ERRORES DE SINTAXIS!
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
@@ -141,14 +140,15 @@ jobs:
           mkdir -p pkg/usr/share/vulkan/icd.d
           
           echo "-> Capturando el controlador de Vulkan recien compilado..."
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | grep -v "stub" | head -n 1)
+          # Enlazamos el archivo .so localizado de forma quirúrgica en una variable limpia
+          TARGET_SO=$(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1)
           
-          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
-            echo "-> Copiando y renombrando el binario maestro a libvulkan_wrapper.so: $SO_FILE"
-            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
+          if [ -n "$TARGET_SO" ] && [ -f "$TARGET_SO" ]; then
+            echo "-> Moviendo binario detectado: $TARGET_SO"
+            cp "$TARGET_SO" pkg/usr/lib/libvulkan_wrapper.so
           else
-            echo "-> Fallback de emergencia..."
-            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
+            echo "-> Intentando forzar ruta estandar del modulo..."
+            cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
