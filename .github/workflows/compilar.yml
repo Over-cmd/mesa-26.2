@@ -19,14 +19,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11" # Forzamos una versión estable de Python para evitar el bug del parser
+          python-version: "3.11"
 
-      # INSTALACIÓN CORREGIDA: Cambiado libxrand-dev por libxrandr-dev
+      # Instalamos CMake en el servidor host para que Meson pueda resolver los subproyectos internos
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential ninja-build pkg-config zstd curl unzip bison flex \
+            build-essential ninja-build pkg-config zstd curl unzip bison flex cmake \
             libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
@@ -46,7 +46,6 @@ jobs:
           extern int mallopt(int param, int value);
           extern int setenv(const char *name, const char *value, int overwrite);
           
-          // Constructor automático que conecta con el Vulkan oficial de tu Unisoc T618
           __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
               mallopt(-1002, 0);
               setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
@@ -57,7 +56,6 @@ jobs:
           #endif
           EOF
           
-          # Soldamos el puente directamente en la utilidad de carga de Vulkan de Mesa
           TARGET_LOADER="src/vulkan/util/vk_util.c"
           if [ -f "$TARGET_LOADER" ]; then
             echo "-> Soldando el bypass de Leegao en: $TARGET_LOADER"
@@ -76,7 +74,6 @@ jobs:
       - name: Setup Android NDK Cross-File
         run: |
           echo "-> Generando archivo de configuracion cruzada para AArch64..."
-          # Usamos el Android NDK preinstalado de fábrica en las máquinas virtuales de GitHub
           export NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           
           cat << EOF > android-cross.txt
@@ -86,6 +83,7 @@ jobs:
           ar = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
           strip = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
           pkg-config = '/usr/bin/pkg-config'
+          cmake = '/usr/bin/cmake'
           
           [properties]
           needs_exe_wrapper = true
@@ -97,21 +95,22 @@ jobs:
           endian = 'little'
           EOF
 
-      # LANZAMOS EL CONFIGURADOR DE MESON SOBRE EL PROPIO SERVIDOR DE GITHUB
+      # LANZAMOS EL CONFIGURADOR DE MESON
       - name: Configure Meson Build
         run: |
-          # Desbloqueamos la opción 'wrapper' en caso de que lo requiera tu meson.options
           if [ -f "meson.options" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
           elif [ -f "meson_options.txt" ]; then
             sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
           fi
           
-          # Setup limpio e independiente de Docker, compilando únicamente el componente wrapper
+          # ¡AQUÍ ACTIVAMOS EL SIMULADOR DE ANDROID PARA OMITIR CUTILS!
+          # -Dandroid-stub=true y -Dplatforms=android obligan a usar las cabeceras internas sin pedir librerías externas de Google
           meson setup ${{ env.BUILD_DIR }} \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
             -Dplatforms=android \
+            -Dandroid-stub=true \
             -Dvulkan-drivers=wrapper \
             -Dgallium-drivers= \
             -Dopengl=false \
