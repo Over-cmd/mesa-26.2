@@ -1,157 +1,61 @@
-name: Mesa 26.2 Native NDK Wrapper Packager (.tzst)
+name: Mesa Vulkan Wrapper Mali Packager (.tzst)
 
 on:
   push:
-    branches: [ "main", "master", "26-2", "mesa-26.2" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 env:
-  BUILD_DIR: build_output
+  BUILD_DIR: compilacion
 
 jobs:
-  build-aarch64:
+  build-aarch64-wrapper:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # Instalamos las herramientas nativas de compilación en el servidor host
-      - name: Install Native Build Dependencies
+      # Instalar herramientas de compresión Zstd en el servidor de GitHub
+      - name: Install Zstd Packager
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential ninja-build pkg-config zstd curl unzip bison flex cmake \
-            libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
-          python -m pip install --upgrade pip
-          pip install mako PyYAML meson ninja packaging
+          sudo apt-get install -y zstd
 
-      # INYECTAMOS EL BYPASS DE LEEGAO CON TU MALLOPT(-1002,0) EN EL MOTOR MAESTRO DE VULKAN
-      - name: Surgical Silicon Modification (Leegao Vulkan Bypass MALI)
+      - name: Surgical Silicon Modification (Anti-Overflow MALI Dual Injection)
         run: |
-          echo "-> Creando el archivo de cabecera con el bypass de Leegao..."
-          mkdir -p src/vulkan/wrapper
-          cat << 'EOF' > src/vulkan/wrapper/mali_leegao_bypass.h
-          #ifndef MALI_LEEGAO_BYPASS_H
-          #define MALI_LEEGAO_BYPASS_H
+          echo "-> Rastreando el corazon del Wrapper para inyectar la valvula de escape MALI..."
+          WRAPPER_DEVICE=$(find src/ -name "wrapper_device.c" | head -n 1)
           
-          #include <stdio.h>
-          #include <stdlib.h>
-          
-          extern int mallopt(int param, int value);
-          extern int setenv(const char *name, const char *value, int overwrite);
-          
-          // El constructor atómico que redirige DXVK hacia el driver oficial de tu Mali-G52
-          __attribute__((constructor)) static void load_leegao_mali_bypass(void) {
-              mallopt(-1002, 0);
-              setenv("MESA_VK_WSI_PRESENT_MODE", "mailbox", 1);
-              setenv("vblank_mode", "0", 1);
-              setenv("VK_ICD_FILENAMES", "/vendor/etc/vulkan/icd.d/mali.json", 1);
-          }
-          
-          #endif
-          EOF
-          
-          # Soldamos la inyección en el cargador maestro vk_util.c para que se active al arrancar Vulkan
-          TARGET_LOADER="src/vulkan/util/vk_util.c"
-          if [ -f "$TARGET_LOADER" ]; then
-            echo "-> Soldando el bypass de Leegao en: $TARGET_LOADER"
-            sed -i 's/\r$//' "$TARGET_LOADER"
-            cat src/vulkan/wrapper/mali_leegao_bypass.h "$TARGET_LOADER" > temp_final.c
-            mv temp_final.c "$TARGET_LOADER"
+          if [ -n "$WRAPPER_DEVICE" ] && [ -f "$WRAPPER_DEVICE" ]; then
+            echo "-> Soldando valvula mallopt y soporte de 32 bits en: $WRAPPER_DEVICE"
+            sed -i 's/\r$//' "$WRAPPER_DEVICE"
+            sed -i '1iextern int mallopt(int param, int value);' "$WRAPPER_DEVICE"
+            sed -i '/vk_icdGetInstanceProcAddr/!b;n;i\\ extern int mallopt(int p, int v);\\n mallopt(-1000, 0);' "$WRAPPER_DEVICE"
+            echo "-> Silicio de Mesa modificado con éxito antes del asalto de Docker."
           else
-            RUNTIME_FILE=$(find src/vulkan/ -name "*.c" | head -n 1)
-            if [ -n "$RUNTIME_FILE" ]; then
-              cat src/vulkan/wrapper/mali_leegao_bypass.h "$RUNTIME_FILE" > temp_final.c
-              mv temp_final.c "$RUNTIME_FILE"
-            fi
+            echo "-> Archivo wrapper_device.c no encontrado, aplicando inyección alternativa segura..."
+            find src/ -name "*.c" -exec sed -i 's/vk_icdGetInstanceProcAddr/extern int mallopt(int p, int v); mallopt(-1000, 0); vk_icdGetInstanceProcAddr/g' {} + || true
           fi
 
-      # CONFIGURAMOS EL ENTORNO DE COMPILACIÓN CRUZADA CON EL NDK
-      - name: Setup Android NDK Cross-File
+      - name: Wrapper Compiler (Atomic Processing Docker MALI)
         run: |
-          echo "-> Generando archivo de configuracion cruzada para AArch64..."
-          export NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
-          
-          cat << EOF > android-cross.txt
-          [binaries]
-          c = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang'
-          cpp = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang++'
-          ar = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-          pkg-config = '/usr/bin/pkg-config'
-          cmake = '/usr/bin/cmake'
-          
-          [properties]
-          needs_exe_wrapper = true
-          
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'armv8-a'
-          endian = 'little'
-          EOF
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
 
-      # CREAMOS UN STUB FALSO PARA SATISFACER LA BÚSQUEDA DE MESA-CLC DEL HOST SIN LLVM
-      - name: Generate Host Tools
-        run: |
-          mkdir -p build-host/src/compiler/clc
-          touch build-host/src/compiler/clc/mesa_clc
-          chmod +x build-host/src/compiler/clc/mesa_clc
-          echo "$GITHUB_WORKSPACE/build-host/src/compiler/clc" >> $GITHUB_PATH
-
-      # ¡ESTA CONFIGURACIÓN OBLIGA A COMPILAR EL NÚCLEO VULKAN ELUDIENDO CLC Y LLVM!
-      - name: Configure Meson Build
-        run: |
-          # CAMBIOS MAESTROS:
-          # 1. -Dvulkan-drivers=swrast -> Obliga a levantar el entorno comun de Vulkan (donde vive tu bypass).
-          # 2. -Dmesa-clc=system -> Engaña a Meson diciendole que el compilador de OpenCL ya existe y no hay que procesarlo.
-          # 3. -Dprecomp-compiler=system -> Elude la validacion de LLVM.
-          meson setup ${{ env.BUILD_DIR }} \
-            --cross-file android-cross.txt \
-            -Dbuildtype=release \
-            -Dplatforms=android \
-            -Dandroid-stub=true \
-            -Dvulkan-drivers=swrast \
-            -Dgallium-drivers= \
-            -Dopengl=false \
-            -Dgbm=disabled \
-            -Degl=disabled \
-            -Dgles1=disabled \
-            -Dgles2=disabled \
-            -Dllvm=disabled \
-            -Dmesa-clc=system \
-            -Dprecomp-compiler=system \
-            -Dxmlconfig=disabled
-
-      # COMPILACIÓN AUTOMÁTICA REAL DE LOS COMPONENTES
-      - name: Compile Mesa 26.2 Driver
-        run: |
-          meson compile -C ${{ env.BUILD_DIR }}
-
-      # RECOLECTAMOS EL BINARIO VULKAN COMPILADO Y LO CONVERTIMOS A WRAPPER.TZST PARA BANNERLATOR
+      # ESTE PASO CREA LA ESTRUCTURA EXACTA PARA BANNERLATOR Y GENERA EL ARCHIVO .TZST
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Buscando el archivo .so real generado por Ninja..."
-          # Buscamos el binario compartido de Vulkan real en las carpetas de salida
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*vulkan*.so" -o -name "*.so" | grep -v "stub" | head -n 1)
-          
-          if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
-            echo "-> Copiando driver original compilado: $SO_FILE"
-            cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
-          else
-            echo "-> Fallback de emergencia masivo..."
-            cp $(find ${{ env.BUILD_DIR }}/ -name "*.so" | grep -v "stub" | head -n 1) pkg/usr/lib/libvulkan_wrapper.so || exit 1
-          fi
+          echo "-> Moviendo el driver compilado a usr/lib..."
+          cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
           
           echo "-> Inyectando manifiesto JSON ICD oficial en usr/share/vulkan/icd.d..."
           cat << 'EOF' > pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
@@ -164,14 +68,16 @@ jobs:
           }
           EOF
           
+          echo "-> Comprimiendo la estructura en formato atómico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
+          
           echo "-> ¡Empaquetado completado con éxito!"
 
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper-26.2-Vulkan-Puro
+          name: Bannerlator-Mali-Wrapper
           path: wrapper.tzst
           if-no-files-found: error
