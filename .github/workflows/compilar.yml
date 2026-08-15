@@ -1,4 +1,4 @@
-name: Mesa Vulkan Wrapper Mali Packager (.tzst)
+name: Mesa GameNative Native NDK Packager (.tzst)
 
 on:
   push:
@@ -6,85 +6,56 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: compilacion
+  BUILD_DIR: build_output
 
 jobs:
-  build-aarch64-wrapper:
+  build-aarch64:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # Forzamos una versión estable de Python para evitar bugs en el parser de Meson
 
-      # Instalar herramientas de compresión y python en el host
-      - name: Install Packager Tools
+      # Instalamos absolutamente todas las herramientas de compilación cruzada en el host de GitHub
+      - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd python3
+          sudo apt-get install -y \
+            build-essential ninja-build pkg-config zstd curl unzip bison flex cmake \
+            libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
+          python -m pip install --upgrade pip
+          pip install mako PyYAML meson ninja packaging
 
-      # ¡ESTE PASO ANIQUILA LOS SUBMÓDULOS INYECTANDO OBJETOS VACÍOS EN UNA LÍNEA DE PYTHON!
-      - name: Nuclear Purge for External Repositories (Aniquilar Libadrenotools)
+      # ¡ESTE PASO MONTA LIBADRENOTOOLS EN LOCAL DESDE EL REPOSITORIO OFICIAL SIN USAR GIT INTERNO!
+      - name: Pre-download and Extract Libadrenotools Stable
         run: |
-          echo "-> Reescribiendo el meson.build del wrapper de forma limpia con Python..."
-          TARGET_MESON="src/vulkan/wrapper/meson.build"
-          if [ -f "$TARGET_MESON" ]; then
-            python3 -c "target='$TARGET_MESON'; f=open(target,'r',encoding='utf-8',errors='ignore'); lines=f.readlines(); f.close(); new_lines=['libadrenotools_dep = []\nadrenotools_subproj = meson\nadrenotools_inc = include_directories(\'.\')\nadrenotools_dep = declare_dependency()\n']; [new_lines.append('# ' + l if 'subproject' in l and 'libadrenotools' in l else (l.replace('adrenotools_subproj.get_variable', '# ').replace('libadrenotools_dep', '[]') if 'get_variable' in l or 'adrenotools_inc' in l else l)) for l in lines]; f=open(target,'w',encoding='utf-8'); f.writelines(new_lines); f.close(); print('-> Estructura externa desactivada con exito.')"
-          fi
-
-      # ¡ESTE BLOQUE EVITA LAS 5 HORAS DE ATASCO INYECTANDO EXPAT LOCALMENTE EN MESA 25!
-      - name: Generate Local Minimal Expat Structure (Zero Downloads)
-        run: |
-          echo "-> Fabricando subproyecto Expat nativo en la raiz..."
-          mkdir -p subprojects/expat/lib
+          echo "-> Descargando codigo fuente limpio de libadrenotools..."
+          mkdir -p subprojects/libadrenotools
+          curl -L "https://github.com" -o adrenotools.zip
+          unzip -q adrenotools.zip -d subprojects/
+          mv subprojects/libadrenotools-master/* subprojects/libadrenotools/ 2>/dev/null || true
+          rm -rf subprojects/libadrenotools-master adrenotools.zip
           
-          cat << 'EOF' > subprojects/expat/lib/expat.h
-          #ifndef EXPAT_H
-          #define EXPAT_H
-          #define XML_STATUS_OK 1
-          typedef void *XML_Parser;
-          typedef char XML_Char;
-          XML_Parser XML_ParserCreate(const XML_Char *encoding);
-          void XML_ParserFree(XML_Parser parser);
-          #endif
-          EOF
+          echo "-> Descargando el submodulo linkernsbypass obligatorio..."
+          mkdir -p subprojects/libadrenotools/lib/linkernsbypass
+          curl -L "https://github.com" -o linkernsbypass.zip
+          unzip -q linkernsbypass.zip -d subprojects/libadrenotools/lib/
+          mv subprojects/libadrenotools/lib/liblinkernsbypass-main/* subprojects/libadrenotools/lib/linkernsbypass/ 2>/dev/null || true
+          rm -rf subprojects/libadrenotools/lib/liblinkernsbypass-main linkernsbypass.zip
           
-          cat << 'EOF' > subprojects/expat/lib/expat.c
-          #include "expat.h"
-          XML_Parser XML_ParserCreate(const XML_Char *encoding) { return (XML_Parser)1; }
-          void XML_ParserFree(XML_Parser parser) {}
-          int dummy_expat_stub(void) { return 0; }
-          EOF
-          
-          cat << 'EOF' > subprojects/expat/meson.build
-          project('expat', 'c', version: '2.5.0')
-          expat_inc = include_directories('lib')
-          expat_lib = static_library('expat', 'lib/expat.c', include_directories: expat_inc)
-          expat_dep = declare_dependency(link_with: expat_lib, include_directories: expat_inc)
-          meson.override_dependency('expat', expat_dep)
-          EOF
-          
-          cat << 'EOF' > subprojects/expat.wrap
+          echo "-> Registrando los archivos .wrap locales para deshabilitar descargas de internet..."
+          cat << 'EOF' > subprojects/libadrenotools.wrap
           [wrap-file]
-          directory = expat
+          directory = libadrenotools
           EOF
-          echo "-> Parche de estructura de subproyectos completado de forma segura."
+          echo "-> Estructura offline de adrenotools completada."
 
-      # ADAPTACIÓN DE OPCIONES EXIGIDA POR EL MOTOR GAMENATIVE DE MESA 25
-      - name: Patch Meson Options for GameNative Choices
-        run: |
-          echo "-> Desbloqueando las opciones de configuracion de la variante GameNative..."
-          if [ -f "meson_options.txt" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', 'swrast', /g" meson_options.txt
-          elif [ -f "meson.options" ]; then
-            sed -i "s/choices : \[/choices : ['wrapper', 'swrast', /g" meson.options
-          fi
-
-      # ¡INYECTAMOS EL CÓDIGO POR PYTHON EXCLUSIVAMENTE EN EL MAESTRO DE INSTANCIAS (COMPATIBLE 32/64)!
+      # ¡INYECTAMOS EL CÓDIGO DE CONTROL HÍBRIDO DIRECTAMENTE EN EL RUNTIME VULKAN COMÚN!
       - name: Surgical Silicon Modification (Anti-Overflow & 32-bit GameNative Fix)
         run: |
           echo "-> Ejecutando parche de aislamiento de arquitectura con Python..."
@@ -97,63 +68,87 @@ jobs:
               content = content.replace('\r\n', '\n')
               headers = '\nextern int mallopt(int param, int value);\nextern int setenv(const char *name, const char *value, int overwrite);\n'
               content = headers + content
+              # Filtro hibrido: si sizeof(void*) == 4 (proceso 32 bits en Box86) limita la cola del WSI para que no crashee la memoria del T618
               patch = 'extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv(\"MESA_VK_WSI_PRESENT_MODE\", \"mailbox\", 1); setenv(\"vblank_mode\", \"0\", 1); if(sizeof(void*) == 4) { setenv(\"MESA_VK_WSI_QUEUE_SIZE\", \"1\", 1); } vk_icdGetInstanceProcAddr'
               content = content.replace('vk_icdGetInstanceProcAddr', patch, 1)
               with open(target, 'w', encoding='utf-8') as f:
                   f.write(content)
-          else:
-              device_file = 'src/vulkan/wrapper/wrapper_device.c'
-              if os.path.exists(device_file):
-                  with open(device_file, 'r', encoding='utf-8') as f:
-                      content = f.read()
-                  content = content.replace('\r\n', '\n')
-                  patch = 'extern int mallopt(int p, int v); extern int setenv(const char *n, const char *v, int o); mallopt(-1002, 0); setenv(\"MESA_VK_WSI_PRESENT_MODE\", \"mailbox\", 1); setenv(\"vblank_mode\", \"0\", 1); if(sizeof(void*) == 4) { setenv(\"MESA_VK_WSI_QUEUE_SIZE\", \"1\", 1); } vk_icdGetInstanceProcAddr'
-                  content = '\nextern int mallopt(int p, int v);\nextern int setenv(const char *n, const char *v, int o);\n' + content.replace('vk_icdGetInstanceProcAddr', patch, 1)
-                  with open(device_file, 'w', encoding='utf-8') as f:
-                      f.write(content)
+              print('-> Parche inyectado en vk_instance.c')
           "
 
-      # INTERCEPTOR DE COMANDOS PARA NINJA
-      - name: Create Ninja Wrapper Hijacker (Bypass Unknown Target)
+      # CONFIGURAMOS EL ENTORNO DE COMPILACIÓN CRUZADA CON EL ANDROID NDK OFICIAL DE GITHUB
+      - name: Setup Android NDK Cross-File
         run: |
-          mkdir -p bin_hijack
-          cat << 'EOF' > bin_hijack/ninja
-          #!/bin/bash
-          ARGS=("$@")
-          NEW_ARGS=()
-          for arg in "${ARGS[@]}"; do
-            if [ "$arg" == "src/vulkan/wrapper/libvulkan_wrapper.so" ] || [ "$arg" == "src/vulkan/runtime/libvulkan_wrapper.so" ]; then
-              NEW_ARGS+=("vulkan_wrapper")
-            else
-              NEW_ARGS+=("$arg")
-            fi
-          done
-          exec /usr/local/bin/ninja "${NEW_ARGS[@]}"
+          echo "-> Generando archivo de configuracion cruzada para AArch64..."
+          export NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          
+          cat << EOF > android-cross.txt
+          [binaries]
+          c = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang'
+          cpp = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang++'
+          ar = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          pkg-config = '/usr/bin/pkg-config'
+          cmake = '/usr/bin/cmake'
+          
+          [properties]
+          needs_exe_wrapper = true
+          
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
           EOF
-          chmod +x bin_hijack/ninja
 
-      # TU COMANDO DE DOCKER ORIGINAL NATIVO INTACTO CON LA RED DESACTIVADA SEGURO
-      - name: Wrapper Compiler (Atomic Processing Docker MALI)
+      # LANZAMOS EL CONFIGURADOR DE MESON EN EL ENTORNO NATIVO DEL SERVIDOR
+      - name: Configure Meson Build
         run: |
-          docker run --rm \
-            --network none \
-            -v "${{ github.workspace }}:/workspace" \
-            -v "${{ github.workspace }}/bin_hijack/ninja:/usr/local/bin/ninja" \
-            ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+          # Activamos la opcion wrapper en las opciones oficiales del repositorio
+          if [ -f "meson.options" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson.options
+          elif [ -f "meson_options.txt" ]; then
+            sed -i "s/choices : \[/choices : ['wrapper', /g" meson_options.txt
+          fi
+          
+          # Setup limpio e independiente de Docker. Forzamos precomp-compiler=auto y llvm=disabled
+          meson setup ${{ env.BUILD_DIR }} \
+            --cross-file android-cross.txt \
+            -Dbuildtype=release \
+            -Dplatforms=android \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=wrapper \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dgbm=disabled \
+            -Degl=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dllvm=disabled \
+            -Dprecomp-compiler=auto \
+            -Dxmlconfig=disabled
 
-      # ESTE PASO CREA LA ESTRUCTURA NATIVA EXIGIDA POR BANNERLATOR CON EL NOMBRE ORIGINAL
+      # COMPILACIÓN MASIVA REAL DE LOS COMPONENTES GRÁFICOS CON NINJA NATIVO
+      - name: Compile Mesa GameNative Driver
+        run: |
+          meson compile -C ${{ env.BUILD_DIR }}
+
+      # RECOLECTAMOS EL BINARIO COMPILADO REAL Y LO CONVERTIMOS A WRAPPER.TZST PARA BANNERLATOR
       - name: Structure and Pack wrapper.tzst
         run: |
           echo "-> Creando arbol de directorios de Linux para Bannerlator..."
           mkdir -p pkg/usr/lib
           mkdir -p pkg/usr/share/vulkan/icd.d
           
-          echo "-> Moviendo el driver compilado a usr/lib..."
-          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | head -n 1)
+          echo "-> Buscando la libreria grafica compilada..."
+          SO_FILE=$(find ${{ env.BUILD_DIR }}/ -name "*wrapper*.so" -o -name "*.so" | grep -v "stub" | head -n 1)
+          
           if [ -n "$SO_FILE" ] && [ -f "$SO_FILE" ]; then
+            echo "-> Copiando driver original compilado: $SO_FILE"
             cp "$SO_FILE" pkg/usr/lib/libvulkan_wrapper.so
           else
-            cp ${{ env.BUILD_DIR }}/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so || cp ${{ env.BUILD_DIR }}/src/vulkan/wrapper/libvulkan_wrapper.so pkg/usr/lib/libvulkan_wrapper.so
+            echo "-> Fallback de emergencia masivo..."
+            cp ${{ env.BUILD_DIR }}/*.so pkg/usr/lib/libvulkan_wrapper.so || exit 1
           fi
           
           echo "-> Inyectando manifiesto JSON ICD oficial original en usr/share/vulkan/icd.d..."
@@ -167,7 +162,6 @@ jobs:
           }
           EOF
           
-          echo "-> Comprimiendo la estructura en formato atomico wrapper.tzst..."
           cd pkg
           tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/
           cd ..
@@ -176,6 +170,6 @@ jobs:
       - name: Upload Final wrapper.tzst for Bannerlator
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mali-Wrapper
+          name: Bannerlator-GameNative-Wrapper
           path: wrapper.tzst
           if-no-files-found: error
