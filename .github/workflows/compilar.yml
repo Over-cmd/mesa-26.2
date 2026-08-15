@@ -21,31 +21,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Instalamos todas las herramientas de compilación cruzada en el host de GitHub
+      # Instalamos todas las herramientas de compilación en el host de GitHub
       - name: Install Native Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential ninja-build pkg-config zstd curl unzip bison flex cmake git \
+            build-essential ninja-build pkg-config zstd curl unzip bison flex cmake \
             libdrm-dev libexpat1-dev libx11-dev libxext-dev libxrandr-dev
           python -m pip install --upgrade pip
           pip install mako PyYAML meson ninja packaging
 
-      # ¡CLONADO NATIVO DIRECTO SIN RIESGO DE CORRUPCIÓN DE COMPRESIÓN!
-      - name: Clone and Mount Libadrenotools Offline Structure
+      # ¡MÉTODO DEFINITIVO: DESCARGA PLANA CON CURL Y TAR EVITANDO EL BLOQUEO DE REPOSITORIO DE GIT!
+      - name: Download and Mount Libadrenotools Tarball (Bypass Git Clone Bug)
         run: |
-          echo "-> Clonando de forma recursiva libadrenotools en la carpeta subprojects..."
-          mkdir -p subprojects
+          echo "-> Creando arbol offline de subproyectos..."
+          mkdir -p subprojects/libadrenotools
           
-          # Clonamos de forma limpia el repositorio maestro con todos sus submodulos integrados
-          git clone --depth 1 --recursive https://github.com subprojects/libadrenotools
+          echo "-> Descargando el codigo nucleo de libadrenotools via Tarball plano..."
+          curl -L "https://github.com" -o adrenotools.tar.gz
+          tar -xf adrenotools.tar.gz --strip-components=1 -C subprojects/libadrenotools/
+          rm -f adrenotools.tar.gz
           
-          echo "-> Registrando el archivo .wrap local para deshabilitar descargas de internet de Meson..."
+          echo "-> Descargando el submodulo linkernsbypass obligatorio..."
+          mkdir -p subprojects/libadrenotools/lib/linkernsbypass
+          curl -L "https://github.com" -o linkernsbypass.tar.gz
+          tar -xf linkernsbypass.tar.gz --strip-components=1 -C subprojects/libadrenotools/lib/linkernsbypass/
+          rm -f linkernsbypass.tar.gz
+          
+          echo "-> Registrando el manifiesto .wrap local para prohibir descargas de red a Meson..."
           cat << 'EOF' > subprojects/libadrenotools.wrap
           [wrap-file]
           directory = libadrenotools
           EOF
-          echo "-> Estructura offline de adrenotools completada."
+          echo "-> Estructura de librerias montada con éxito en local."
 
       # ¡MÉTODO AUTOMÁTICO DE SOPORTE EXPAT LOCAL SEGURO!
       - name: Generate Local Minimal Expat Structure (Zero Downloads)
