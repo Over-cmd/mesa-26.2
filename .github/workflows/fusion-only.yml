@@ -36,9 +36,9 @@ jobs:
 
       - name: 4. Fusión Total de Repositorios
         run: |
-          echo "Copiando todo el contenido de gamenative-wrapper sobre mesa-26.2..."
-          # rsync pasa absolutamente todo (subproyectos, src, configuraciones, etc.) excluyendo .git
-          rsync -av --exclude='.git' gamenative-wrapper/ mesa-26.2/
+          echo "Copiando todo el contenido de gamenative-wrapper sobre mesa-26.2 (excluyendo .git y .github)..."
+          # Excluimos .git y .github para evitar bloqueos de seguridad de GitHub Actions
+          rsync -av --exclude='.git' --exclude='.github' gamenative-wrapper/ mesa-26.2/
           echo "Fusión de archivos finalizada."
 
       - name: 5. Subir los cambios a la rama 'fusion' en GitHub
