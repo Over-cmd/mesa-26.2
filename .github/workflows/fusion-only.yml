@@ -1,125 +1,29 @@
-name: Crear Nueva Rama Fusion Limpia (Mesa 26.2 + Wrapper)
-
-on:
-  workflow_dispatch: # Se ejecuta manualmente desde GitHub Actions
-
-jobs:
-  create-clean-fusion:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Necesario para crear/actualizar la rama fusion
-
     steps:
-      - name: 📥 1. Checkout Mesa 26.2 (Base Limpia desde Main o Master)
+      - name: 📥 1. Checkout Rama Fusion (Mesa 26.2)
         uses: actions/checkout@v4
         with:
-          repository: Over-cmd/mesa-26.2
-          ref: main # Cambia a 'master' si tu base limpia está ahí
+          ref: fusion
+          submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Checkout GameNative Wrapper (Rama wrapper-25 con Submódulos)
+      - name: 📥 2. Traer Dockerfile.build y Adrenotools desde el Wrapper
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
           ref: wrapper-25
-          path: gamenative-wrapper
           submodules: 'recursive'
-          fetch-depth: 0
+          path: temp-wrapper
+          fetch-depth: 1
 
-      - name: 🔄 3. Inyección Selectiva (Solo el Wrapper y Subproyectos necesarios)
+      - name: 🧩 2.1. Inyectar infraestructura faltante (Dockerfile y Subproyectos)
         run: |
-          echo "=========================================================="
-          echo " 🧬 INYECTANDO WRAPPER SOBRE NÚCLEO INTACTO DE MESA 26.2  "
-          echo "=========================================================="
+          echo "Copiando Dockerfile.build y subproyectos necesarios..."
+          cp temp-wrapper/Dockerfile.build .
           
-          # Crear la ruta del wrapper si no existe
-          mkdir -p src/vulkan/wrapper
-          
-          # Copiar EXCLUSIVAMENTE el contenido del wrapper de la rama wrapper-25
-          if [ -d "gamenative-wrapper/src/vulkan/wrapper" ]; then
-              cp -r gamenative-wrapper/src/vulkan/wrapper/* src/vulkan/wrapper/
-              echo "-> Directorio 'src/vulkan/wrapper' inyectado."
-          fi
-
-          # Copiar subproyectos si el wrapper trae dependencias propias (ej. adrenotools)
-          if [ -d "gamenative-wrapper/subprojects" ]; then
-              cp -r gamenative-wrapper/subprojects/* subprojects/ 2>/dev/null || true
-              echo "-> Subproyectos integrados."
-          fi
-
-          # Copiar meson_options.txt del wrapper si existe
-          if [ -f "gamenative-wrapper/meson_options.txt" ]; then
-              cp gamenative-wrapper/meson_options.txt .
-              echo "-> meson_options.txt copiado."
-          fi
-
-      - name: 🛠️ 4. Resolver Opciones de Meson, Purificar Entorno y Stubs
-        run: |
-          echo "=========================================================="
-          echo " 🧬 APLICANDO PARCHES DE PURIFICACIÓN Y STUBS             "
-          echo "=========================================================="
-          
-          # Resolver conflicto entre meson.options y meson_options.txt si ambos existen
-          if [ -f "meson_options.txt" ]; then
-              if [ -f "meson.options" ]; then
-                  echo "Fusionando opciones del wrapper en meson.options..."
-                  cat meson_options.txt >> meson.options
-                  rm meson_options.txt
-              else
-                  echo "Renombrando meson_options.txt a meson.options..."
-                  mv meson_options.txt meson.options
-              fi
+          if [ -d "temp-wrapper/subprojects" ]; then
+              mkdir -p subprojects
+              cp -r temp-wrapper/subprojects/* subprojects/
           fi
           
-          TARGET_C="src/vulkan/wrapper/wrapper_device.c"
-          if [ -f "$TARGET_C" ]; then
-              sed -i 's|/data/data/app.gamenative/files/imagefs/usr/tmp/|/tmp/|g' "$TARGET_C"
-              echo "-> Parche de inodo temporal aplicado."
-          fi
-          
-          ANDROID_MESA_C="src/vulkan/runtime/vk_android.c"
-          if [ -f "$ANDROID_MESA_C" ]; then
-              echo "/* Vaciado por el Workflow para evitar redefiniciones con adrenotools */" > "$ANDROID_MESA_C"
-          fi
-          
-          PANVK_ANDROID_C="src/panfrost/vulkan/panvk_android.c"
-          if [ -f "$PANVK_ANDROID_C" ]; then
-              sed -i '1i #include <string.h>' "$PANVK_ANDROID_C"
-          fi
-          
-          LIBSYNC_H="src/util/libsync.h"
-          if [ -f "$LIBSYNC_H" ]; then
-              echo -e "#ifndef MESA_LIBSYNC_H_WRAPPER\n#define MESA_LIBSYNC_H_WRAPPER\n#include <sync/sync.h>\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\nint sync_valid_fd(int fd);\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n#endif" > "$LIBSYNC_H"
-          fi
-          
-          DRI_TARGET_C="src/gallium/targets/dri/dri_target.c"
-          if [ -f "$DRI_TARGET_C" ]; then
-              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_accumulate(const char *name, int *fd1, int fd2) { return 0; }\nvoid validate_fence_fd(int fd) { return; }" >> "$DRI_TARGET_C"
-          fi
-          
-          PANVK_INSTANCE_C="src/panfrost/vulkan/panvk_instance.c"
-          if [ -f "$PANVK_INSTANCE_C" ]; then
-              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_merge(const char *name, int fd1, int fd2) { return 0; }" >> "$PANVK_INSTANCE_C"
-          fi
-          
-          EGL_API_C="src/egl/main/eglapi.c"
-          if [ -f "$EGL_API_C" ]; then
-              echo -e "\nint sync_valid_fd(int fd);\nint sync_valid_fd(int fd) { return fd >= 0; }" >> "$EGL_API_C"
-          fi
-
-      - name: 🚀 5. Forzar y Actualizar la Rama 'fusion' Limpia en GitHub
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Forzar la creación o reseteo completo de la rama fusion para borrar la basura anterior
-          git checkout --orphan fusion-temp
-          git add -A
-          git commit -m "Nueva fusión limpia: Mesa 26.2 con Wrapper inyectado selectivamente"
-          
-          # Reemplazar la rama fusion remota con esta versión limpia
-          git branch -D fusion || true
-          git branch -m fusion
-          git push origin fusion --force
-          
-          echo "¡Rama 'fusion' recreada y actualizada de forma limpia sin romper el núcleo!"
+          rm -rf temp-wrapper
+          echo "Infraestructura lista."
