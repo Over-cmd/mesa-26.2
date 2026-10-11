@@ -1,51 +1,117 @@
-name: Fusionar Wrapper en Mesa 26.2 (Solo Merge)
+name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
 
 on:
-  workflow_dispatch: # Se ejecuta manualmente haciendo clic en el botón en GitHub Actions
+  push:
+    branches:
+      - fusion
+  workflow_dispatch:
 
 jobs:
-  merge-branches:
+  build-mesa26-fusion:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Necesario para que GitHub Actions pueda crear la rama y hacer push
+    env:
+      BUILD_DIR: build
 
     steps:
-      - name: 1. Checkout Mesa 26.2 Repo
+      - name: 📥 1. Checkout Rama Fusion (Mesa 26.2 + Wrapper Integrado)
         uses: actions/checkout@v4
         with:
-          path: mesa-26.2
+          ref: fusion
+          submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Checkout GameNative Wrapper Repo (rama wrapper-25)
-        uses: actions/checkout@v4
+      - name: ⚙️ 2. Instalar Herramientas de Compresión y patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd patchelf python3 bc
+
+      - name: 🛠️ 3. Purificar Entorno y Sincronizar Cabeceras Puras (Mesa 26.2)
+        run: |
+          echo "=========================================================="
+          echo " 🧬 APLICANDO PARCHES DE PURIFICACIÓN Y STUBS             "
+          echo "=========================================================="
+          
+          TARGET_C="src/vulkan/wrapper/wrapper_device.c"
+          if [ -f "$TARGET_C" ]; then
+              sed -i 's|/data/data/app.gamenative/files/imagefs/usr/tmp/|/tmp/|g' "$TARGET_C"
+              echo "-> Parche de inodo temporal aplicado."
+          fi
+          
+          ANDROID_MESA_C="src/vulkan/runtime/vk_android.c"
+          if [ -f "$ANDROID_MESA_C" ]; then
+              echo "/* Vaciado por el Workflow para evitar redefiniciones con adrenotools */" > "$ANDROID_MESA_C"
+          fi
+          
+          PANVK_ANDROID_C="src/panfrost/vulkan/panvk_android.c"
+          if [ -f "$PANVK_ANDROID_C" ]; then
+              sed -i '1i #include <string.h>' "$PANVK_ANDROID_C"
+          fi
+          
+          LIBSYNC_H="src/util/libsync.h"
+          if [ -f "$LIBSYNC_H" ]; then
+              echo -e "#ifndef MESA_LIBSYNC_H_WRAPPER\n#define MESA_LIBSYNC_H_WRAPPER\n#include <sync/sync.h>\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\nint sync_valid_fd(int fd);\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n#endif" > "$LIBSYNC_H"
+          fi
+          
+          DRI_TARGET_C="src/gallium/targets/dri/dri_target.c"
+          if [ -f "$DRI_TARGET_C" ]; then
+              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_accumulate(const char *name, int *fd1, int fd2) { return 0; }\nvoid validate_fence_fd(int fd) { return; }" >> "$DRI_TARGET_C"
+          fi
+          
+          PANVK_INSTANCE_C="src/panfrost/vulkan/panvk_instance.c"
+          if [ -f "$PANVK_INSTANCE_C" ]; then
+              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_merge(const char *name, int fd1, int fd2) { return 0; }" >> "$PANVK_INSTANCE_C"
+          fi
+          
+          EGL_API_C="src/egl/main/eglapi.c"
+          if [ -f "$EGL_API_C" ]; then
+              echo -e "\nint sync_valid_fd(int fd);\nint sync_valid_fd(int fd) { return fd >= 0; }" >> "$EGL_API_C"
+          fi
+
+      - name: ⚙️ 4. Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 5. Construir Contenedor Gráfico Local con Panfrost
+        run: |
+          docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
+
+      - name: 🛠️ 6. Ejecutar Compilador Local Unificado
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
+
+      - name: 📦 7. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
+        run: |
+          WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
+          
+          if [ -f "$WRAPPER_SO" ]; then
+            echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
+            rm -rf final_pkg
+            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
+            
+            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            # REGLA DE COMODINES DE ADRENOTOOLS
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
+            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            # MANIFIESTO ICD
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
+            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
+          else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
+            exit 1
+          fi
+
+      - name: 🚀 8. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
         with:
-          repository: Over-cmd/gamenative-wrapper
-          ref: wrapper-25
-          path: gamenative-wrapper
-          fetch-depth: 0
-
-      - name: 3. Configurar Git y cambiar a la rama 'fusion'
-        run: |
-          cd mesa-26.2
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Si la rama 'fusion' ya existe la selecciona, si no, la crea desde cero
-          git checkout fusion || git checkout -b fusion
-          cd ..
-
-      - name: 4. Fusión Total de Repositorios
-        run: |
-          echo "Copiando todo el contenido de gamenative-wrapper sobre mesa-26.2 (excluyendo .git y .github)..."
-          # Excluimos .git y .github para evitar bloqueos de seguridad de GitHub Actions
-          rsync -av --exclude='.git' --exclude='.github' gamenative-wrapper/ mesa-26.2/
-          echo "Fusión de archivos finalizada."
-
-      - name: 5. Subir los cambios a la rama 'fusion' en GitHub
-        run: |
-          cd mesa-26.2
-          git add .
-          git diff --staged --quiet || git commit -m "Merge completo: gamenative-wrapper (wrapper-25) en Mesa 26.2"
-          git push origin fusion
-          echo "¡Rama 'fusion' creada y actualizada con éxito en GitHub!"
-          
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
