@@ -1,0 +1,51 @@
+name: Fusionar Wrapper en Mesa 26.2 (Solo Merge)
+
+on:
+  workflow_dispatch: # Se ejecuta manualmente haciendo clic en el botón en GitHub Actions
+
+jobs:
+  merge-branches:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Necesario para que GitHub Actions pueda crear la rama y hacer push
+
+    steps:
+      - name: 1. Checkout Mesa 26.2 Repo
+        uses: actions/checkout@v4
+        with:
+          path: mesa-26.2
+          fetch-depth: 0
+
+      - name: 2. Checkout GameNative Wrapper Repo (rama wrapper-25)
+        uses: actions/checkout@v4
+        with:
+          repository: Over-cmd/gamenative-wrapper
+          ref: wrapper-25
+          path: gamenative-wrapper
+          fetch-depth: 0
+
+      - name: 3. Configurar Git y cambiar a la rama 'fusion'
+        run: |
+          cd mesa-26.2
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Si la rama 'fusion' ya existe la selecciona, si no, la crea desde cero
+          git checkout fusion || git checkout -b fusion
+          cd ..
+
+      - name: 4. Fusión Total de Repositorios
+        run: |
+          echo "Copiando todo el contenido de gamenative-wrapper sobre mesa-26.2..."
+          # rsync pasa absolutamente todo (subproyectos, src, configuraciones, etc.) excluyendo .git
+          rsync -av --exclude='.git' gamenative-wrapper/ mesa-26.2/
+          echo "Fusión de archivos finalizada."
+
+      - name: 5. Subir los cambios a la rama 'fusion' en GitHub
+        run: |
+          cd mesa-26.2
+          git add .
+          git diff --staged --quiet || git commit -m "Merge completo: gamenative-wrapper (wrapper-25) en Mesa 26.2"
+          git push origin fusion
+          echo "¡Rama 'fusion' creada y actualizada con éxito en GitHub!"
+          
