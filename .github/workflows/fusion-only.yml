@@ -1,35 +1,75 @@
-name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
+name: Crear Nueva Rama Fusion Limpia (Mesa 26.2 + Wrapper)
 
 on:
-  push:
-    branches:
-      - fusion
-  workflow_dispatch:
+  workflow_dispatch: # Se ejecuta manualmente desde GitHub Actions
 
 jobs:
-  build-mesa26-fusion:
+  create-clean-fusion:
     runs-on: ubuntu-latest
-    env:
-      BUILD_DIR: build
+    permissions:
+      contents: write # Necesario para crear/actualizar la rama fusion
 
     steps:
-      - name: 📥 1. Checkout Rama Fusion (Mesa 26.2 + Wrapper Integrado)
+      - name: 📥 1. Checkout Mesa 26.2 (Base Limpia desde Main o Master)
         uses: actions/checkout@v4
         with:
-          ref: fusion
+          repository: Over-cmd/mesa-26.2
+          ref: main # Cambia a 'master' si tu base limpia está ahí
+          fetch-depth: 0
+
+      - name: 📥 2. Checkout GameNative Wrapper (Rama wrapper-25 con Submódulos)
+        uses: actions/checkout@v4
+        with:
+          repository: Over-cmd/gamenative-wrapper
+          ref: wrapper-25
+          path: gamenative-wrapper
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: ⚙️ 2. Instalar Herramientas de Compresión y patchelf
+      - name: 🔄 3. Inyección Selectiva (Solo el Wrapper y Subproyectos necesarios)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd patchelf python3 bc
+          echo "=========================================================="
+          echo " 🧬 INYECTANDO WRAPPER SOBRE NÚCLEO INTACTO DE MESA 26.2  "
+          echo "=========================================================="
+          
+          # Crear la ruta del wrapper si no existe
+          mkdir -p src/vulkan/wrapper
+          
+          # Copiar EXCLUSIVAMENTE el contenido del wrapper de la rama wrapper-25
+          if [ -d "gamenative-wrapper/src/vulkan/wrapper" ]; then
+              cp -r gamenative-wrapper/src/vulkan/wrapper/* src/vulkan/wrapper/
+              echo "-> Directorio 'src/vulkan/wrapper' inyectado."
+          fi
 
-      - name: 🛠️ 3. Purificar Entorno y Sincronizar Cabeceras Puras (Mesa 26.2)
+          # Copiar subproyectos si el wrapper trae dependencias propias (ej. adrenotools)
+          if [ -d "gamenative-wrapper/subprojects" ]; then
+              cp -r gamenative-wrapper/subprojects/* subprojects/ 2>/dev/null || true
+              echo "-> Subproyectos integrados."
+          fi
+
+          # Copiar meson_options.txt del wrapper si existe
+          if [ -f "gamenative-wrapper/meson_options.txt" ]; then
+              cp gamenative-wrapper/meson_options.txt .
+              echo "-> meson_options.txt copiado."
+          fi
+
+      - name: 🛠️ 4. Resolver Opciones de Meson, Purificar Entorno y Stubs
         run: |
           echo "=========================================================="
           echo " 🧬 APLICANDO PARCHES DE PURIFICACIÓN Y STUBS             "
           echo "=========================================================="
+          
+          # Resolver conflicto entre meson.options y meson_options.txt si ambos existen
+          if [ -f "meson_options.txt" ]; then
+              if [ -f "meson.options" ]; then
+                  echo "Fusionando opciones del wrapper en meson.options..."
+                  cat meson_options.txt >> meson.options
+                  rm meson_options.txt
+              else
+                  echo "Renombrando meson_options.txt a meson.options..."
+                  mv meson_options.txt meson.options
+              fi
+          fi
           
           TARGET_C="src/vulkan/wrapper/wrapper_device.c"
           if [ -f "$TARGET_C" ]; then
@@ -67,51 +107,19 @@ jobs:
               echo -e "\nint sync_valid_fd(int fd);\nint sync_valid_fd(int fd) { return fd >= 0; }" >> "$EGL_API_C"
           fi
 
-      - name: ⚙️ 4. Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🐳 5. Construir Contenedor Gráfico Local con Panfrost
+      - name: 🚀 5. Forzar y Actualizar la Rama 'fusion' Limpia en GitHub
         run: |
-          docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
-
-      - name: 🛠️ 6. Ejecutar Compilador Local Unificado
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
-
-      - name: 📦 7. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
-        run: |
-          WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [ -f "$WRAPPER_SO" ]; then
-            echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
-            rm -rf final_pkg
-            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
-            
-            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
-            
-            # REGLA DE COMODINES DE ADRENOTOOLS
-            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
-            chmod -R 755 final_pkg/usr/lib/
-            
-            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
-            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
-            
-            # MANIFIESTO ICD
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
-            
-            sync && sleep 3
-            
-            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
-            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
-          else
-            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
-            exit 1
-          fi
-
-      - name: 🚀 8. Subir Artefacto Completo a GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
-          path: wrapper.tzst
-          retention-days: 7
+          # Forzar la creación o reseteo completo de la rama fusion para borrar la basura anterior
+          git checkout --orphan fusion-temp
+          git add -A
+          git commit -m "Nueva fusión limpia: Mesa 26.2 con Wrapper inyectado selectivamente"
+          
+          # Reemplazar la rama fusion remota con esta versión limpia
+          git branch -D fusion || true
+          git branch -m fusion
+          git push origin fusion --force
+          
+          echo "¡Rama 'fusion' recreada y actualizada de forma limpia sin romper el núcleo!"
