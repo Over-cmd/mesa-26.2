@@ -1,15 +1,13 @@
-name: Recrear Rama Fusion Limpia y Compilar (Mesa 26.2)
+name: Recrear Rama Fusion Limpia (Solo Merge e Inyección)
 
 on:
   workflow_dispatch: # Se ejecuta manualmente desde la pestaña Actions en GitHub
 
 jobs:
-  recreate-and-build-fusion:
+  create-clean-fusion:
     runs-on: ubuntu-latest
     permissions:
       contents: write # Necesario para hacer push y forzar la actualización de la rama fusion
-    env:
-      BUILD_DIR: build
 
     steps:
       - name: 📥 1. Checkout Mesa 26.2 (Base Limpia desde Main o Master)
@@ -50,7 +48,7 @@ jobs:
               echo "-> Subproyectos integrados."
           fi
 
-          # Copiar el Dockerfile.build raíz
+          # Copiar el Dockerfile.build raíz por si se usa en el futuro
           if [ -f "temp-wrapper/Dockerfile.build" ]; then
               cp temp-wrapper/Dockerfile.build .
               echo "-> Dockerfile.build copiado."
@@ -65,12 +63,7 @@ jobs:
           # Limpiar directorio temporal
           rm -rf temp-wrapper
 
-      - name: ⚙️ 4. Instalar Herramientas de Compresión y patchelf
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd patchelf python3 bc
-
-      - name: 🛠️ 5. Resolver Opciones de Meson, Purificar Entorno y Stubs
+      - name: 🛠️ 4. Resolver Opciones de Meson, Purificar Entorno y Stubs
         run: |
           echo "=========================================================="
           echo " 🧬 APLICANDO PARCHES DE PURIFICACIÓN Y STUBS             "
@@ -122,68 +115,19 @@ jobs:
               echo -e "\nint sync_valid_fd(int fd);\nint sync_valid_fd(int fd) { return fd >= 0; }" >> "$EGL_API_C"
           fi
 
-      - name: ⚙️ 6. Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🐳 7. Construir Contenedor Gráfico Local con Panfrost
-        run: |
-          docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
-
-      - name: 🛠️ 8. Ejecutar Compilador Local Unificado
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
-
-      - name: 📦 9. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
-        run: |
-          WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
-          
-          if [ -f "$WRAPPER_SO" ]; then
-            echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
-            rm -rf final_pkg
-            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
-            
-            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
-            
-            # REGLA DE COMODINES DE ADRENOTOOLS
-            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
-            chmod -R 755 final_pkg/usr/lib/
-            
-            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
-            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
-            
-            # MANIFIESTO ICD
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
-            
-            sync && sleep 3
-            
-            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
-            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
-          else
-            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
-            exit 1
-          fi
-
-      - name: 🚀 10. Actualizar la Rama 'fusion' Remota de forma Limpia
+      - name: 🚀 5. Actualizar la Rama 'fusion' Remota de forma Limpia
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Crear una rama huérfana temporal limpia con el nuevo código inyectado y parcheado
+          # Crear una rama huérfana temporal limpia con el código inyectado y parcheado
           git checkout --orphan fusion-temp
           git add -A
-          git commit -m "Recreación limpia de la rama fusion: Mesa 26.2 + Wrapper inyectado selectivamente"
+          git commit -m "Recreación limpia de la rama fusion: Mesa 26.2 + Wrapper inyectado selectivamente (Sin compilar)"
           
           # Reemplazar por completo la rama fusion remota con esta versión impoluta
           git branch -D fusion || true
           git branch -m fusion
           git push origin fusion --force
           
-          echo "-> ¡La rama 'fusion' ha sido recreada y actualizada con éxito en GitHub!"
-
-      - name: 🚀 11. Subir Artefacto Completo a GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
-          path: wrapper.tzst
-          retention-days: 7
+          echo "-> ¡La rama 'fusion' ha sido recreada y actualizada con éxito en GitHub sin compilar!"
