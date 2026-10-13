@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para XCB headers en src/loader/ y dependencias
+      - name: 🛠️ 3.5. Parche quirúrgico para limpiar todas las cabeceras XCB en loader_dri_helper_screen.h
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build y cabeceras de XCB..."
+          echo "Ejecutando script Python para parchear meson.build y cabeceras XCB en loader..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -131,12 +131,17 @@ jobs:
           python3 -c "
           path = 'src/loader/loader_dri_helper_screen.h'
           with open(path, 'r') as f:
-              content = f.read()
-          content = content.replace('#include <xcb/dri3.h>', '// #include <xcb/dri3.h> // Bypassed for Android')
+              lines = f.readlines()
+          new_lines = []
+          for line in lines:
+              if '#include <xcb/' in line:
+                  new_lines.append('// ' + line + ' // Bypassed for Android\n')
+              else:
+                  new_lines.append(line)
           with open(path, 'w') as f:
-              f.write(content)
+              f.writelines(new_lines)
           "
-          echo "-> src/loader/loader_dri_helper_screen.h parcheado con éxito."
+          echo "-> Todas las inclusiones xcb/ en loader_dri_helper_screen.h fueron neutralizadas."
 
       - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
         run: |
