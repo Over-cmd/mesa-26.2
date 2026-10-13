@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (eliminación total de find_library('atomic'))
+      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional libdl y atómicos)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -88,9 +88,12 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Neutralizar de forma radical cualquier intento de buscar atomic en meson.build
+          # Neutralizar find_library('atomic') y find_library('dl') para Android de forma segura
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = re.sub(r"dep_atomic\s*=.*", "dep_atomic = []", content)
+          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
+          content = content.replace("dep_dl = cc.find_library('dl', required : true)", "dep_dl = []")
+          content = content.replace("dep_dl = cc.find_library('dl', required : false)", "dep_dl = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
@@ -204,8 +207,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm', '-ldl']
-          cpp_link_args = ['-ldrm', '-ldl']
+          c_link_args = ['-ldrm']
+          cpp_link_args = ['-ldrm']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
