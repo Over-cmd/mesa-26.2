@@ -105,18 +105,15 @@ jobs:
           chmod +x build_inside.sh
           echo "-> build_inside.sh generado correctamente."
 
-      - name: ⚙️ 4. Set up Docker Buildx
-        uses: actions/setup-buildx-action@v3
-
-      - name: 🐳 5. Construir Contenedor Gráfico Local con Panfrost
+      - name: 🐳 4. Construir Contenedor Gráfico Local con Panfrost
         run: |
           docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
 
-      - name: 🛠️ 6. Ejecutar Compilador Local Unificado
+      - name: 🛠️ 5. Ejecutar Compilador Local Unificado
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
 
-      - name: 📦 7. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
+      - name: 📦 6. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
         run: |
           WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
           
@@ -147,9 +144,4 @@ jobs:
             exit 1
           fi
 
-      - name: 🚀 8. Subir Artefacto Completo a GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
-          path: wrapper.tzst
-          retention-days: 7
+      - name: 🚀 7. Subir Arte
