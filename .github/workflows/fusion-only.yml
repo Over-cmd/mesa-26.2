@@ -42,19 +42,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para prog_mesa_clc y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico seguro para prog_mesa_clc y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python para inyectar prog_mesa_clc simulado y dependencias opcionales..."
+          echo "Ejecutando script Python para inyectar prog_mesa_clc después de project()..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Definir prog_mesa_clc y prog_vtn_bindgen2 globalmente si no se encuentran para evitar errores en submódulos de Panfrost
+          # 1. Inyectar los stubs de CLC justo después del bloque project(...) para respetar las reglas de Meson
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
           """
-          content = clc_stub + content
+          content = content.replace("project(\n  'mesa',", project_replacement := f"project(\n  'mesa',\n{clc_stub}")
 
           # 2. Hacer que libclc sea opcional
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
@@ -74,7 +74,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: stubs de prog_mesa_clc añadidos correctamente.')
+          print('-> meson.build adaptado: stubs de prog_mesa_clc insertados de forma válida.')
           EOF
 
           python3 patch_meson.py
