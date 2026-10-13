@@ -1,133 +1,155 @@
-name: Recrear Rama Fusion Limpia (Solo Merge e Inyección)
+name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
 
 on:
-  workflow_dispatch: # Se ejecuta manualmente desde la pestaña Actions en GitHub
+  push:
+    branches:
+      - fusion
+  workflow_dispatch:
 
 jobs:
-  create-clean-fusion:
+  build-mesa26-fusion:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Necesario para hacer push y forzar la actualización de la rama fusion
+    env:
+      BUILD_DIR: build
 
     steps:
-      - name: 📥 1. Checkout Mesa 26.2 (Base Limpia desde Main o Master)
+      - name: 📥 1. Checkout Rama Fusion (Mesa 26.2 + Wrapper Limpio)
         uses: actions/checkout@v4
         with:
-          repository: Over-cmd/mesa-26.2
-          ref: main # Cambia a 'master' si tu base limpia está ahí
+          ref: fusion
+          submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Checkout GameNative Wrapper (Rama wrapper-25 con Submódulos)
+      - name: 📥 2. Recuperar scripts de compilación faltantes del Wrapper
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
           ref: wrapper-25
-          submodules: 'recursive'
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🔄 3. Inyección Selectiva e Infraestructura (Núcleo Intacto)
+      - name: 🧩 2.1. Inyectar build_inside.sh si no existe
         run: |
-          echo "=========================================================="
-          echo " 🧬 INYECTANDO WRAPPER SOBRE NÚCLEO INTACTO DE MESA 26.2  "
-          echo "=========================================================="
-          
-          # Crear la ruta del wrapper si no existe
-          mkdir -p src/vulkan/wrapper
-          
-          # Copiar EXCLUSIVAMENTE el contenido del wrapper de la rama wrapper-25
-          if [ -d "temp-wrapper/src/vulkan/wrapper" ]; then
-              cp -r temp-wrapper/src/vulkan/wrapper/* src/vulkan/wrapper/
-              echo "-> Directorio 'src/vulkan/wrapper' inyectado con éxito."
+          if [ -f "temp-wrapper/build_inside.sh" ]; then
+              cp temp-wrapper/build_inside.sh .
+              chmod +x build_inside.sh
+              echo "-> build_inside.sh restaurado y con permisos de ejecución."
           fi
-
-          # Copiar subproyectos (adrenotools)
-          if [ -d "temp-wrapper/subprojects" ]; then
-              mkdir -p subprojects
-              cp -r temp-wrapper/subprojects/* subprojects/
-              echo "-> Subproyectos integrados."
-          fi
-
-          # Copiar el Dockerfile.build raíz por si se usa en el futuro
-          if [ -f "temp-wrapper/Dockerfile.build" ]; then
-              cp temp-wrapper/Dockerfile.build .
-              echo "-> Dockerfile.build copiado."
-          fi
-
-          # Copiar meson_options.txt del wrapper si existe
-          if [ -f "temp-wrapper/meson_options.txt" ]; then
-              cp temp-wrapper/meson_options.txt .
-              echo "-> meson_options.txt copiado."
-          fi
-
-          # Limpiar directorio temporal
           rm -rf temp-wrapper
 
-      - name: 🛠️ 4. Resolver Opciones de Meson, Purificar Entorno y Stubs
+      - name: ⚙️ 3. Instalar Herramientas de Compresión y patchelf
         run: |
-          echo "=========================================================="
-          echo " 🧬 APLICANDO PARCHES DE PURIFICACIÓN Y STUBS             "
-          echo "=========================================================="
+          sudo apt-get update
+          sudo apt-get install -y zstd patchelf python3 bc
+
+      - name: 🛠️ 3.5. Parche limpio y seguro solo para libclc y KMS/DRM
+        run: |
+          echo "Ejecutando script Python de parcheo seguro..."
+          cat << 'EOF' > patch_meson.py
+          with open('meson.build', 'r') as f:
+              content = f.read()
+
+          # 1. Hacer que libclc sea opcional (required : false) de forma segura
+          content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
+          content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
+
+          # 2. Desactivar el bloque KMS/DRM que exige libdrm
+          content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
+
+          with open('meson.build', 'w') as f:
+              f.write(content)
+          print('-> meson.build parcheado limpiamente.')
+          EOF
+
+          python3 patch_meson.py
+          rm patch_meson.py
+
+      - name: 🛠️ 3.6. build_inside.sh sin flags inválidos de Meson
+        run: |
+          echo "Generando build_inside.sh optimizado para Mesa 26.2..."
           
-          # Resolver conflicto de opciones de Meson si existiera
-          if [ -f "meson_options.txt" ]; then
-              if [ -f "meson.options" ]; then
-                  cat meson_options.txt >> meson.options
-                  rm meson_options.txt
-              else
-                  mv meson_options.txt meson.options
-              fi
+          cat << 'EOF' > build_inside.sh
+          #!/bin/bash
+          set -e
+          
+          BUILD_DIR="${1:-build}"
+          
+          echo "Limpiando directorios de compilación previos..."
+          rm -rf "$BUILD_DIR"
+          
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile)..."
+          
+          CROSS_FILE=""
+          if [ -f "android-aarch64.txt" ]; then
+              CROSS_FILE="--cross-file android-aarch64.txt"
           fi
           
-          TARGET_C="src/vulkan/wrapper/wrapper_device.c"
-          if [ -f "$TARGET_C" ]; then
-              sed -i 's|/data/data/app.gamenative/files/imagefs/usr/tmp/|/tmp/|g' "$TARGET_C"
-              echo "-> Parche de inodo temporal aplicado."
-          fi
+          meson setup "$BUILD_DIR" \
+              --prefix=/usr \
+              --libdir=lib \
+              --buildtype=release \
+              -Dplatforms=x11,wayland \
+              -Dllvm=disabled \
+              -Dshared-llvm=disabled \
+              -Dmesa-clc=auto \
+              -Dgallium-opencl=disabled \
+              -Dvideo-codecs="" \
+              -Dgallium-drivers=panfrost \
+              -Dvulkan-drivers=panfrost,wrapper \
+              $CROSS_FILE
+              
+          echo "Compilando con Meson..."
+          meson compile -C "$BUILD_DIR"
+          EOF
           
-          ANDROID_MESA_C="src/vulkan/runtime/vk_android.c"
-          if [ -f "$ANDROID_MESA_C" ]; then
-              echo "/* Vaciado por el Workflow para evitar redefiniciones con adrenotools */" > "$ANDROID_MESA_C"
-          fi
+          chmod +x build_inside.sh
+          echo "-> build_inside.sh generado correctamente."
+
+      - name: ⚙️ 4. Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: 🐳 5. Construir Contenedor Gráfico Local con Panfrost
+        run: |
+          docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
+
+      - name: 🛠️ 6. Ejecutar Compilador Local Unificado
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
+
+      - name: 📦 7. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
+        run: |
+          WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
           
-          PANVK_ANDROID_C="src/panfrost/vulkan/panvk_android.c"
-          if [ -f "$PANVK_ANDROID_C" ]; then
-              sed -i '1i #include <string.h>' "$PANVK_ANDROID_C"
-          fi
-          
-          LIBSYNC_H="src/util/libsync.h"
-          if [ -f "$LIBSYNC_H" ]; then
-              echo -e "#ifndef MESA_LIBSYNC_H_WRAPPER\n#define MESA_LIBSYNC_H_WRAPPER\n#include <sync/sync.h>\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\nint sync_valid_fd(int fd);\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n#endif" > "$LIBSYNC_H"
-          fi
-          
-          DRI_TARGET_C="src/gallium/targets/dri/dri_target.c"
-          if [ -f "$DRI_TARGET_C" ]; then
-              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_accumulate(const char *name, int *fd1, int fd2) { return 0; }\nvoid validate_fence_fd(int fd) { return; }" >> "$DRI_TARGET_C"
-          fi
-          
-          PANVK_INSTANCE_C="src/panfrost/vulkan/panvk_instance.c"
-          if [ -f "$PANVK_INSTANCE_C" ]; then
-              echo -e "\n/* Prototipos */\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n/* Cuerpos */\nint sync_wait(int fd, int timeout) { return 0; }\nint sync_merge(const char *name, int fd1, int fd2) { return 0; }" >> "$PANVK_INSTANCE_C"
-          fi
-          
-          EGL_API_C="src/egl/main/eglapi.c"
-          if [ -f "$EGL_API_C" ]; then
-              echo -e "\nint sync_valid_fd(int fd);\nint sync_valid_fd(int fd) { return fd >= 0; }" >> "$EGL_API_C"
+          if [ -f "$WRAPPER_SO" ]; then
+            echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
+            rm -rf final_pkg
+            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
+            
+            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            # REGLA DE COMODINES DE ADRENOTOOLS
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
+            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            # MANIFIESTO ICD
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
+            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
+          else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
+            exit 1
           fi
 
-      - name: 🚀 5. Actualizar la Rama 'fusion' Remota de forma Limpia
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Crear una rama huérfana temporal limpia con el código inyectado y parcheado
-          git checkout --orphan fusion-temp
-          git add -A
-          git commit -m "Recreación limpia de la rama fusion: Mesa 26.2 + Wrapper inyectado selectivamente (Sin compilar)"
-          
-          # Reemplazar por completo la rama fusion remota con esta versión impoluta
-          git branch -D fusion || true
-          git branch -m fusion
-          git push origin fusion --force
-          
-          echo "-> ¡La rama 'fusion' ha sido recreada y actualizada con éxito en GitHub sin compilar!"
+      - name: 🚀 8. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
