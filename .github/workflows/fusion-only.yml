@@ -20,7 +20,7 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Recuperar scripts y cross-files del Wrapper
+      - name: 📥 2. Recuperar scripts y cross-files del Wrapper (Wrapper 25)
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
@@ -28,13 +28,26 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Inyectar scripts y archivos del Wrapper
+      - name: 🧩 2.1. Inyectar y rescatar cabeceras, stubs y librerías de Android del Wrapper
         run: |
           if [ -d "temp-wrapper" ]; then
+              # Copiar todo el contenido del wrapper al workspace principal
               cp -av temp-wrapper/* . || true
               cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
-              echo "-> Archivos del wrapper inyectados correctamente."
+              echo "-> Archivos y recursos del wrapper-25 inyectados correctamente."
           fi
+
+          # Crear directorios de soporte si el wrapper no los trae en la raíz
+          mkdir -p include lib_dummy
+
+          # Buscar y recopilar cualquier archivo .so, .a o cabeceras que el wrapper provea para Android
+          echo "Buscando librerías y stubs nativos en el wrapper inyectado..."
+          find . -name "*.so" -o -name "*.a" || true
+
+          # Si el wrapper provee stubs o librerías, las unificamos en lib_dummy
+          find . -name "libandroid.so" -o -name "libdl.so" -o -name "liblog.so" -exec cp -v {} lib_dummy/ \; 2>/dev/null || true
+
+          # Limpiar directorio temporal del wrapper para dejar la raíz limpia para Mesa
           rm -rf temp-wrapper
 
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
@@ -42,12 +55,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras y parchear meson.build principal
+      - name: 🛠️ 3.5. Ajustar solo lo estrictamente necesario en meson.build principal
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal..."
+          echo "Ejecutando script Python para adaptar meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -113,7 +126,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado.')
+          print('-> meson.build principal adaptado.')
           EOF
 
           python3 patch_meson.py
@@ -154,9 +167,9 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras integradas en include/ con éxito."
+          echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh forzando libadrenotools y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh integrando las librerías del Wrapper en el Sysroot del NDK
         run: |
           echo "Generando build_inside.sh..."
           
@@ -199,6 +212,13 @@ jobs:
           echo "-> Clang encontrado en: $CLANG_PATH"
           echo "-> Toolchain bin: $TOOLCHAIN_BIN"
           
+          # Inyectar todas las librerías rescatadas del wrapper (libandroid, libdl, etc.) en el sysroot del NDK
+          SYSROOT_LIB_DIR=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
+          if [ -d "$SYSROOT_LIB_DIR" ] && [ -d "/workspace/lib_dummy" ]; then
+              cp -v /workspace/lib_dummy/*.so "$SYSROOT_LIB_DIR/" 2>/dev/null || true
+              echo "-> Librerías del wrapper inyectadas en el sysroot del NDK."
+          fi
+          
           cat << EOT > android-aarch64.txt
           [binaries]
           c = '${TOOLCHAIN_BIN}/aarch64-linux-android29-clang'
@@ -216,68 +236,11 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm', '-latomic']
-          cpp_link_args = ['-ldrm', '-latomic']
+          c_link_args = ['-ldrm', '-latomic', '-ldl']
+          cpp_link_args = ['-ldrm', '-latomic', '-ldl']
           EOT
-
-          echo "Ejecutando setup preliminar para extraer submódulos..."
-          meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
           
-          # Sobrescribir de forma segura las líneas de dependencias estrictas en subprojects/libadrenotools/meson.build
-          if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              echo "Reescribiendo subprojects/libadrenotools/meson.build para hacer opcional la librería android..."
-              python3 -c "
-              path = 'subprojects/libadrenotools/meson.build'
-              with open(path, 'r') as f:
-                  lines = f.readlines()
-              new_lines = []
-              for line in lines:
-                  if 'find_library(\\'android\\')' in line or 'find_library(\"android\")' in line or \"find_library('android')\" in line:
-                      new_lines.append(\"libandroid_dep = cpp.find_library('android', required : false)\\n\")
-                  elif 'find_library(\\'log\\')' in line or 'find_library(\"log\")' in line or \"find_library('log')\" in line:
-                      new_lines.append(\"liblog_dep = c.find_library('log', required : false)\\n\")
-                  else:
-                      new_lines.append(line)
-              with open(path, 'w') as f:
-                  f.writelines(new_lines)
-              print('-> subprojects/libadrenotools/meson.build reescrito con éxito.')
-              "
-          fi
-
-          # Neutralización recursiva general por seguridad
-          python3 -c "
-          import os, re
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if file == 'meson.build':
-                      path = os.path.join(root, file)
-                      with open(path, 'r') as f:
-                          content = f.read()
-                      
-                      modified = [False]
-                      for lib in ['android', 'atomic', 'dl', 'rt', 'log']:
-                          pattern = rf'((?:cc\.|cpp\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
-                          def repl(match):
-                              modified[0] = True
-                              prefix = match.group(1)
-                              args = match.group(2)
-                              if 'required' in args:
-                                  args = re.sub(r'required\s*:\s*(?:true|1)', 'required : false', args)
-                              else:
-                                  if args.strip() == ')':
-                                      args = ', required : false)'
-                                  else:
-                                      args = ', required : false' + args
-                              return prefix + args
-                          content = re.sub(pattern, repl, content, flags=re.DOTALL)
-                      
-                      if modified[0]:
-                          with open(path, 'w') as f:
-                              f.write(content)
-          "
-
-          echo "Reiniciando setup definitivo de Meson..."
-          rm -rf "$BUILD_DIR"
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
