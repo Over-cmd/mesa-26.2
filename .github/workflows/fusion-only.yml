@@ -42,11 +42,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para neutralizar src/compiler/clc/meson.build y dependencias
+      - name: 🛠️ 3.5. Parche quirúrgico para neutralizar src/compiler/clc/meson.build y src/egl/meson.build
         run: |
           echo "Neutralizando src/compiler/clc/meson.build para evitar dependencias de LLVM/libclc..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
-          echo "-> src/compiler/clc/meson.build deshabilitado con éxito."
 
           echo "Ejecutando script Python para parchear meson.build principal..."
           cat << 'EOF' > patch_meson.py
@@ -120,6 +119,15 @@ jobs:
 
           python3 patch_meson.py
           rm patch_meson.py
+
+          python3 -c "
+          with open('src/egl/meson.build', 'r') as f:
+              content = f.read()
+          content = content.replace('configuration: {\'library_path\' : libegl.full_path()}', 'configuration: {\'library_path\' : \'libEGL.so\'}')
+          with open('src/egl/meson.build', 'w') as f:
+              f.write(content)
+          "
+          echo "-> src/egl/meson.build parcheado correctamente."
 
       - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
         run: |
