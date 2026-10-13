@@ -42,29 +42,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche limpio y seguro solo para libclc y KMS/DRM
+      - name: 🛠️ 3.5. Parche quirúrgico definitivo para CLC, LLVM, KMS/DRM y libclc en meson.build
         run: |
-          echo "Ejecutando script Python de parcheo seguro..."
+          echo "Ejecutando script Python para neutralizar dependencias estrictas de LLVM..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Hacer que libclc sea opcional (required : false) de forma segura
+          # 1. Anular la exigencia de CLC requiriendo LLVM
+          content = content.replace("error_message : 'CLC requires LLVM'", "error_message : 'Bypassed LLVM requirement'")
+          content = content.replace("with_clc = get_option('mesa-clc') != 'auto'", "with_clc = false")
+
+          # 2. Hacer que libclc sea opcional (required : false)
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
 
-          # 2. Desactivar el bloque KMS/DRM que exige libdrm
+          # 3. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build parcheado limpiamente.')
+          print('-> meson.build saneado quirúrgicamente con éxito.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
 
-      - name: 🛠️ 3.6. build_inside.sh sin flags inválidos de Meson
+      - name: 🛠️ 3.6. build_inside.sh con configuración limpia para Android
         run: |
           echo "Generando build_inside.sh optimizado para Mesa 26.2..."
           
@@ -91,7 +95,7 @@ jobs:
               -Dplatforms=x11,wayland \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
-              -Dmesa-clc=auto \
+              -Dmesa-clc=disabled \
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
