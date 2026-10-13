@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para neutralizar src/compiler/clc/meson.build y src/egl/meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para XCB headers en src/loader/ y dependencias
         run: |
-          echo "Neutralizando src/compiler/clc/meson.build para evitar dependencias de LLVM/libclc..."
+          echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal..."
+          echo "Ejecutando script Python para parchear meson.build y cabeceras de XCB..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -114,7 +114,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado correctamente.')
+          print('-> meson.build principal parcheado.')
           EOF
 
           python3 patch_meson.py
@@ -127,7 +127,16 @@ jobs:
           with open('src/egl/meson.build', 'w') as f:
               f.write(content)
           "
-          echo "-> src/egl/meson.build parcheado correctamente."
+
+          python3 -c "
+          path = 'src/loader/loader_dri_helper_screen.h'
+          with open(path, 'r') as f:
+              content = f.read()
+          content = content.replace('#include <xcb/dri3.h>', '// #include <xcb/dri3.h> // Bypassed for Android')
+          with open(path, 'w') as f:
+              f.write(content)
+          "
+          echo "-> src/loader/loader_dri_helper_screen.h parcheado con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
         run: |
