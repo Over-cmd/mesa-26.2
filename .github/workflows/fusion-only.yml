@@ -37,12 +37,12 @@ jobs:
           fi
           rm -rf temp-wrapper
 
-      - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo XCB del Host
+      - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-render0-dev libxcb-shape0-dev || sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev
+          sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB directamente en las rutas de inclusión de Mesa
+      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB y DRM en las rutas de inclusión de Mesa
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -103,7 +103,7 @@ jobs:
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
+          content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend", required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
@@ -132,7 +132,16 @@ jobs:
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
           fi
-          echo "-> Cabeceras XCB integradas en include/xcb/."
+          
+          if [ -d "/usr/include/libdrm" ]; then
+              cp -r /usr/include/libdrm/* include/
+          fi
+          for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
+              if [ -f "/usr/include/$h" ]; then
+                  cp /usr/include/$h include/
+              fi
+          done
+          echo "-> Cabeceras XCB y DRM integradas en include/ con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh configurando opciones globales de CFLAGS
         run: |
