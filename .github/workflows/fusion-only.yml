@@ -42,16 +42,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico avanzado para neutralizar la asignación multilínea de libclc en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para neutralizar src/compiler/clc/meson.build y dependencias
         run: |
-          echo "Ejecutando script Python avanzado para neutralizar libclc..."
+          echo "Neutralizando src/compiler/clc/meson.build para evitar dependencias de LLVM/libclc..."
+          echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
+          echo "-> src/compiler/clc/meson.build deshabilitado con éxito."
+
+          echo "Ejecutando script Python para parchear meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
 
           with open('meson.build', 'r') as f:
               lines = f.readlines()
 
-          # 1. Comentar de forma segura cualquier bloque multilínea que defina dep_llvm
           new_lines = []
           skip_mode = False
           paren_count = 0
@@ -76,7 +79,6 @@ jobs:
 
           content = ''.join(new_lines)
 
-          # 2. Inyectar los stubs globales incluyendo libclc y clang_version_dir justo después de project_version
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
@@ -85,17 +87,13 @@ jobs:
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
-          # 3. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
           content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
 
-          # 4. Forzar de manera directa que la versión mayor de LLVM sea 0 si viene como 'unknown' o falla
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 5. Interceptar y neutralizar cualquier bloque de asignación o búsqueda de libclc multilínea
           content = re.sub(r"libclc\s*=\s*dependency\(\s*['\"]libclc['\"].*?\)", "libclc = disabler()", content, flags=re.DOTALL)
 
-          # 6. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
           def make_dep_optional_safely(text, lib_name):
               pattern = r"dependency\(\s*['\"]" + lib_name + r"['\"][^)]*\)"
               return re.sub(pattern, f"dependency('{lib_name}', required : false)", text, flags=re.DOTALL)
@@ -103,25 +101,21 @@ jobs:
           for dep in ['LLVMSPIRVLib', 'SPIRV-Tools', 'libclc']:
               content = make_dep_optional_safely(content, dep)
 
-          # 7. Hacer que libudev sea opcional
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          # 8. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 9. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 10. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: libclc neutralizado de forma segura.')
+          print('-> meson.build adaptado correctamente.')
           EOF
 
           python3 patch_meson.py
@@ -154,7 +148,6 @@ jobs:
               -Dplatforms=x11,wayland \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
-              -Dmesa-clc=disabled \
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
@@ -187,14 +180,12 @@ jobs:
             
             cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
             
-            # REGLA DE COMODINES DE ADRENOTOOLS
             cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
             chmod -R 755 final_pkg/usr/lib/
             
             patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
             find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
             
-            # MANIFIESTO ICD
             echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
             echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
             
