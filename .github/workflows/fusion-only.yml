@@ -144,4 +144,9 @@ jobs:
             exit 1
           fi
 
-      - name: 🚀 7. Subir Arte
+      - name: 🚀 7. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
