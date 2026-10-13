@@ -44,17 +44,17 @@ jobs:
 
       - name: 🛠️ 3.5. Parche quirúrgico seguro para prog_mesa_clc y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python para inyectar prog_mesa_clc después de project()..."
+          echo "Ejecutando script Python para inyectar prog_mesa_clc fuera del bloque project()..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Inyectar los stubs de CLC justo después del bloque project(...) para respetar las reglas de Meson
+          # 1. Inyectar los stubs de CLC justo después de que finalice el bloque project()
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
           """
-          content = content.replace("project(\n  'mesa',", project_replacement := f"project(\n  'mesa',\n{clc_stub}")
+          content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
           # 2. Hacer que libclc sea opcional
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
@@ -74,7 +74,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: stubs de prog_mesa_clc insertados de forma válida.')
+          print('-> meson.build adaptado: stubs colocados correctamente fuera de project().')
           EOF
 
           python3 patch_meson.py
@@ -136,33 +136,4 @@ jobs:
           if [ -f "$WRAPPER_SO" ]; then
             echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
             rm -rf final_pkg
-            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
-            
-            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
-            
-            # REGLA DE COMODINES DE ADRENOTOOLS
-            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
-            chmod -R 755 final_pkg/usr/lib/
-            
-            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
-            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
-            
-            # MANIFIESTO ICD
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
-            
-            sync && sleep 3
-            
-            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
-            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
-          else
-            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
-            exit 1
-          fi
-
-      - name: 🚀 7. Subir Artefacto Completo a GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
-          path: wrapper.tzst
-          retention-days: 7
+            mkdir -p final_pkg/usr/lib final_pkg
