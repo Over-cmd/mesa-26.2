@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh expandiendo variables del NDK y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh con autodetección robusta del NDK y configuración de Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -172,14 +172,30 @@ jobs:
           # Resolver conflicto entre meson.options y meson_options.txt
           rm -f meson_options.txt
           
-          echo "Configurando android-aarch64.txt con la ruta real del NDK: $ANDROID_NDK_HOME"
+          # Autodetectar NDK si ANDROID_NDK_HOME no está definida o está vacía
+          NDK_PATH="$ANDROID_NDK_HOME"
+          if [ -z "$NDK_PATH" ]; then
+              for candidate in /opt/android-ndk /usr/local/lib/android/sdk/ndk/* /root/android-sdk/ndk/* /home/runner/android/sdk/ndk/*; do
+                  if [ -d "$candidate" ]; then
+                      NDK_PATH="$candidate"
+                      break
+                  fi
+              done
+          fi
+          
+          if [ -z "$NDK_PATH" ] || [ ! -d "$NDK_PATH" ]; then
+              echo "❌ Error: No se pudo localizar el NDK de Android en el contenedor."
+              exit 1
+          fi
+          
+          echo "-> NDK detectado en: $NDK_PATH"
           
           cat << EOT > android-aarch64.txt
           [binaries]
-          c = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
-          cpp = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
-          ar = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          c = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
+          cpp = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
+          ar = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
           pkgconfig = 'pkg-config'
 
           [host_machine]
@@ -260,4 +276,3 @@ jobs:
           name: Bannerlator-Mesa26-Mali-Wrapper
           path: wrapper.tzst
           retention-days: 7
-          
