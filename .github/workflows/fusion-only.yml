@@ -199,4 +199,104 @@ jobs:
               for candidate in /opt/android-ndk /usr/local/lib/android/sdk/ndk/* /root/android-sdk/ndk/* /home/runner/android/sdk/ndk/* /android/ndk/*; do
                   if [ -d "$candidate" ] && [ -f "$candidate/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" ]; then
                       NDK_PATH="$candidate"
-                      CLANG_PATH="$candidate/toolchains/llvm/prebuilt/linux-
+                      CLANG_PATH="$candidate/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+                      break
+                  fi
+              done
+          fi
+          
+          if [ -z "$CLANG_PATH" ] || [ ! -f "$CLANG_PATH" ]; then
+              echo "❌ Error crítico: No se pudo localizar ningún compilador Clang de Android en el contenedor Docker."
+              exit 1
+          fi
+          
+          TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
+          echo "-> Clang encontrado en: $CLANG_PATH"
+          echo "-> Toolchain bin: $TOOLCHAIN_BIN"
+          
+          cat << EOT > android-aarch64.txt
+          [binaries]
+          c = '${TOOLCHAIN_BIN}/aarch64-linux-android29-clang'
+          cpp = '${TOOLCHAIN_BIN}/aarch64-linux-android29-clang++'
+          ar = '${TOOLCHAIN_BIN}/llvm-ar'
+          strip = '${TOOLCHAIN_BIN}/llvm-strip'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+
+          [built-in options]
+          c_args = ['-I/workspace/include']
+          cpp_args = ['-I/workspace/include']
+          c_link_args = ['-ldrm']
+          cpp_link_args = ['-ldrm']
+          EOT
+          
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
+          
+          meson setup "$BUILD_DIR" \
+              --cross-file android-aarch64.txt \
+              --prefix=/usr \
+              --libdir=lib \
+              --buildtype=release \
+              -Dplatforms=x11,wayland \
+              -Dllvm=disabled \
+              -Dshared-llvm=disabled \
+              -Dgallium-opencl=disabled \
+              -Dvideo-codecs="" \
+              -Dgallium-drivers=panfrost \
+              -Dvulkan-drivers=panfrost,wrapper
+              
+          echo "Compilando con Meson..."
+          meson compile -C "$BUILD_DIR"
+          EOF
+          
+          chmod +x build_inside.sh
+          echo "-> build_inside.sh generado correctamente."
+
+      - name: 🐳 4. Construir Contenedor Gráfico Local con Panfrost
+        run: |
+          docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
+
+      - name: 🛠️ 5. Ejecutar Compilador Local Unificado
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
+
+      - name: 📦 6. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
+        run: |
+          WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
+          
+          if [ -f "$WRAPPER_SO" ]; then
+            echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
+            rm -rf final_pkg
+            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
+            
+            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
+            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
+            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
+          else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
+            exit 1
+          fi
+
+      - name: 🚀 7. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
