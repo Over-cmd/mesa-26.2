@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para neutralizar la definición real de dep_llvm en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico multilínea para neutralizar dep_llvm en meson.build
         run: |
-          echo "Ejecutando script Python para interceptar y deshabilitar dep_llvm..."
+          echo "Ejecutando script Python con regex multilínea para deshabilitar dep_llvm..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -65,9 +65,8 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 4. Interceptar y reemplazar cualquier bloque de asignación de dep_llvm por un disabler seguro
-          content = re.sub(r"dep_llvm\s*=\s*dependency\('llvm'[^)]*\)", "dep_llvm = disabler()", content, flags=re.DOTALL)
-          content = re.sub(r'dep_llvm\s*=\s*dependency\("llvm"[^)]*\)', 'dep_llvm = disabler()', content, flags=re.DOTALL)
+          # 4. Interceptar y reemplazar el bloque multilínea completo de dep_llvm por un disabler seguro
+          content = re.sub(r"dep_llvm\s*=\s*dependency\(\s*['\"]llvm['\"].*?\)", "dep_llvm = disabler()", content, flags=re.DOTALL)
 
           # 5. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
           def make_dep_optional_safely(text, lib_name):
@@ -97,7 +96,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: dep_llvm interceptado y neutralizado con éxito.')
+          print('-> meson.build adaptado: bloque multilínea de dep_llvm neutralizado con éxito.')
           EOF
 
           python3 patch_meson.py
