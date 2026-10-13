@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras y parchear Atomic, DL y RT en meson.build
+      - name: 🛠️ 3.5. Extraer cabeceras y parchear Atomic, DL, RT y Android en meson.build
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal (Atomic, DL, RT, LLVM, etc.)..."
+          echo "Ejecutando script Python para parchear meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -117,6 +117,10 @@ jobs:
           content = content.replace("find_library('rt'", "find_library('rt', required : false")
           content = content.replace('find_library("rt"', 'find_library("rt", required : false')
 
+          content = re.sub(r"cc\.find_library\(\s*['\"]android['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = content.replace("find_library('android'", "find_library('android', required : false")
+          content = content.replace('find_library("android"', 'find_library("android", required : false')
+
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
@@ -125,11 +129,24 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado para Atomic, DL, RT y dependencias.')
+          print('-> meson.build principal parcheado.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
+
+          # Parchear también el meson.build de libadrenotools si existe para que 'android' sea opcional
+          if [ -f "subprojects/libadrenotools/meson.build" ]; then
+              python3 -c "
+              path = 'subprojects/libadrenotools/meson.build'
+              with open(path, 'r') as f:
+                  content = f.read()
+              content = content.replace(\"find_library('android'\", \"find_library('android', required : false\")
+              content = content.replace('find_library(\"android\"', 'find_library(\"android\", required : false')
+              with open(path, 'w') as f:
+                  f.write(content)
+              "
+          fi
 
           python3 -c "
           with open('src/egl/meson.build', 'r') as f:
@@ -166,7 +183,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
+          echo "-> Cabeceras y parches aplicados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh configurando Meson
         run: |
