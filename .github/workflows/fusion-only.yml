@@ -42,31 +42,54 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico multilínea para neutralizar dep_llvm en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico robusto para comentar dep_llvm y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python con regex multilínea para deshabilitar dep_llvm..."
+          echo "Ejecutando script Python robusto para neutralizar dep_llvm y dependencias..."
           cat << 'EOF' > patch_meson.py
           import re
 
           with open('meson.build', 'r') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # 1. Inyectar los stubs de CLC justo después de project_version
+          # 1. Comentar de forma segura cualquier bloque multilínea que defina dep_llvm
+          new_lines = []
+          skip_mode = False
+          paren_count = 0
+
+          for line in lines:
+              if not skip_mode and ('dep_llvm =' in line or 'dep_llvm=' in line):
+                  skip_mode = True
+                  paren_count = line.count('(') - line.count(')')
+                  new_lines.append('# [Bypassed by patch] ' + line)
+                  if paren_count <= 0 and '(' not in line:
+                      skip_mode = False
+                  continue
+              
+              if skip_mode:
+                  paren_count += line.count('(') - line.count(')')
+                  new_lines.append('# [Bypassed by patch] ' + line)
+                  if paren_count <= 0:
+                      skip_mode = False
+                  continue
+                  
+              new_lines.append(line)
+
+          content = ''.join(new_lines)
+
+          # 2. Inyectar los stubs globales de CLC y dep_llvm justo después de project_version
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
+          dep_llvm = disabler()
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
-          # 2. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
+          # 3. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
           content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
 
-          # 3. Forzar de manera directa que la versión mayor de LLVM sea 0 si viene como 'unknown' o falla
+          # 4. Forzar de manera directa que la versión mayor de LLVM sea 0 si viene como 'unknown' o falla
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
-
-          # 4. Interceptar y reemplazar el bloque multilínea completo de dep_llvm por un disabler seguro
-          content = re.sub(r"dep_llvm\s*=\s*dependency\(\s*['\"]llvm['\"].*?\)", "dep_llvm = disabler()", content, flags=re.DOTALL)
 
           # 5. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
           def make_dep_optional_safely(text, lib_name):
@@ -96,7 +119,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: bloque multilínea de dep_llvm neutralizado con éxito.')
+          print('-> meson.build adaptado: dep_llvm comentado de forma segura por bloques.')
           EOF
 
           python3 patch_meson.py
