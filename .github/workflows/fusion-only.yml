@@ -128,19 +128,18 @@ jobs:
                       with open(path, 'r') as f:
                           content = f.read()
                       
-                      modified = False
+                      modified = [False]
                       for lib in ['android', 'atomic', 'dl', 'rt']:
                           pattern = rf'find_library\(\s*[\'\"]{lib}[\'\"]([^\)]*?)\)'
                           def repl(match):
-                              nonlocal modified
                               args = match.group(1)
                               if 'required' not in args:
-                                  modified = True
+                                  modified[0] = True
                                   return f\"find_library('{lib}'{args}, required : false)\"
                               return match.group(0)
                           content = re.sub(pattern, repl, content)
                       
-                      if modified:
+                      if modified[0]:
                           with open(path, 'w') as f:
                               f.write(content)
                           print(f'-> Parcheado find_library en: {path}')
