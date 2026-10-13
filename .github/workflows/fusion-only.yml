@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras y parchear Atomic, DL, RT y Android en meson.build
+      - name: 🛠️ 3.5. Extraer cabeceras y parchear recursivamente librerías del sistema en meson.build
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -105,22 +105,6 @@ jobs:
 
           content = re.sub(r"dependency\(\s*['\"]wayland-egl-backend['\"].*?\)", "dependency('wayland-egl-backend', required : false)", content, flags=re.DOTALL)
 
-          content = re.sub(r"cc\.find_library\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = content.replace("find_library('atomic'", "find_library('atomic', required : false")
-          content = content.replace('find_library("atomic"', 'find_library("atomic", required : false')
-
-          content = re.sub(r"cc\.find_library\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = content.replace("find_library('dl'", "find_library('dl', required : false")
-          content = content.replace('find_library("dl"', 'find_library("dl", required : false')
-
-          content = re.sub(r"cc\.find_library\(\s*['\"]rt['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = content.replace("find_library('rt'", "find_library('rt', required : false")
-          content = content.replace('find_library("rt"', 'find_library("rt", required : false')
-
-          content = re.sub(r"cc\.find_library\(\s*['\"]android['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = content.replace("find_library('android'", "find_library('android', required : false")
-          content = content.replace('find_library("android"', 'find_library("android", required : false')
-
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
@@ -135,18 +119,32 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
-          # Parchear también el meson.build de libadrenotools si existe para que 'android' sea opcional
-          if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              python3 -c "
-              path = 'subprojects/libadrenotools/meson.build'
-              with open(path, 'r') as f:
-                  content = f.read()
-              content = content.replace(\"find_library('android'\", \"find_library('android', required : false\")
-              content = content.replace('find_library(\"android\"', 'find_library(\"android\", required : false')
-              with open(path, 'w') as f:
-                  f.write(content)
-              "
-          fi
+          python3 -c "
+          import os, re
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file == 'meson.build':
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f:
+                          content = f.read()
+                      
+                      modified = False
+                      for lib in ['android', 'atomic', 'dl', 'rt']:
+                          pattern = rf'find_library\(\s*[\'\"]{lib}[\'\"]([^\)]*?)\)'
+                          def repl(match):
+                              nonlocal modified
+                              args = match.group(1)
+                              if 'required' not in args:
+                                  modified = True
+                                  return f\"find_library('{lib}'{args}, required : false)\"
+                              return match.group(0)
+                          content = re.sub(pattern, repl, content)
+                      
+                      if modified:
+                          with open(path, 'w') as f:
+                              f.write(content)
+                          print(f'-> Parcheado find_library en: {path}')
+          "
 
           python3 -c "
           with open('src/egl/meson.build', 'r') as f:
@@ -183,7 +181,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras y parches aplicados con éxito."
+          echo "-> Cabeceras y parches recursivos aplicados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh configurando Meson
         run: |
