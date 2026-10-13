@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para Termux-X11, CLC, LLVM y dependencias XCB completas
+      - name: 🛠️ 3.5. Parche quirúrgico exacto para xcb-glx y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python para adaptar xcb-glx y dependencias gráficas..."
+          echo "Ejecutando script Python para parchear xcb-glx con precisión..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -61,17 +61,20 @@ jobs:
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 4. Hacer que todas las dependencias de XCB (xcb-randr, xcb-xfixes, xcb-glx, etc.) sean opcionales para Android
-          for dep in ['xcb-randr', 'xcb-xfixes', 'xcb-glx', 'xcb-shm', 'xcb-sync', 'xshmfence']:
-              content = content.replace(f"dependency('{dep}')", f"dependency('{dep}', required : false)")
-              content = content.replace(f'dependency("{dep}")', f'dependency("{dep}", required : false)')
+          # 4. Parche específico y seguro para xcb-glx y otras dependencias XCB de la línea 2311
+          content = content.replace("dependency('xcb-glx', version : dep_xcb_glx_version)", "dependency('xcb-glx', version : dep_xcb_glx_version, required : false)")
+          content = content.replace("dependency('xcb-randr')", "dependency('xcb-randr', required : false)")
+          content = content.replace("dependency('xcb-xfixes')", "dependency('xcb-xfixes', required : false)")
+          content = content.replace("dependency('xcb-shm')", "dependency('xcb-shm', required : false)")
+          content = content.replace("dependency('xcb-sync')", "dependency('xcb-sync', required : false)")
+          content = content.replace("dependency('xshmfence')", "dependency('xshmfence', required : false)")
 
           # 5. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: xcb-glx y dependencias XCB hechas opcionales.')
+          print('-> meson.build adaptado con precisión para xcb-glx.')
           EOF
 
           python3 patch_meson.py
