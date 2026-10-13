@@ -154,7 +154,7 @@ jobs:
               -Dplatforms=x11,wayland \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
-              -Dmesa-clc=auto \
+              -Dmesa-clc=disabled \
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
