@@ -42,39 +42,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico seguro para prog_mesa_clc y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para prog_mesa_clc y la validación CLC requiere LLVM en meson.build
         run: |
-          echo "Ejecutando script Python para inyectar prog_mesa_clc fuera del bloque project()..."
+          echo "Ejecutando script Python para neutralizar la exigencia de LLVM en CLC..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Inyectar los stubs de CLC justo después de que finalice el bloque project()
+          # 1. Inyectar los stubs de CLC justo después de project_version
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
-          # 2. Hacer que libclc sea opcional
+          # 2. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
+          content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
+
+          # 3. Hacer que libclc sea opcional
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
 
-          # 3. Hacer que wayland-egl-backend sea opcional
+          # 4. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 4. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
+          # 5. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 5. Desactivar el bloque KMS/DRM que exige libdrm
+          # 6. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: stubs colocados correctamente fuera de project().')
+          print('-> meson.build adaptado: validación CLC requiere LLVM neutralizada.')
           EOF
 
           python3 patch_meson.py
@@ -136,4 +139,33 @@ jobs:
           if [ -f "$WRAPPER_SO" ]; then
             echo "-> [Host] ¡Éxito! Estructurando tu paquete original compatible de producción..."
             rm -rf final_pkg
-            mkdir -p final_pkg/usr/lib final_pkg
+            mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
+            
+            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            # REGLA DE COMODINES DE ADRENOTOOLS
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
+            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            # MANIFIESTO ICD
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
+            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
+          else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
+            exit 1
+          fi
+
+      - name: 🚀 7. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
