@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico robusto para clang_version_dir, dep_llvm y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para libclc disabler global en meson.build
         run: |
-          echo "Ejecutando script Python robusto para inyectar clang_version_dir y neutralizar dependencias..."
+          echo "Ejecutando script Python para inyectar libclc como disabler global..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -76,12 +76,13 @@ jobs:
 
           content = ''.join(new_lines)
 
-          # 2. Inyectar los stubs globales incluyendo clang_version_dir justo después de project_version
+          # 2. Inyectar los stubs globales incluyendo libclc y clang_version_dir justo después de project_version
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
           dep_llvm = disabler()
           clang_version_dir = '0'
+          libclc = disabler()
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
@@ -100,9 +101,7 @@ jobs:
           for dep in ['LLVMSPIRVLib', 'SPIRV-Tools']:
               content = make_dep_optional_safely(content, dep)
 
-          # 6. Hacer que libclc y libudev sean opcionales
-          content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
-          content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
+          # 6. Hacer que libudev sea opcional
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
@@ -120,7 +119,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: clang_version_dir inyectado correctamente.')
+          print('-> meson.build adaptado: libclc establecido como disabler global.')
           EOF
 
           python3 patch_meson.py
