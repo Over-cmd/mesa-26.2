@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico directo para la versión de LLVM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para LLVMSPIRVLib y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python para parchear directamente la línea de versión de LLVM..."
+          echo "Ejecutando script Python para parchear LLVMSPIRVLib..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -63,27 +63,31 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 4. Hacer que libclc y libudev sean opcionales
+          # 4. Hacer que LLVMSPIRVLib sea opcional
+          content = content.replace("dependency('LLVMSPIRVLib'", "dependency('LLVMSPIRVLib', required : false")
+          content = content.replace('dependency("LLVMSPIRVLib"', 'dependency("LLVMSPIRVLib", required : false')
+
+          # 5. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          # 5. Hacer que wayland-egl-backend sea opcional
+          # 6. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 6. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
+          # 7. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 7. Desactivar el bloque KMS/DRM que exige libdrm
+          # 8. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: parche directo sobre to_int() aplicado.')
+          print('-> meson.build adaptado: LLVMSPIRVLib hecho opcional.')
           EOF
 
           python3 patch_meson.py
@@ -163,15 +167,4 @@ jobs:
             sync && sleep 3
             
             cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
-            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
-          else
-            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
-            exit 1
-          fi
-
-      - name: 🚀 7. Subir Artefacto Completo a GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
-          path: wrapper.tzst
-          retention-days: 7
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado
