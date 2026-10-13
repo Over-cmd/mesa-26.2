@@ -46,7 +46,7 @@ jobs:
         run: |
           echo "Ejecutando script Python para proteger la conversión a entero..."
           cat << 'EOF' > patch_meson.py
-          with open('meson.build', 'r'] as f:
+          with open('meson.build', 'r') as f:
               content = f.read()
 
           # 1. Neutralizar exclusivamente la línea de error de LLVM para CLC
