@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh neutralizando dependencias de sistema y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh extrayendo subproyectos y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -171,57 +171,6 @@ jobs:
           
           # Resolver conflicto entre meson.options y meson_options.txt
           rm -f meson_options.txt
-          
-          # Parchear subprojects/libadrenotools internamente
-          if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              echo "Parcheando subprojects/libadrenotools/meson.build internamente..."
-              python3 -c "
-              path = 'subprojects/libadrenotools/meson.build'
-              with open(path, 'r') as f:
-                  content = f.read()
-              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
-              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
-              with open(path, 'w') as f:
-                  f.write(content)
-              "
-          fi
-          
-          # Neutralizar de forma recursiva todas las búsquedas estrictas de librerías del sistema en meson.build
-          if [ -f "meson.build" ]; then
-              echo "Neutralizando dependencias estrictas en meson.build principal..."
-              python3 -c "
-              import os, re
-              for root, dirs, files in os.walk('.'):
-                  for file in files:
-                      if file == 'meson.build':
-                          path = os.path.join(root, file)
-                          with open(path, 'r') as f:
-                              content = f.read()
-                          
-                          modified = [False]
-                          for lib in ['atomic', 'dl', 'rt', 'android', 'log']:
-                              # Reemplazar cc.find_library('lib') o find_library('lib') por disabler o requerido falso
-                              pattern = rf'((?:cc\.|cpp\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
-                              def repl(match):
-                                  modified[0] = True
-                                  prefix = match.group(1)
-                                  args = match.group(2)
-                                  if 'required' in args:
-                                      args = re.sub(r'required\s*:\s*(?:true|1)', 'required : false', args)
-                                  else:
-                                      if args.strip() == ')':
-                                          args = ', required : false)'
-                                      else:
-                                          args = ', required : false' + args
-                                  return prefix + args
-                              content = re.sub(pattern, repl, content, flags=re.DOTALL)
-                          
-                          if modified[0]:
-                              with open(path, 'w') as f:
-                                  f.write(content)
-                              print(f'-> Parcheado find_library en: {path}')
-              "
-          fi
           
           CLANG_PATH=""
           NDK_PATH=""
@@ -270,8 +219,61 @@ jobs:
           c_link_args = ['-ldrm', '-latomic']
           cpp_link_args = ['-ldrm', '-latomic']
           EOT
+
+          echo "Ejecutando setup preliminar para forzar la extracción de subproyectos (libadrenotools)..."
+          meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
+          # Ahora que subprojects/libadrenotools ha sido extraído por Meson, lo parcheamos quirúrgicamente
+          if [ -f "subprojects/libadrenotools/meson.build" ]; then
+              echo "Parcheando subprojects/libadrenotools/meson.build extraído..."
+              python3 -c "
+              path = 'subprojects/libadrenotools/meson.build'
+              with open(path, 'r') as f:
+                  content = f.read()
+              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
+              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
+              with open(path, 'w') as f:
+                  f.write(content)
+              print('-> libadrenotools parcheado correctamente.')
+              "
+          fi
+
+          # Neutralizar dependencias estrictas en todos los meson.build
+          echo "Neutralizando dependencias estrictas (atomic, dl, rt, android, log) de forma recursiva..."
+          python3 -c "
+          import os, re
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file == 'meson.build':
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f:
+                          content = f.read()
+                      
+                      modified = [False]
+                      for lib in ['atomic', 'dl', 'rt', 'android', 'log']:
+                          pattern = rf'((?:cc\.|cpp\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
+                          def repl(match):
+                              modified[0] = True
+                              prefix = match.group(1)
+                              args = match.group(2)
+                              if 'required' in args:
+                                  args = re.sub(r'required\s*:\s*(?:true|1)', 'required : false', args)
+                              else:
+                                  if args.strip() == ')':
+                                      args = ', required : false)'
+                                  else:
+                                      args = ', required : false' + args
+                              return prefix + args
+                          content = re.sub(pattern, repl, content, flags=re.DOTALL)
+                      
+                      if modified[0]:
+                          with open(path, 'w') as f:
+                              f.write(content)
+                          print(f'-> Parcheado find_library en: {path}')
+          "
+
+          echo "Reiniciando setup de Meson de forma limpia con los parches aplicados..."
+          rm -rf "$BUILD_DIR"
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
