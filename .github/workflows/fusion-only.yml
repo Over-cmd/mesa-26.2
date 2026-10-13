@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional libdl y atómicos)
+      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional librt, libdl y atómicos)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -88,12 +88,16 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Neutralizar find_library('atomic') y find_library('dl') para Android de forma segura
+          # Neutralizar find_library para atomic, dl y rt de forma segura en Android
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]rt['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_dl = cc.find_library('dl', required : true)", "dep_dl = []")
           content = content.replace("dep_dl = cc.find_library('dl', required : false)", "dep_dl = []")
+          content = content.replace("dep_rt = cc.find_library('rt', required : true)", "dep_rt = []")
+          content = content.replace("dep_rt = cc.find_library('rt', required : false)", "dep_rt = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
