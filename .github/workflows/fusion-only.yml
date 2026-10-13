@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh inyectando wrap de libadrenotools y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh forzando libadrenotools y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -220,28 +220,31 @@ jobs:
           cpp_link_args = ['-ldrm', '-latomic']
           EOT
 
-          echo "Ejecutando setup inicial para descargar subproyectos..."
+          echo "Ejecutando setup preliminar para extraer submódulos..."
           meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
-
-          # Si libadrenotools usa wrap file o subproject directory, forzamos parche radical o desactivación de require
-          if [ -d "subprojects/libadrenotools" ]; then
-              echo "Reemplazando líneas problemáticas en subprojects/libadrenotools/meson.build..."
+          
+          # Sobrescribir de forma segura las líneas de dependencias estrictas en subprojects/libadrenotools/meson.build
+          if [ -f "subprojects/libadrenotools/meson.build" ]; then
+              echo "Reescribiendo subprojects/libadrenotools/meson.build para hacer opcional la librería android..."
               python3 -c "
               path = 'subprojects/libadrenotools/meson.build'
               with open(path, 'r') as f:
-                  content = f.read()
-              # Reemplazar totalmente las líneas de find_library de android y log por versiones con required : false o deshabilitadas
-              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
-              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
-              content = content.replace(\"libandroid_dep = cpp.find_library('android')\", \"libandroid_dep = cpp.find_library('android', required : false)\")
-              content = content.replace(\"liblog_dep = c.find_library('log')\", \"liblog_dep = c.find_library('log', required : false)\")
+                  lines = f.readlines()
+              new_lines = []
+              for line in lines:
+                  if 'find_library(\\'android\\')' in line or 'find_library(\"android\")' in line or \"find_library('android')\" in line:
+                      new_lines.append(\"libandroid_dep = cpp.find_library('android', required : false)\\n\")
+                  elif 'find_library(\\'log\\')' in line or 'find_library(\"log\")' in line or \"find_library('log')\" in line:
+                      new_lines.append(\"liblog_dep = c.find_library('log', required : false)\\n\")
+                  else:
+                      new_lines.append(line)
               with open(path, 'w') as f:
-                  f.write(content)
-              print('-> libadrenotools parcheado con éxito.')
+                  f.writelines(new_lines)
+              print('-> subprojects/libadrenotools/meson.build reescrito con éxito.')
               "
           fi
 
-          echo "Neutralizando todas las dependencias estrictas de librerías del sistema en cualquier meson.build..."
+          # Neutralización recursiva general por seguridad
           python3 -c "
           import os, re
           for root, dirs, files in os.walk('.'):
@@ -271,7 +274,6 @@ jobs:
                       if modified[0]:
                           with open(path, 'w') as f:
                               f.write(content)
-                          print(f'-> Parcheado find_library en: {path}')
           "
 
           echo "Reiniciando setup definitivo de Meson..."
