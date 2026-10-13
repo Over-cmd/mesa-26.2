@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (corrección de atómicos)
+      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (bloque de atómicos balanceado)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -88,9 +88,8 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Reemplazo seguro y limpio para la comprobación de atómicos sin romper paréntesis
-          content = re.sub(r"dep_atomic\s*=\s*cc\.find_library\('.*?\n\s*\)", "dep_atomic = []", content, flags=re.DOTALL)
-          content = re.sub(r"dep_atomic\s*=\s*dependency\('.*?\n\s*\)", "dep_atomic = []", content, flags=re.DOTALL)
+          # Neutralizar de forma segura el bloque de atómicos completo desde 'if cc.compiles' hasta su 'endif'
+          content = re.sub(r"if\s+cc\.compiles\('''#include <stdint\.h>.*?endif", "dep_atomic = []", content, flags=re.DOTALL)
 
           with open('meson.build', 'w') as f:
               f.write(content)
@@ -189,8 +188,8 @@ jobs:
           
           cat << EOT > android-aarch64.txt
           [binaries]
-          c = '${TOOLCHAIN_BIN}/aarch64-linux-android29-clang'
-          cpp = '${TOOLCHAIN_BIN}/aarch64-linux-android29-clang++'
+          c = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang'
+          cpp = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang++'
           ar = '${TOOLCHAIN_BIN}/llvm-ar'
           strip = '${TOOLCHAIN_BIN}/llvm-strip'
           pkgconfig = 'pkg-config'
