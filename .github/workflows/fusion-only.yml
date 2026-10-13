@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh parcheando libadrenotools internamente y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh neutralizando Atomic y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -172,7 +172,7 @@ jobs:
           # Resolver conflicto entre meson.options y meson_options.txt
           rm -f meson_options.txt
           
-          # Parchear libadrenotools dentro del contenedor antes de configurar
+          # Parchear subprojects/libadrenotools internamente
           if [ -f "subprojects/libadrenotools/meson.build" ]; then
               echo "Parcheando subprojects/libadrenotools/meson.build internamente..."
               python3 -c "
@@ -183,7 +183,21 @@ jobs:
               content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
               with open(path, 'w') as f:
                   f.write(content)
-              print('-> libadrenotools parcheado correctamente.')
+              "
+          fi
+          
+          # Neutralizar la búsqueda estricta de atomic en el meson.build principal
+          if [ -f "meson.build" ]; then
+              echo "Neutralizando cc.find_library('atomic') en meson.build principal..."
+              python3 -c "
+              path = 'meson.build'
+              with open(path, 'r') as f:
+                  content = f.read()
+              content = content.replace(\"cc.find_library('atomic')\", \"disabler()\")
+              content = content.replace('cc.find_library(\"atomic\")', 'disabler()')
+              content = content.replace(\"find_library('atomic')\", \"find_library('atomic', required : false)\")
+              with open(path, 'w') as f:
+                  f.write(content)
               "
           fi
           
@@ -231,8 +245,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm']
-          cpp_link_args = ['-ldrm']
+          c_link_args = ['-ldrm', '-latomic']
+          cpp_link_args = ['-ldrm', '-latomic']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
