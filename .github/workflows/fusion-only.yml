@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico avanzado para anular tipos y funciones XCB en loader_dri_helper
+      - name: 🛠️ 3.5. Parche quirúrgico para X11/XCB stubs y dependencias
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build y types/structs de XCB..."
+          echo "Ejecutando script Python para parchear meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -128,32 +128,16 @@ jobs:
               f.write(content)
           "
 
-          python3 -c "
-          path = 'src/loader/loader_dri_helper_screen.h'
-          with open(path, 'r') as f:
-              content = f.read()
-          
-          stubs = '''
-          #ifndef XCB_TYPES_DEFINED
-          #define XCB_TYPES_DEFINED
-          typedef void xcb_connection_t;
-          typedef void xcb_screen_t;
-          typedef uint32_t xcb_randr_crtc_t;
-          typedef uint32_t xcb_timestamp_t;
-          typedef struct { uint32_t vtotal; uint32_t mode_flags; } xcb_randr_mode_info_t;
-          #define XCB_RANDR_MODE_FLAG_DOUBLE_SCAN 0
-          #define XCB_RANDR_MODE_FLAG_INTERLACE 0
-          #endif
-          '''
-          content = stubs + content
-          with open(path, 'w') as f:
-              f.write(content)
-          "
-          echo "-> Tipos de XCB simulados inyectados con éxito en loader_dri_helper_screen.h."
+          # Crear directorio dummy para cabeceras xcb faltantes y evitar errores fatales en el loader de X11
+          mkdir -p dummy_xcb/xcb
+          for h in dri3.h present.h xcb.h xproto.h randr.h xfixes.h shm.h sync.h; do
+              touch dummy_xcb/xcb/\$h
+          done
+          echo "-> Directorio dummy de XCB creado para satisfacer al cargador con X11 habilitado."
 
-      - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
+      - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland
         run: |
-          echo "Generando build_inside.sh optimizado para Termux-X11..."
+          echo "Generando build_inside.sh optimizado con x11 y wayland..."
           
           cat << 'EOF' > build_inside.sh
           #!/bin/bash
@@ -164,12 +148,16 @@ jobs:
           echo "Limpiando directorios de compilación previos..."
           rm -rf "$BUILD_DIR"
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile + Termux-X11)..."
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
           
           CROSS_FILE=""
           if [ -f "android-aarch64.txt" ]; then
               CROSS_FILE="--cross-file android-aarch64.txt"
           fi
+          
+          # Inyectar el directorio dummy_xcb en CFLAGS globales del cross-file o mediante variables de entorno de compilación
+          export CFLAGS="-I$(pwd)/dummy_xcb"
+          export CPPFLAGS="-I$(pwd)/dummy_xcb"
           
           meson setup "$BUILD_DIR" \
               --prefix=/usr \
