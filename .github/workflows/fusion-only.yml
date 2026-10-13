@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para libclc disabler global en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico avanzado para neutralizar la asignación multilínea de libclc en meson.build
         run: |
-          echo "Ejecutando script Python para inyectar libclc como disabler global..."
+          echo "Ejecutando script Python avanzado para neutralizar libclc..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -82,7 +82,6 @@ jobs:
           prog_vtn_bindgen2 = disabler()
           dep_llvm = disabler()
           clang_version_dir = '0'
-          libclc = disabler()
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
@@ -93,33 +92,36 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 5. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
+          # 5. Interceptar y neutralizar cualquier bloque de asignación o búsqueda de libclc multilínea
+          content = re.sub(r"libclc\s*=\s*dependency\(\s*['\"]libclc['\"].*?\)", "libclc = disabler()", content, flags=re.DOTALL)
+
+          # 6. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
           def make_dep_optional_safely(text, lib_name):
               pattern = r"dependency\(\s*['\"]" + lib_name + r"['\"][^)]*\)"
               return re.sub(pattern, f"dependency('{lib_name}', required : false)", text, flags=re.DOTALL)
 
-          for dep in ['LLVMSPIRVLib', 'SPIRV-Tools']:
+          for dep in ['LLVMSPIRVLib', 'SPIRV-Tools', 'libclc']:
               content = make_dep_optional_safely(content, dep)
 
-          # 6. Hacer que libudev sea opcional
+          # 7. Hacer que libudev sea opcional
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          # 7. Hacer que wayland-egl-backend sea opcional
+          # 8. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 8. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
+          # 9. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 9. Desactivar el bloque KMS/DRM que exige libdrm
+          # 10. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: libclc establecido como disabler global.')
+          print('-> meson.build adaptado: libclc neutralizado de forma segura.')
           EOF
 
           python3 patch_meson.py
