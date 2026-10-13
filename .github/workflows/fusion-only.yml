@@ -42,14 +42,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para desactivar CLC, LLVM y KMS/DRM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico definitivo para CLC, LLVM, Wayland-EGL y KMS/DRM en meson.build
         run: |
-          echo "Ejecutando script Python para anular with_clc y dependencias..."
+          echo "Ejecutando script Python para blindar meson.build..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Forzar with_clc a falso para evitar cualquier validación de LLVM asociada a CLC
+          # 1. Forzar with_clc a falso para evitar validaciones de LLVM
           content = content.replace("with_clc = get_option('mesa-clc') != 'auto'", "with_clc = false # [PATCHED]")
           content = content.replace("with_clc = with_gallium_rusticl", "with_clc = false # [PATCHED]")
 
@@ -57,18 +57,22 @@ jobs:
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
 
-          # 3. Desactivar el bloque KMS/DRM que exige libdrm
+          # 3. Hacer que wayland-egl-backend sea opcional (required : false) para evitar el fallo de EGL
+          content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
+          content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
+
+          # 4. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build saneado: with_clc desactivado con éxito.')
+          print('-> meson.build saneado: wayland-egl-backend y dependencias neutralizadas.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
 
-      - name: 🛠️ 3.6. build_inside.sh con configuración limpia para Android
+      - name: 🛠️ 3.6. build_inside.sh con plataformas limpias para Android
         run: |
           echo "Generando build_inside.sh optimizado para Mesa 26.2..."
           
@@ -92,7 +96,7 @@ jobs:
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
-              -Dplatforms=x11,wayland \
+              -Dplatforms=x11 \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
               -Dmesa-clc=auto \
