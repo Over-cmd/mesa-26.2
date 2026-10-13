@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para limpiar todas las cabeceras XCB en loader_dri_helper_screen.h
+      - name: 🛠️ 3.5. Parche quirúrgico avanzado para anular tipos y funciones XCB en loader_dri_helper
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build y cabeceras XCB en loader..."
+          echo "Ejecutando script Python para parchear meson.build y types/structs de XCB..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -131,17 +131,25 @@ jobs:
           python3 -c "
           path = 'src/loader/loader_dri_helper_screen.h'
           with open(path, 'r') as f:
-              lines = f.readlines()
-          new_lines = []
-          for line in lines:
-              if '#include <xcb/' in line:
-                  new_lines.append('// ' + line + ' // Bypassed for Android\n')
-              else:
-                  new_lines.append(line)
+              content = f.read()
+          
+          stubs = '''
+          #ifndef XCB_TYPES_DEFINED
+          #define XCB_TYPES_DEFINED
+          typedef void xcb_connection_t;
+          typedef void xcb_screen_t;
+          typedef uint32_t xcb_randr_crtc_t;
+          typedef uint32_t xcb_timestamp_t;
+          typedef struct { uint32_t vtotal; uint32_t mode_flags; } xcb_randr_mode_info_t;
+          #define XCB_RANDR_MODE_FLAG_DOUBLE_SCAN 0
+          #define XCB_RANDR_MODE_FLAG_INTERLACE 0
+          #endif
+          '''
+          content = stubs + content
           with open(path, 'w') as f:
-              f.writelines(new_lines)
+              f.write(content)
           "
-          echo "-> Todas las inclusiones xcb/ en loader_dri_helper_screen.h fueron neutralizadas."
+          echo "-> Tipos de XCB simulados inyectados con éxito en loader_dri_helper_screen.h."
 
       - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
         run: |
