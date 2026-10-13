@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico con expresiones regulares para LLVMSPIRVLib y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico con expresiones regulares para SPIRV-Tools y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python con regex para parchear LLVMSPIRVLib universalmente..."
+          echo "Ejecutando script Python con regex para parchear SPIRV-Tools y LLVMSPIRVLib..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -65,9 +65,10 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 4. Hacer que LLVMSPIRVLib sea opcional usando regex para capturar cualquier variante con argumentos
-          content = re.sub(r"dependency\(\s*'LLVMSPIRVLib'([^)]*)\)", r"dependency('LLVMSPIRVLib'\1, required : false)", content)
-          content = re.sub(r'dependency\(\s*"LLVMSPIRVLib"([^)]*)\)', r'dependency("LLVMSPIRVLib"\1, required : false)', content)
+          # 4. Hacer opcionales LLVMSPIRVLib y SPIRV-Tools utilizando regex para capturar cualquier variante con argumentos
+          for lib_name in ['LLVMSPIRVLib', 'SPIRV-Tools']:
+              content = re.sub(rf"dependency\(\s*'{lib_name}'([^)]*)\)", rf"dependency('{lib_name}'\1, required : false)", content)
+              content = re.sub(rf'dependency\(\s*"{lib_name}"([^)]*)\)', rf'dependency("{lib_name}"\1, required : false)', content)
 
           # 5. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
@@ -89,7 +90,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado mediante Regex: LLVMSPIRVLib blindado.')
+          print('-> meson.build adaptado mediante Regex: SPIRV-Tools y LLVMSPIRVLib blindados.')
           EOF
 
           python3 patch_meson.py
