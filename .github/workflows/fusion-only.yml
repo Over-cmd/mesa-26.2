@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para CLC, LLVM, Wayland-EGL y KMS/DRM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para Termux-X11, CLC, LLVM y dependencias XCB/Wayland
         run: |
-          echo "Ejecutando script Python para blindar meson.build..."
+          echo "Ejecutando script Python para adaptar meson.build a Termux-X11..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -57,24 +57,30 @@ jobs:
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
 
-          # 3. Hacer que wayland-egl-backend sea opcional (required : false) para evitar el fallo de EGL
+          # 3. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 4. Desactivar el bloque KMS/DRM que exige libdrm
+          # 4. Hacer que las dependencias de XCB (xcb-randr, xcb-xfixes, etc.) sean opcionales para Android
+          content = content.replace("dependency('xcb-randr')", "dependency('xcb-randr', required : false)")
+          content = content.replace("dependency('xcb-xfixes')", "dependency('xcb-xfixes', required : false)")
+          content = content.replace('dependency("xcb-randr")', 'dependency("xcb-randr", required : false)')
+          content = content.replace('dependency("xcb-xfixes")', 'dependency("xcb-xfixes", required : false)')
+
+          # 5. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build saneado: wayland-egl-backend y dependencias neutralizadas.')
+          print('-> meson.build adaptado para Termux-X11 con éxito.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
 
-      - name: 🛠️ 3.6. build_inside.sh con plataformas limpias para Android
+      - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland para Termux-X11
         run: |
-          echo "Generando build_inside.sh optimizado para Mesa 26.2..."
+          echo "Generando build_inside.sh optimizado para Termux-X11..."
           
           cat << 'EOF' > build_inside.sh
           #!/bin/bash
@@ -85,7 +91,7 @@ jobs:
           echo "Limpiando directorios de compilación previos..."
           rm -rf "$BUILD_DIR"
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile)..."
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile + Termux-X11)..."
           
           CROSS_FILE=""
           if [ -f "android-aarch64.txt" ]; then
@@ -96,7 +102,7 @@ jobs:
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
-              -Dplatforms=x11 \
+              -Dplatforms=x11,wayland \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
               -Dmesa-clc=auto \
