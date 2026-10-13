@@ -40,7 +40,7 @@ jobs:
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo XCB del Host
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd patchelf python3 bc libxcb-dri3-dev libxcb-present-dev libxcb-randr-dev libxcb-xfixes-dev libxcb-render-dev libxcb-shape-dev libx11-xcb-dev libxcb1-dev x11proto-dev
+          sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-render0-dev libxcb-shape0-dev || sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev
 
       - name: 🛠️ 3.5. Extraer cabeceras reales de XCB y preparar entorno local
         run: |
@@ -128,10 +128,13 @@ jobs:
               f.write(content)
           "
 
-          # Copiar cabeceras reales de XCB del sistema a dummy_xcb para que el cross-compiler las lea
           mkdir -p dummy_xcb
-          cp -r /usr/include/xcb dummy_xcb/
-          cp -r /usr/include/X11 dummy_xcb/ 2>/dev/null || true
+          if [ -d "/usr/include/xcb" ]; then
+              cp -r /usr/include/xcb dummy_xcb/
+          fi
+          if [ -d "/usr/include/X11" ]; then
+              cp -r /usr/include/X11 dummy_xcb/
+          fi
           echo "-> Cabeceras XCB copiadas al workspace local."
 
       - name: 🛠️ 3.6. build_inside.sh inyectando las cabeceras XCB en el cross-file
@@ -152,7 +155,6 @@ jobs:
           CROSS_FILE=""
           if [ -f "android-aarch64.txt" ]; then
               CROSS_FILE="--cross-file android-aarch64.txt"
-              # Inyectar la ruta de las cabeceras XCB locales directamente en el cross-file de Meson
               echo "c_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
               echo "cpp_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
           fi
