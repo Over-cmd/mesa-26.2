@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-render0-dev libxcb-shape0-dev || sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB y preparar entorno local
+      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB directamente en las rutas de inclusión de Mesa
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -128,16 +128,13 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p dummy_xcb
+          mkdir -p include/xcb
           if [ -d "/usr/include/xcb" ]; then
-              cp -r /usr/include/xcb dummy_xcb/
+              cp -r /usr/include/xcb/* include/xcb/
           fi
-          if [ -d "/usr/include/X11" ]; then
-              cp -r /usr/include/X11 dummy_xcb/
-          fi
-          echo "-> Cabeceras XCB copiadas al workspace local."
+          echo "-> Cabeceras XCB integradas en include/xcb/."
 
-      - name: 🛠️ 3.6. build_inside.sh inyectando dummy_xcb en android-aarch64.txt
+      - name: 🛠️ 3.6. build_inside.sh configurando opciones globales de CFLAGS
         run: |
           echo "Generando build_inside.sh..."
           
@@ -156,9 +153,9 @@ jobs:
           if [ -f "android-aarch64.txt" ]; then
               CROSS_FILE="--cross-file android-aarch64.txt"
               echo "" >> android-aarch64.txt
-              echo "[properties]" >> android-aarch64.txt
-              echo "c_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
-              echo "cpp_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
+              echo "[built-in options]" >> android-aarch64.txt
+              echo "c_args = ['-I/workspace/include']" >> android-aarch64.txt
+              echo "cpp_args = ['-I/workspace/include']" >> android-aarch64.txt
           fi
           
           meson setup "$BUILD_DIR" \
