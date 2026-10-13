@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras de XCB, DRM y Sync en las rutas de inclusión de Mesa
+      - name: 🛠️ 3.5. Extraer cabeceras de XCB, DRM, Sync y parchear Atomic en meson.build
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal..."
+          echo "Ejecutando script Python para parchear meson.build principal (Atomic, LLVM, etc.)..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -105,6 +105,10 @@ jobs:
 
           content = re.sub(r"dependency\(\s*['\"]wayland-egl-backend['\"].*?\)", "dependency('wayland-egl-backend', required : false)", content, flags=re.DOTALL)
 
+          content = re.sub(r"cc\.find_library\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = content.replace("find_library('atomic'", "find_library('atomic', required : false")
+          content = content.replace('find_library("atomic"', 'find_library("atomic", required : false')
+
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
@@ -113,7 +117,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado.')
+          print('-> meson.build principal parcheado para Atomic y dependencias.')
           EOF
 
           python3 patch_meson.py
@@ -156,7 +160,7 @@ jobs:
 
           echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh con soporte para -latomic y configuración de Meson
+      - name: 🛠️ 3.6. build_inside.sh configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -216,8 +220,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm', '-latomic']
-          cpp_link_args = ['-ldrm', '-latomic']
+          c_link_args = ['-ldrm']
+          cpp_link_args = ['-ldrm']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
