@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico exacto para xcb-glx y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para x11-xcb y dependencias gráficas en meson.build
         run: |
-          echo "Ejecutando script Python para parchear xcb-glx con precisión..."
+          echo "Ejecutando script Python para parchear x11-xcb..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -61,8 +61,10 @@ jobs:
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 4. Parche específico y seguro para xcb-glx y otras dependencias XCB de la línea 2311
+          # 4. Hacer opcionales xcb-glx, x11-xcb y demás dependencias gráficas de XCB
           content = content.replace("dependency('xcb-glx', version : dep_xcb_glx_version)", "dependency('xcb-glx', version : dep_xcb_glx_version, required : false)")
+          content = content.replace("dependency('x11-xcb')", "dependency('x11-xcb', required : false)")
+          content = content.replace('dependency("x11-xcb")', 'dependency("x11-xcb", required : false)')
           content = content.replace("dependency('xcb-randr')", "dependency('xcb-randr', required : false)")
           content = content.replace("dependency('xcb-xfixes')", "dependency('xcb-xfixes', required : false)")
           content = content.replace("dependency('xcb-shm')", "dependency('xcb-shm', required : false)")
@@ -74,7 +76,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado con precisión para xcb-glx.')
+          print('-> meson.build adaptado: x11-xcb hecho opcional.')
           EOF
 
           python3 patch_meson.py
