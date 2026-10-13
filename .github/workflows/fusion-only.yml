@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para libudev y conversión segura de versión LLVM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico definitivo para índices de versión LLVM en meson.build
         run: |
-          echo "Ejecutando script Python para blindar meson.build ante valores unknown de LLVM..."
+          echo "Ejecutando script Python para proteger los índices del array de versión de LLVM..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -59,9 +59,14 @@ jobs:
           # 2. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
           content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
 
-          # 3. Evitar el fallo al convertir 'unknown' a entero en la versión de LLVM
-          content = content.replace("chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()", "chosen_llvm_version_major = chosen_llvm_version_array[0] == 'unknown' ? 0 : chosen_llvm_version_array[0].to_int()")
-          content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array[1] == 'unknown' ? 0 : chosen_llvm_version_array[1].to_int()")
+          # 3. Proteger la extracción de versión mayor y menor para evitar errores de índice fuera de límites con 'unknown'
+          old_version_logic = """chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()
+          chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()"""
+
+          safe_version_logic = """chosen_llvm_version_major = chosen_llvm_version_array.length() > 0 and chosen_llvm_version_array[0] != 'unknown' ? chosen_llvm_version_array[0].to_int() : 0
+          chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0"""
+
+          content = content.replace(old_version_logic, safe_version_logic)
 
           # 4. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
@@ -83,7 +88,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: libudev y conversión segura de LLVM aplicadas.')
+          print('-> meson.build adaptado: protección de índices de LLVM aplicada con éxito.')
           EOF
 
           python3 patch_meson.py
