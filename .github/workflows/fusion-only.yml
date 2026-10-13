@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh buscando dinámicamente el NDK en el contenedor y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh con soporte para -latomic y configuración de Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -192,8 +192,6 @@ jobs:
           
           if [ -z "$CLANG_PATH" ] || [ ! -f "$CLANG_PATH" ]; then
               echo "❌ Error crítico: No se pudo localizar ningún compilador Clang de Android en el contenedor Docker."
-              echo "Listando directorios raíz para diagnóstico:"
-              ls -la /
               exit 1
           fi
           
@@ -218,8 +216,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm']
-          cpp_link_args = ['-ldrm']
+          c_link_args = ['-ldrm', '-latomic']
+          cpp_link_args = ['-ldrm', '-latomic']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
