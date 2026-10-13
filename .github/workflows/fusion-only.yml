@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico con expresiones regulares para SPIRV-Tools y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico avanzado para dependencias multilínea en meson.build
         run: |
-          echo "Ejecutando script Python con regex para parchear SPIRV-Tools y LLVMSPIRVLib..."
+          echo "Ejecutando script Python avanzado para limpiar y volver opcionales las dependencias de SPIR-V..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -65,10 +65,13 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 4. Hacer opcionales LLVMSPIRVLib y SPIRV-Tools utilizando regex para capturar cualquier variante con argumentos
-          for lib_name in ['LLVMSPIRVLib', 'SPIRV-Tools']:
-              content = re.sub(rf"dependency\(\s*'{lib_name}'([^)]*)\)", rf"dependency('{lib_name}'\1, required : false)", content)
-              content = re.sub(rf'dependency\(\s*"{lib_name}"([^)]*)\)', rf'dependency("{lib_name}"\1, required : false)', content)
+          # 4. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
+          def make_dep_optional_safely(text, lib_name):
+              pattern = r"dependency\(\s*['\"]" + lib_name + r"['\"][^)]*\)"
+              return re.sub(pattern, f"dependency('{lib_name}', required : false)", text, flags=re.DOTALL)
+
+          for dep in ['LLVMSPIRVLib', 'SPIRV-Tools']:
+              content = make_dep_optional_safely(content, dep)
 
           # 5. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
@@ -90,7 +93,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado mediante Regex: SPIRV-Tools y LLVMSPIRVLib blindados.')
+          print('-> meson.build adaptado de forma limpia: bloques multilínea reemplazados con éxito.')
           EOF
 
           python3 patch_meson.py
