@@ -37,12 +37,12 @@ jobs:
           fi
           rm -rf temp-wrapper
 
-      - name: ⚙️ 3. Instalar Herramientas de Compresión y patchelf
+      - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo XCB del Host
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd patchelf python3 bc
+          sudo apt-get install -y zstd patchelf python3 bc libxcb-dri3-dev libxcb-present-dev libxcb-randr-dev libxcb-xfixes-dev libxcb-render-dev libxcb-shape-dev libx11-xcb-dev libxcb1-dev x11proto-dev
 
-      - name: 🛠️ 3.5. Parche quirúrgico para X11/XCB stubs y dependencias
+      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB y preparar entorno local
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -128,16 +128,15 @@ jobs:
               f.write(content)
           "
 
-          # Crear directorio dummy para cabeceras xcb faltantes y evitar errores fatales en el loader de X11
-          mkdir -p dummy_xcb/xcb
-          for h in dri3.h present.h xcb.h xproto.h randr.h xfixes.h shm.h sync.h; do
-              touch dummy_xcb/xcb/\$h
-          done
-          echo "-> Directorio dummy de XCB creado para satisfacer al cargador con X11 habilitado."
+          # Copiar cabeceras reales de XCB del sistema a dummy_xcb para que el cross-compiler las lea
+          mkdir -p dummy_xcb
+          cp -r /usr/include/xcb dummy_xcb/
+          cp -r /usr/include/X11 dummy_xcb/ 2>/dev/null || true
+          echo "-> Cabeceras XCB copiadas al workspace local."
 
-      - name: 🛠️ 3.6. build_inside.sh con plataformas x11 y wayland
+      - name: 🛠️ 3.6. build_inside.sh inyectando las cabeceras XCB en el cross-file
         run: |
-          echo "Generando build_inside.sh optimizado con x11 y wayland..."
+          echo "Generando build_inside.sh..."
           
           cat << 'EOF' > build_inside.sh
           #!/bin/bash
@@ -153,11 +152,10 @@ jobs:
           CROSS_FILE=""
           if [ -f "android-aarch64.txt" ]; then
               CROSS_FILE="--cross-file android-aarch64.txt"
+              # Inyectar la ruta de las cabeceras XCB locales directamente en el cross-file de Meson
+              echo "c_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
+              echo "cpp_args = ['-I/workspace/dummy_xcb']" >> android-aarch64.txt
           fi
-          
-          # Inyectar el directorio dummy_xcb en CFLAGS globales del cross-file o mediante variables de entorno de compilación
-          export CFLAGS="-I$(pwd)/dummy_xcb"
-          export CPPFLAGS="-I$(pwd)/dummy_xcb"
           
           meson setup "$BUILD_DIR" \
               --prefix=/usr \
