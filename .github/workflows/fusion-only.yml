@@ -42,11 +42,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico exacto para la validación CLC/LLVM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para CLC, KMS/DRM y conversión numérica de LLVM
         run: |
-          echo "Ejecutando script Python para evitar el error de CLC requiere LLVM..."
+          echo "Ejecutando script Python para proteger la conversión a entero..."
           cat << 'EOF' > patch_meson.py
-          with open('meson.build', 'r') as f:
+          with open('meson.build', 'r'] as f:
               content = f.read()
 
           # 1. Neutralizar exclusivamente la línea de error de LLVM para CLC
@@ -59,9 +59,12 @@ jobs:
           # 3. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
+          # 4. Proteger la conversión a entero cuando la versión de LLVM sea 'unknown' (Línea ~2058)
+          content = content.replace('.to_int()', ".to_int(converters: {'unknown': 0})")
+
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build saneado correctamente sin romper arrays.')
+          print('-> meson.build saneado: conversión de unknown protegida.')
           EOF
 
           python3 patch_meson.py
