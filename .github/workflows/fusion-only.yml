@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para prog_mesa_clc y la validación CLC requiere LLVM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico para libudev y conversión segura de versión LLVM en meson.build
         run: |
-          echo "Ejecutando script Python para neutralizar la exigencia de LLVM en CLC..."
+          echo "Ejecutando script Python para blindar meson.build ante valores unknown de LLVM..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -59,25 +59,31 @@ jobs:
           # 2. Neutralizar la línea exacta que bloquea la compilación si CLC requiere LLVM
           content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
 
-          # 3. Hacer que libclc sea opcional
+          # 3. Evitar el fallo al convertir 'unknown' a entero en la versión de LLVM
+          content = content.replace("chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()", "chosen_llvm_version_major = chosen_llvm_version_array[0] == 'unknown' ? 0 : chosen_llvm_version_array[0].to_int()")
+          content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array[1] == 'unknown' ? 0 : chosen_llvm_version_array[1].to_int()")
+
+          # 4. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
+          content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
+          content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          # 4. Hacer que wayland-egl-backend sea opcional
+          # 5. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 5. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
+          # 6. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 6. Desactivar el bloque KMS/DRM que exige libdrm
+          # 7. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: validación CLC requiere LLVM neutralizada.')
+          print('-> meson.build adaptado: libudev y conversión segura de LLVM aplicadas.')
           EOF
 
           python3 patch_meson.py
