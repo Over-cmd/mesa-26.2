@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para deshabilitar dep_llvm en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico definitivo para neutralizar la definición real de dep_llvm en meson.build
         run: |
-          echo "Ejecutando script Python para neutralizar dep_llvm..."
+          echo "Ejecutando script Python para interceptar y deshabilitar dep_llvm..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -55,7 +55,6 @@ jobs:
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
-          dep_llvm = disabler()
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
@@ -66,7 +65,11 @@ jobs:
           content = content.replace("chosen_llvm_version_array[0].to_int()", "(chosen_llvm_version_array[0] == 'unknown' ? '0' : chosen_llvm_version_array[0]).to_int()")
           content = content.replace("chosen_llvm_version_minor = chosen_llvm_version_array[1].to_int()", "chosen_llvm_version_minor = chosen_llvm_version_array.length() > 1 and chosen_llvm_version_array[1] != 'unknown' ? chosen_llvm_version_array[1].to_int() : 0")
 
-          # 4. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
+          # 4. Interceptar y reemplazar cualquier bloque de asignación de dep_llvm por un disabler seguro
+          content = re.sub(r"dep_llvm\s*=\s*dependency\('llvm'[^)]*\)", "dep_llvm = disabler()", content, flags=re.DOTALL)
+          content = re.sub(r'dep_llvm\s*=\s*dependency\("llvm"[^)]*\)', 'dep_llvm = disabler()', content, flags=re.DOTALL)
+
+          # 5. Función robusta para reemplazar bloques dependency(...) multilínea completos de forma segura
           def make_dep_optional_safely(text, lib_name):
               pattern = r"dependency\(\s*['\"]" + lib_name + r"['\"][^)]*\)"
               return re.sub(pattern, f"dependency('{lib_name}', required : false)", text, flags=re.DOTALL)
@@ -74,27 +77,27 @@ jobs:
           for dep in ['LLVMSPIRVLib', 'SPIRV-Tools']:
               content = make_dep_optional_safely(content, dep)
 
-          # 5. Hacer que libclc y libudev sean opcionales
+          # 6. Hacer que libclc y libudev sean opcionales
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          # 6. Hacer que wayland-egl-backend sea opcional
+          # 7. Hacer que wayland-egl-backend sea opcional
           content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false")
           content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
 
-          # 7. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
+          # 8. Hacer opcionales todas las variantes de XCB e infraestructura gráfica faltantes
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
-          # 8. Desactivar el bloque KMS/DRM que exige libdrm
+          # 9. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: dep_llvm neutralizado con disabler().')
+          print('-> meson.build adaptado: dep_llvm interceptado y neutralizado con éxito.')
           EOF
 
           python3 patch_meson.py
