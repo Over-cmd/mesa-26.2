@@ -103,8 +103,8 @@ jobs:
           content = content.replace("dependency('libudev')", "dependency('libudev', required : false)")
           content = content.replace('dependency("libudev")', 'dependency("libudev", required : false)')
 
-          content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend", required : false")
-          content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false')
+          content = content.replace("dependency('wayland-egl-backend'", "dependency('wayland-egl-backend', required : false)")
+          content = content.replace('dependency("wayland-egl-backend"', 'dependency("wayland-egl-backend", required : false)')
 
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
