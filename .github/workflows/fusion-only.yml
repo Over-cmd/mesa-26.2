@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras reales de XCB y DRM en las rutas de inclusión de Mesa
+      - name: 🛠️ 3.5. Extraer cabeceras de XCB, DRM y Sync en las rutas de inclusión de Mesa
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -127,7 +127,7 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/xcb
+          mkdir -p include/xcb include/sync
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
           fi
@@ -140,7 +140,21 @@ jobs:
                   cp /usr/include/$h include/
               fi
           done
-          echo "-> Cabeceras XCB y DRM integradas en include/ con éxito."
+
+          cat << 'EOF' > include/sync/sync.h
+          #ifndef __SYNC_SYNC_H
+          #define __SYNC_SYNC_H
+          #include <stdint.h>
+          #include <sys/cdefs.h>
+          #include <sys/ioctl.h>
+          __BEGIN_DECLS
+          int sync_wait(int fd, int timeout);
+          int sync_merge(const char *name, int fd1, int fd2);
+          __END_DECLS
+          #endif
+          EOF
+
+          echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh configurando opciones globales de CFLAGS
         run: |
