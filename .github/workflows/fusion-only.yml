@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh precargando submódulos y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh inyectando wrap de libadrenotools y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -220,10 +220,28 @@ jobs:
           cpp_link_args = ['-ldrm', '-latomic']
           EOT
 
-          echo "Ejecutando un setup de prueba para descargar submódulos automáticamente..."
+          echo "Ejecutando setup inicial para descargar subproyectos..."
           meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
 
-          echo "Parcheando de forma radical todos los meson.build del sistema y submódulos..."
+          # Si libadrenotools usa wrap file o subproject directory, forzamos parche radical o desactivación de require
+          if [ -d "subprojects/libadrenotools" ]; then
+              echo "Reemplazando líneas problemáticas en subprojects/libadrenotools/meson.build..."
+              python3 -c "
+              path = 'subprojects/libadrenotools/meson.build'
+              with open(path, 'r') as f:
+                  content = f.read()
+              # Reemplazar totalmente las líneas de find_library de android y log por versiones con required : false o deshabilitadas
+              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
+              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
+              content = content.replace(\"libandroid_dep = cpp.find_library('android')\", \"libandroid_dep = cpp.find_library('android', required : false)\")
+              content = content.replace(\"liblog_dep = c.find_library('log')\", \"liblog_dep = c.find_library('log', required : false)\")
+              with open(path, 'w') as f:
+                  f.write(content)
+              print('-> libadrenotools parcheado con éxito.')
+              "
+          fi
+
+          echo "Neutralizando todas las dependencias estrictas de librerías del sistema en cualquier meson.build..."
           python3 -c "
           import os, re
           for root, dirs, files in os.walk('.'):
@@ -235,7 +253,6 @@ jobs:
                       
                       modified = [False]
                       for lib in ['android', 'atomic', 'dl', 'rt', 'log']:
-                          # Reemplazar cualquier find_library o cc.find_library o cpp.find_library sin required: false
                           pattern = rf'((?:cc\.|cpp\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
                           def repl(match):
                               modified[0] = True
@@ -254,13 +271,12 @@ jobs:
                       if modified[0]:
                           with open(path, 'w') as f:
                               f.write(content)
-                          print(f'-> Parcheado recursivamente: {path}')
+                          print(f'-> Parcheado find_library en: {path}')
           "
 
-          echo "Limpiando setup preliminar..."
+          echo "Reiniciando setup definitivo de Meson..."
           rm -rf "$BUILD_DIR"
-
-          echo "Configurando Meson de forma definitiva para Mesa 26.2..."
+          
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
