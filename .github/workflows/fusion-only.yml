@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico robusto para comentar dep_llvm y dependencias en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico robusto para clang_version_dir, dep_llvm y dependencias en meson.build
         run: |
-          echo "Ejecutando script Python robusto para neutralizar dep_llvm y dependencias..."
+          echo "Ejecutando script Python robusto para inyectar clang_version_dir y neutralizar dependencias..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -76,11 +76,12 @@ jobs:
 
           content = ''.join(new_lines)
 
-          # 2. Inyectar los stubs globales de CLC y dep_llvm justo después de project_version
+          # 2. Inyectar los stubs globales incluyendo clang_version_dir justo después de project_version
           clc_stub = """
           prog_mesa_clc = disabler()
           prog_vtn_bindgen2 = disabler()
           dep_llvm = disabler()
+          clang_version_dir = '0'
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
@@ -119,7 +120,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build adaptado: dep_llvm comentado de forma segura por bloques.')
+          print('-> meson.build adaptado: clang_version_dir inyectado correctamente.')
           EOF
 
           python3 patch_meson.py
