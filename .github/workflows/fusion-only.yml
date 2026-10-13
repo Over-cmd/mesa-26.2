@@ -20,7 +20,7 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Recuperar scripts y cross-files del Wrapper (Wrapper 25)
+      - name: 📥 2. Recuperar el Wrapper 25 completo
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
@@ -28,34 +28,22 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Inyectar y rescatar cabeceras, stubs y librerías de Android del Wrapper
+      - name: 🧩 2.1. Integrar todo el contenido del Wrapper 25 en el Workspace
         run: |
           if [ -d "temp-wrapper" ]; then
-              # Copiar todo el contenido del wrapper al workspace principal
+              echo "Copiando todos los recursos del Wrapper 25..."
               cp -av temp-wrapper/* . || true
               cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
-              echo "-> Archivos y recursos del wrapper-25 inyectados correctamente."
           fi
-
-          # Crear directorios de soporte si el wrapper no los trae en la raíz
-          mkdir -p include lib_dummy
-
-          # Buscar y recopilar cualquier archivo .so, .a o cabeceras que el wrapper provea para Android
-          echo "Buscando librerías y stubs nativos en el wrapper inyectado..."
-          find . -name "*.so" -o -name "*.a" || true
-
-          # Si el wrapper provee stubs o librerías, las unificamos en lib_dummy
-          find . -name "libandroid.so" -o -name "libdl.so" -o -name "liblog.so" -exec cp -v {} lib_dummy/ \; 2>/dev/null || true
-
-          # Limpiar directorio temporal del wrapper para dejar la raíz limpia para Mesa
           rm -rf temp-wrapper
+          echo "-> Estructura del Wrapper 25 integrada con éxito."
 
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Ajustar solo lo estrictamente necesario en meson.build principal
+      - name: 🛠️ 3.5. Parchear lo estrictamente necesario en meson.build principal
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -123,10 +111,12 @@ jobs:
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
+          content = content.replace("dependencies : dep_atomic", "dependencies : [] # dep_atomic bypassed")
+          content = content.replace("dependency('atomic', required : false)", "disabler()")
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal adaptado.')
+          print('-> meson.build principal parcheado.')
           EOF
 
           python3 patch_meson.py
@@ -169,7 +159,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh integrando las librerías del Wrapper en el Sysroot del NDK
+      - name: 🛠️ 3.6. build_inside.sh aprovechando la estructura del Wrapper 25
         run: |
           echo "Generando build_inside.sh..."
           
@@ -212,11 +202,11 @@ jobs:
           echo "-> Clang encontrado en: $CLANG_PATH"
           echo "-> Toolchain bin: $TOOLCHAIN_BIN"
           
-          # Inyectar todas las librerías rescatadas del wrapper (libandroid, libdl, etc.) en el sysroot del NDK
+          # Si el Wrapper 25 incluye librerías precompiladas o sysroot custom, las copiamos al sysroot del NDK
           SYSROOT_LIB_DIR=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
-          if [ -d "$SYSROOT_LIB_DIR" ] && [ -d "/workspace/lib_dummy" ]; then
-              cp -v /workspace/lib_dummy/*.so "$SYSROOT_LIB_DIR/" 2>/dev/null || true
-              echo "-> Librerías del wrapper inyectadas en el sysroot del NDK."
+          if [ -d "$SYSROOT_LIB_DIR" ]; then
+              find /workspace -name "*.so" -o -name "*.a" -exec cp -v {} "$SYSROOT_LIB_DIR/" \; 2>/dev/null || true
+              echo "-> Librerías del Wrapper 25 integradas en el sysroot del NDK."
           fi
           
           cat << EOT > android-aarch64.txt
@@ -236,8 +226,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include']
           cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm', '-latomic', '-ldl']
-          cpp_link_args = ['-ldrm', '-latomic', '-ldl']
+          c_link_args = ['-ldrm', '-ldl']
+          cpp_link_args = ['-ldrm', '-ldl']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
