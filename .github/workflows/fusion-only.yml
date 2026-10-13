@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras de XCB, DRM y Sync en las rutas de inclusión de Mesa
+      - name: 🛠️ 3.5. Extraer cabeceras y parchear dependencias de GBM y DRM
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal..."
+          echo "Ejecutando script Python para parchear meson.build y gbm/meson.build..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -127,6 +127,15 @@ jobs:
               f.write(content)
           "
 
+          python3 -c "
+          path = 'src/gbm/meson.build'
+          with open(path, 'r') as f:
+              content = f.read()
+          content = content.replace('dependencies : [', 'dependencies : [dependency(\'libdrm\', required : false), ')
+          with open(path, 'w') as f:
+              f.write(content)
+          "
+
           mkdir -p include/xcb include/sync
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
@@ -154,7 +163,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
+          echo "-> Cabeceras y parches de enlace GBM aplicados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh configurando opciones globales de CFLAGS
         run: |
