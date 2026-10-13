@@ -28,7 +28,7 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Inyectar scripts y archivos de compilación cruzada
+      - name: 🧩 2.1. Inyectar scripts y archivos del Wrapper
         run: |
           if [ -d "temp-wrapper" ]; then
               cp -av temp-wrapper/* . || true
@@ -36,24 +36,6 @@ jobs:
               echo "-> Archivos del wrapper inyectados correctamente."
           fi
           rm -rf temp-wrapper
-          
-          if [ ! -f "android-aarch64.txt" ]; then
-              echo "Generando android-aarch64.txt de respaldo..."
-              cat << 'EOF' > android-aarch64.txt
-          [binaries]
-          c = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
-          cpp = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
-          ar = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-          pkgconfig = 'pkg-config'
-
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'armv8'
-          endian = 'little'
-          EOF
-          fi
 
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
         run: |
@@ -174,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh resolviendo conflicto de opciones y configurando CFLAGS
+      - name: 🛠️ 3.6. build_inside.sh expandiendo variables del NDK y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -190,20 +172,33 @@ jobs:
           # Resolver conflicto entre meson.options y meson_options.txt
           rm -f meson_options.txt
           
+          echo "Configurando android-aarch64.txt con la ruta real del NDK: $ANDROID_NDK_HOME"
+          
+          cat << EOT > android-aarch64.txt
+          [binaries]
+          c = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
+          cpp = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
+          ar = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+
+          [built-in options]
+          c_args = ['-I/workspace/include']
+          cpp_args = ['-I/workspace/include']
+          c_link_args = ['-ldrm']
+          cpp_link_args = ['-ldrm']
+          EOT
+          
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
           
-          CROSS_FILE=""
-          if [ -f "android-aarch64.txt" ]; then
-              CROSS_FILE="--cross-file android-aarch64.txt"
-              echo "" >> android-aarch64.txt
-              echo "[built-in options]" >> android-aarch64.txt
-              echo "c_args = ['-I/workspace/include']" >> android-aarch64.txt
-              echo "cpp_args = ['-I/workspace/include']" >> android-aarch64.txt
-              echo "c_link_args = ['-ldrm']" >> android-aarch64.txt
-              echo "cpp_link_args = ['-ldrm']" >> android-aarch64.txt
-          fi
-          
           meson setup "$BUILD_DIR" \
+              --cross-file android-aarch64.txt \
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
@@ -213,8 +208,7 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper \
-              $CROSS_FILE
+              -Dvulkan-drivers=panfrost,wrapper
               
           echo "Compilando con Meson..."
           meson compile -C "$BUILD_DIR"
@@ -266,3 +260,4 @@ jobs:
           name: Bannerlator-Mesa26-Mali-Wrapper
           path: wrapper.tzst
           retention-days: 7
+          
