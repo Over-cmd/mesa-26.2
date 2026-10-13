@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear lo estrictamente necesario en meson.build principal
+      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (corrección de atómicos)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -53,31 +53,7 @@ jobs:
           import re
 
           with open('meson.build', 'r') as f:
-              lines = f.readlines()
-
-          new_lines = []
-          skip_mode = False
-          paren_count = 0
-
-          for line in lines:
-              if not skip_mode and ('dep_llvm =' in line or 'dep_llvm=' in line):
-                  skip_mode = True
-                  paren_count = line.count('(') - line.count(')')
-                  new_lines.append('# [Bypassed by patch] ' + line)
-                  if paren_count <= 0 and '(' not in line:
-                      skip_mode = False
-                  continue
-              
-              if skip_mode:
-                  paren_count += line.count('(') - line.count(')')
-                  new_lines.append('# [Bypassed by patch] ' + line)
-                  if paren_count <= 0:
-                      skip_mode = False
-                  continue
-                  
-              new_lines.append(line)
-
-          content = ''.join(new_lines)
+              content = f.read()
 
           clc_stub = """
           prog_mesa_clc = disabler()
@@ -111,12 +87,14 @@ jobs:
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
-          content = content.replace("dependencies : dep_atomic", "dependencies : [] # dep_atomic bypassed")
-          content = content.replace("dependency('atomic', required : false)", "disabler()")
+
+          # Reemplazo seguro y limpio para la comprobación de atómicos sin romper paréntesis
+          content = re.sub(r"dep_atomic\s*=\s*cc\.find_library\('.*?\n\s*\)", "dep_atomic = []", content, flags=re.DOTALL)
+          content = re.sub(r"dep_atomic\s*=\s*dependency\('.*?\n\s*\)", "dep_atomic = []", content, flags=re.DOTALL)
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado.')
+          print('-> meson.build principal parcheado correctamente.')
           EOF
 
           python3 patch_meson.py
