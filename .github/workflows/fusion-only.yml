@@ -42,29 +42,38 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico para CLC, KMS/DRM y conversión numérica de LLVM
+      - name: 🛠️ 3.5. Parche quirúrgico preciso para LLVM, CLC y KMS/DRM en meson.build
         run: |
-          echo "Ejecutando script Python para proteger la conversión a entero..."
+          echo "Ejecutando script Python de parcheo selectivo..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # 1. Neutralizar exclusivamente la línea de error de LLVM para CLC
-          content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
+          new_lines = []
+          for line in lines:
+              # 1. Neutralizar la validación estricta de CLC requiere LLVM
+              if "error_message : 'CLC requires LLVM'" in line:
+                  line = line.replace("'CLC requires LLVM'", "'Bypassed'")
+              
+              # 2. Hacer que libclc sea opcional
+              if 'dependency(' in line and 'libclc' in line:
+                  if 'required' not in line:
+                      line = line.rstrip()[:-1] + ", required : false)\n"
 
-          # 2. Hacer que libclc sea opcional (required : false)
-          content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
-          content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
+              # 3. Proteger únicamente las conversiones de versión de LLVM a entero si dan 'unknown'
+              if '.to_int()' in line and ('chosen_llvm_version' in line or 'version' in line):
+                  line = line.replace('.to_int()', ".to_int(converters: {'unknown': 0})")
 
-          # 3. Desactivar el bloque KMS/DRM que exige libdrm
+              new_lines.append(line)
+
+          content = "".join(new_lines)
+
+          # 4. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
-
-          # 4. Proteger la conversión a entero cuando la versión de LLVM sea 'unknown' (Línea ~2058)
-          content = content.replace('.to_int()', ".to_int(converters: {'unknown': 0})")
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build saneado: conversión de unknown protegida.')
+          print('-> meson.build parcheado selectivamente.')
           EOF
 
           python3 patch_meson.py
