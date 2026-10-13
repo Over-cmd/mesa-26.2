@@ -1,0 +1,65 @@
+FROM ghcr.io/termux/package-builder:latest
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ninja-build && \
+    pip3 install --break-system-packages --ignore-installed --no-cache-dir meson ninja mako pyyaml packaging
+
+RUN mkdir -p /tmp/sysroot && \
+    cd /tmp/sysroot && \
+    TERMUX_REPO="https://packages-cf.termux.dev/apt/termux-main" && \
+    curl -sL "${TERMUX_REPO}/dists/stable/main/binary-aarch64/Packages" > Packages && \
+    if [ ! -s Packages ] || grep -q "<html>" Packages; then \
+        echo "-> [Bypass Red] CDN principal inaccesible. Conmutando al espejo secundario oficial..."; \
+        TERMUX_REPO="https://grimler.se"; \
+        curl -sL "${TERMUX_REPO}/termux/termux-main/dists/stable/main/binary-aarch64/Packages" > Packages; \
+    fi && \
+    PACKAGES="libdrm libandroid-shmem libxcb libx11 libxshmfence libxext libxrandr libxrender xorgproto libxau libxdmcp" && \
+    for pkg in $PACKAGES; do \
+        pkg_path=$(awk -v p="Package: $pkg" '$0==p{flag=1} flag && /^Filename:/{print $2; exit}' Packages) && \
+        if [ "$TERMUX_REPO" = "https://grimler.se" ]; then \
+            curl -L -O "${TERMUX_REPO}/termux/termux-main/${pkg_path}"; \
+        else \
+            curl -L -O "${TERMUX_REPO}/${pkg_path}"; \
+        fi \
+    done && \
+    mkdir -p /data/data/com.termux/files/usr && \
+    for f in *.deb; do dpkg-deb -x "$f" /; done && \
+    rm -rf /tmp/sysroot
+
+# 🟢 REPARACIÓN INDUSTRIAL TOTAL GLOBAL V16: Conservamos el desvío elástico plano de AHardwareBuffer. Limpiamos y removemos de raíz las macros de remapeo de logs que causaban el conflicto jerárquico 'follows non-static declaration'. Esto permite que Mesa use las firmas de log nativas reales de tu wrapper sin baches.
+RUN NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1) && \
+    NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin" && \
+    mkdir -p /root/build-config && \
+    printf "%s\n" \
+    "[binaries]" \
+    "c = '${NDK_BIN}/aarch64-linux-android30-clang'" \
+    "cpp = '${NDK_BIN}/aarch64-linux-android30-clang++'" \
+    "ar = '${NDK_BIN}/llvm-ar'" \
+    "strip = '${NDK_BIN}/llvm-strip'" \
+    "pkg-config = 'pkg-config'" \
+    "" \
+    "[constants]" \
+    "termux_dir = '/data/data/com.termux/files/usr'" \
+    "" \
+    "[properties]" \
+    "pkg_config_libdir = termux_dir + '/lib/pkgconfig:' + termux_dir + '/share/pkgconfig'" \
+    "" \
+    "[built-in options]" \
+    "c_args = ['-D__TERMUX__', '-D__USE_GNU', '-U__ANDROID__', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
+    "cpp_args = ['-D__TERMUX__', '-D__USE_GNU', '-U__ANDROID__', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
+    "c_link_args = ['-L' + termux_dir + '/lib', '-landroid-shmem']" \
+    "cpp_link_args = ['-L' + termux_dir + '/lib', '-landroid-shmem']" \
+    "" \
+    "[host_machine]" \
+    "system = 'android'" \
+    "cpu_family = 'aarch64'" \
+    "cpu = 'armv8-a'" \
+    "endian = 'little'" > /root/build-config/cross_file.txt
+
+COPY build_inside.sh /root/build.sh
+RUN chmod +x /root/build.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/root/build.sh"]
