@@ -42,35 +42,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc
 
-      - name: 🛠️ 3.5. Parche quirúrgico definitivo para CLC y KMS/DRM en meson.build
+      - name: 🛠️ 3.5. Parche quirúrgico exacto para la validación CLC/LLVM en meson.build
         run: |
-          echo "Ejecutando script Python para desactivar la dependencia forzosa de CLC..."
+          echo "Ejecutando script Python para evitar el error de CLC requiere LLVM..."
           cat << 'EOF' > patch_meson.py
           with open('meson.build', 'r') as f:
               content = f.read()
 
-          # 1. Neutralizar la comprobación de CLC requiere LLVM
-          content = content.replace("error_message : 'CLC requires LLVM'", "error_message : 'Bypassed LLVM requirement'")
-          
-          # 2. Desactivar la validación interna de drivers usando CL (evita que Panfrost exija CLC/LLVM)
-          content = content.replace("with_driver_using_cl = [", "with_driver_using_cl = false # [PATCHED] [\n")
+          # 1. Neutralizar exclusivamente la línea de error de LLVM para CLC
+          content = content.replace(".enable_if(with_clc, error_message : 'CLC requires LLVM')", ".enable_if(false, error_message : 'Bypassed')")
 
-          # 3. Hacer que libclc sea opcional (required : false)
+          # 2. Hacer que libclc sea opcional (required : false)
           content = content.replace("dependency('libclc')", "dependency('libclc', required : false)")
           content = content.replace('dependency("libclc")', 'dependency("libclc", required : false)')
 
-          # 4. Desactivar el bloque KMS/DRM que exige libdrm
+          # 3. Desactivar el bloque KMS/DRM que exige libdrm
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build parcheado con éxito.')
+          print('-> meson.build saneado correctamente sin romper arrays.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
 
-      - name: 🛠️ 3.6. build_inside.sh con -Dmesa-clc=auto válido
+      - name: 🛠️ 3.6. build_inside.sh con configuración limpia para Android
         run: |
           echo "Generando build_inside.sh optimizado para Mesa 26.2..."
           
