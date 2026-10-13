@@ -156,7 +156,7 @@ jobs:
 
           echo "-> Cabeceras integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh neutralizando Atomic y configurando Meson
+      - name: 🛠️ 3.6. build_inside.sh neutralizando dependencias de sistema y configurando Meson
         run: |
           echo "Generando build_inside.sh..."
           
@@ -186,18 +186,40 @@ jobs:
               "
           fi
           
-          # Neutralizar la búsqueda estricta de atomic en el meson.build principal
+          # Neutralizar de forma recursiva todas las búsquedas estrictas de librerías del sistema en meson.build
           if [ -f "meson.build" ]; then
-              echo "Neutralizando cc.find_library('atomic') en meson.build principal..."
+              echo "Neutralizando dependencias estrictas en meson.build principal..."
               python3 -c "
-              path = 'meson.build'
-              with open(path, 'r') as f:
-                  content = f.read()
-              content = content.replace(\"cc.find_library('atomic')\", \"disabler()\")
-              content = content.replace('cc.find_library(\"atomic\")', 'disabler()')
-              content = content.replace(\"find_library('atomic')\", \"find_library('atomic', required : false)\")
-              with open(path, 'w') as f:
-                  f.write(content)
+              import os, re
+              for root, dirs, files in os.walk('.'):
+                  for file in files:
+                      if file == 'meson.build':
+                          path = os.path.join(root, file)
+                          with open(path, 'r') as f:
+                              content = f.read()
+                          
+                          modified = [False]
+                          for lib in ['atomic', 'dl', 'rt', 'android', 'log']:
+                              # Reemplazar cc.find_library('lib') o find_library('lib') por disabler o requerido falso
+                              pattern = rf'((?:cc\.|cpp\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
+                              def repl(match):
+                                  modified[0] = True
+                                  prefix = match.group(1)
+                                  args = match.group(2)
+                                  if 'required' in args:
+                                      args = re.sub(r'required\s*:\s*(?:true|1)', 'required : false', args)
+                                  else:
+                                      if args.strip() == ')':
+                                          args = ', required : false)'
+                                      else:
+                                          args = ', required : false' + args
+                                  return prefix + args
+                              content = re.sub(pattern, repl, content, flags=re.DOTALL)
+                          
+                          if modified[0]:
+                              with open(path, 'w') as f:
+                                  f.write(content)
+                              print(f'-> Parcheado find_library en: {path}')
               "
           fi
           
