@@ -20,7 +20,7 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Recuperar scripts de compilación faltantes del Wrapper
+      - name: 📥 2. Recuperar scripts y cross-files del Wrapper
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
@@ -28,14 +28,33 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Inyectar build_inside.sh si no existe
+      - name: 🧩 2.1. Inyectar scripts y archivos de compilación cruzada
         run: |
-          if [ -f "temp-wrapper/build_inside.sh" ]; then
-              cp temp-wrapper/build_inside.sh .
-              chmod +x build_inside.sh
-              echo "-> build_inside.sh restaurado y con permisos de ejecución."
+          if [ -d "temp-wrapper" ]; then
+              cp -av temp-wrapper/* . || true
+              cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
+              echo "-> Archivos del wrapper inyectados correctamente."
           fi
           rm -rf temp-wrapper
+          
+          # Asegurar la existencia de android-aarch64.txt para forzar compilación cruzada real a Android
+          if [ ! -f "android-aarch64.txt" ]; then
+              echo "Generando android-aarch64.txt de respaldo..."
+              cat << 'EOF' > android-aarch64.txt
+          [binaries]
+          c = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
+          cpp = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
+          ar = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          EOF
+          fi
 
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
         run: |
@@ -156,7 +175,7 @@ jobs:
 
           echo "-> Cabeceras XCB, DRM y Sync integradas en include/ con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh inyectando -ldrm en el cross-file
+      - name: 🛠️ 3.6. build_inside.sh configurando opciones globales de CFLAGS
         run: |
           echo "Generando build_inside.sh..."
           
@@ -219,4 +238,29 @@ jobs:
             rm -rf final_pkg
             mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
             
-            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so  cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null \vert{}\vert{} true chmod -R 755 final_pkg/usr/lib/  patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so \vert{}\vert{} true find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$
+            cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
+            patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
+            cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26.2 + Wrapper forjado con éxito!"
+          else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
+            exit 1
+          fi
+
+      - name: 🚀 7. Subir Artefacto Completo a GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bannerlator-Mesa26-Mali-Wrapper
+          path: wrapper.tzst
+          retention-days: 7
