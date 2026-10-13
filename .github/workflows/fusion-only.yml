@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras de XCB, DRM, Sync y parchear Atomic en meson.build
+      - name: 🛠️ 3.5. Extraer cabeceras y parchear Atomic y DL en meson.build
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para parchear meson.build principal (Atomic, LLVM, etc.)..."
+          echo "Ejecutando script Python para parchear meson.build principal (Atomic, DL, LLVM, etc.)..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -109,6 +109,10 @@ jobs:
           content = content.replace("find_library('atomic'", "find_library('atomic', required : false")
           content = content.replace('find_library("atomic"', 'find_library("atomic", required : false')
 
+          content = re.sub(r"cc\.find_library\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = content.replace("find_library('dl'", "find_library('dl', required : false")
+          content = content.replace('find_library("dl"', 'find_library("dl", required : false')
+
           for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
@@ -117,7 +121,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado para Atomic y dependencias.')
+          print('-> meson.build principal parcheado para Atomic, DL y dependencias.')
           EOF
 
           python3 patch_meson.py
