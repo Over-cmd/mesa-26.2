@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Extraer cabeceras, parchear recursivamente y forzar libadrenotools en meson.build
+      - name: 🛠️ 3.5. Parchear de forma quirúrgica libadrenotools y meson.build principal
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -119,18 +119,19 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
+          # Parche quirúrgico directo sobre subprojects/libadrenotools/meson.build
           if [ -f "subprojects/libadrenotools/meson.build" ]; then
               python3 -c "
               path = 'subprojects/libadrenotools/meson.build'
               with open(path, 'r') as f:
                   content = f.read()
-              content = re.sub(r'find_library\(\s*[\'\"]android[\'\"]\s*\)', \"find_library('android', required : false)\", content)
-              content = re.sub(r'cc\.find_library\(\s*[\'\"]android[\'\"]\s*\)', \"cc.find_library('android', required : false)\", content)
-              content = content.replace(\"find_library('android')\", \"find_library('android', required : false)\")
-              content = content.replace(\"cc.find_library('android')\", \"cc.find_library('android', required : false)\")
+              
+              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
+              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
+              
               with open(path, 'w') as f:
                   f.write(content)
-              print('-> subprojects/libadrenotools/meson.build parcheado directamente.')
+              print('-> subprojects/libadrenotools/meson.build parcheado quirúrgicamente con éxito.')
               "
           fi
 
@@ -144,8 +145,8 @@ jobs:
                           content = f.read()
                       
                       modified = [False]
-                      for lib in ['android', 'atomic', 'dl', 'rt']:
-                          pattern = rf'((?:cc\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
+                      for lib in ['android', 'atomic', 'dl', 'rt', 'log']:
+                          pattern = rf'((?:cpp\.|cc\.)?find_library\s*\(\s*[\'\"]{lib}[\'\"])([^)]*?\))'
                           def repl(match):
                               modified[0] = True
                               prefix = match.group(1)
