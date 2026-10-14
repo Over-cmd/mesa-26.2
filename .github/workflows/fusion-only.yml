@@ -81,10 +81,9 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build principal y subproyectos..."
+          echo "Ejecutando script Python para adaptar meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
-          import os
 
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -122,7 +121,6 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Manejo seguro de librerías del sistema que no usan archivos separados en Android NDK
           content = content.replace("dep_atomic = cc.find_library('atomic', required : true)", "dep_atomic = []")
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : true)", "dep_atomic = []")
@@ -138,22 +136,18 @@ jobs:
           with open('meson.build', 'w') as f:
               f.write(content)
           print('-> meson.build principal adaptado.')
-
-          # Parchear subprojects/libadrenotools/meson.build si existe
-          adrenotools_path = 'subprojects/libadrenotools/meson.build'
-          if os.path.exists(adrenotools_path):
-              with open(adrenotools_path, 'r') as af:
-                  ad_content = af.read()
-              ad_content = ad_content.replace("dependency('android'", "dependency('android', required : false")
-              ad_content = ad_content.replace("cc.find_library('android'", "cc.find_library('android', required : false")
-              ad_content = ad_content.replace("cpp.find_library('android'", "cpp.find_library('android', required : false")
-              with open(adrenotools_path, 'w') as af:
-                  af.write(ad_content)
-              print('-> subprojects/libadrenotools/meson.build adaptado.')
           EOF
 
           python3 patch_meson.py
           rm patch_meson.py
+
+          mkdir -p /usr/lib/pkgconfig
+          cat << 'EOF' > /usr/lib/pkgconfig/android.pc
+          Name: android
+          Description: Android system library stub
+          Version: 30
+          Libs: -landroid
+          EOF
 
           python3 -c "
           with open('src/egl/meson.build', 'r') as f:
@@ -190,7 +184,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras preparadas con éxito."
+          echo "-> Cabeceras y stubs de pkg-config preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
