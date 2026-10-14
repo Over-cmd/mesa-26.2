@@ -189,7 +189,7 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/xcb include/sync lib_stubs
+          mkdir -p include/xcb include/sync include/util lib_stubs
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
           fi
@@ -252,7 +252,15 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras y stubs locales preparados con éxito."
+          # Stub para shader_stats.h para satisfacer pan_compiler.h
+          cat << 'EOF' > include/util/shader_stats.h
+          #ifndef UTIL_SHADER_STATS_H
+          #define UTIL_SHADER_STATS_H
+          /* Stub de shader_stats.h para compilación cruzada en Android */
+          #endif
+          EOF
+
+          echo "-> Cabeceras, util/shader_stats.h y stubs locales preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
