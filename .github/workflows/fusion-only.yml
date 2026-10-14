@@ -252,8 +252,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid', '-laudio']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid', '-laudio']
           EOT
           
           echo "Configurando Meson para descargar subproyectos..."
@@ -272,26 +272,27 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parche inteligente en Python que recorre todos los meson.build de libadrenotools para android, log y dl
-          if [ -d "subprojects/libadrenotools" ]; then
-              echo "Parcheando subprojects/libadrenotools para admitir dependencias de Android opcionales..."
-              python3 -c "
-              import os, re
-              for root, dirs, files in os.walk('subprojects/libadrenotools'):
-                  for file in files:
-                      if file == 'meson.build':
-                          path = os.path.join(root, file)
-                          with open(path, 'r') as f:
-                              code = f.read()
-                          
-                          for lib in ['android', 'log', 'dl']:
-                              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
-                          
-                          with open(path, 'w') as f:
-                              f.write(code)
-              print('-> subprojects/libadrenotools parcheado globalmente con éxito.')
-              "
-          fi
+          # Parche global e inteligente para neutralizar librerías estrictas tanto en libadrenotools como en el wrapper de vulkan
+          echo "Aplicando parches globales para dependencias de Android opcionales..."
+          python3 -c "
+          import os, re
+          targets = ['subprojects/libadrenotools', 'src/vulkan/wrapper']
+          for target in targets:
+              if os.path.exists(target):
+                  for root, dirs, files in os.walk(target):
+                      for file in files:
+                          if file == 'meson.build':
+                              path = os.path.join(root, file)
+                              with open(path, 'r') as f:
+                                  code = f.read()
+                              
+                              for lib in ['android', 'log', 'dl', 'aaudio']:
+                                  code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
+                              
+                              with open(path, 'w') as f:
+                                  f.write(code)
+          print('-> Parches aplicados con éxito.')
+          "
 
           echo "Reconfigurando y compilando con Meson..."
           meson setup "$BUILD_DIR" \
