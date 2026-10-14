@@ -70,8 +70,8 @@ jobs:
             wayland-protocols \
             libwayland-egl-backend-dev \
             libglvnd-dev \
-            libEGL-dev \
-            libGLES2-dev
+            libegl1-mesa-dev \
+            libgles2-mesa-dev
 
       - name: 🛠️ 3.5. Adaptar únicamente componentes de escritorio no aplicables (LLVM/CLC)
         run: |
