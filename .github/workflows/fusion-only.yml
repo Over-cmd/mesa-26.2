@@ -138,18 +138,18 @@ jobs:
               f.write(content)
           print('-> meson.build principal adaptado.')
 
-          # Parchear src/util/bitscan.c para evitar redefinición de ffs/ffsll con Bionic (Android NDK)
+          # Parchear src/util/bitscan.c para envolver completamente ffs y ffsll bajo #ifndef __BIONIC__
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
               with open(bitscan_path, 'r') as f:
                   b_code = f.read()
               
-              b_code = b_code.replace("ffs(int i)", "#ifndef __BIONIC__\nffs(int i)\n#endif")
-              b_code = b_code.replace("ffsll(long long int val)", "#ifndef __BIONIC__\nffsll(long long int val)\n#endif")
+              b_code = re.sub(r'(int\s+ffs\s*\(int\s+i\)\s*\{.*?\})', r'#ifndef __BIONIC__\n\1\n#endif', b_code, flags=re.DOTALL)
+              b_code = re.sub(r'(int\s+ffsll\s*\(long\s+long\s+int\s+val\)\s*\{.*?\})', r'#ifndef __BIONIC__\n\1\n#endif', b_code, flags=re.DOTALL)
               
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
-              print('-> src/util/bitscan.c adaptado para Android NDK.')
+              print('-> src/util/bitscan.c adaptado correctamente para Android NDK.')
           EOF
 
           python3 patch_meson.py
@@ -273,7 +273,6 @@ jobs:
           echo "Configurando Meson para descargar subproyectos de forma preventiva..."
           export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
           
-          # Primera ejecución para forzar la descarga de subproyectos (como libadrenotools)
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
@@ -287,7 +286,6 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parche global e inmediato para neutralizar librerías estrictas en libadrenotools y src/vulkan/wrapper
           echo "Aplicando parches preventivos para dependencias de Android opcionales..."
           python3 -c "
           import os, re
