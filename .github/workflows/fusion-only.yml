@@ -264,39 +264,7 @@ jobs:
           #endif
           EOF
 
-          cat << 'EOF' > include/android_forced_include.h
-          #ifndef ANDROID_FORCED_INCLUDE_H
-          #define ANDROID_FORCED_INCLUDE_H
-
-          typedef int mesa_shader_stage;
-          struct pan_stats { int dummy; };
-
-          #ifndef UNREACHABLE
-          #define UNREACHABLE(str) __builtin_unreachable()
-          #endif
-
-          struct nir_instr_debug_info;
-          #ifndef NIR_INSTRUCTION_DEBUG_INFO_DEFINED
-          #define NIR_INSTRUCTION_DEBUG_INFO_DEFINED
-          typedef struct nir_instr_debug_info nir_instr_debug_info;
-          #endif
-
-          #ifndef VA_NAN_MODE_DEFINED
-          #define VA_NAN_MODE_DEFINED
-          enum va_nan_mode {
-              VA_NAN_MODE_DEFAULT = 0
-          };
-          #endif
-
-          #include "util/u_dynarray.h"
-          #ifndef UTIL_DYNARRAY_INIT
-          #define UTIL_DYNARRAY_INIT ((struct util_dynarray){0})
-          #endif
-
-          #endif
-          EOF
-
-          echo "-> Cabeceras y stubs globales forzados preparados con éxito."
+          echo "-> Cabeceras y stubs locales preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
@@ -362,8 +330,8 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-include', '/workspace/include/android_forced_include.h', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-include', '/workspace/include/android_forced_include.h', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
