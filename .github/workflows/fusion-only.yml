@@ -169,7 +169,6 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          # Neutralizar decode_csf.c para evitar errores de genxml en pandecode
           decode_csf = 'src/panfrost/lib/genxml/decode_csf.c'
           if os.path.exists(decode_csf):
               with open(decode_csf, 'w') as f:
