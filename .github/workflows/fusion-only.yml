@@ -203,7 +203,6 @@ jobs:
               fi
           done
 
-          # Crear librerías estáticas vacías (stubs) para libdrm en lib_stubs para evitar errores del linker
           ar rcs lib_stubs/libdrm.a
 
           cat << 'EOF' > include/sync/sync.h
@@ -340,7 +339,8 @@ jobs:
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper \
-              -Dzstd=disabled || true
+              -Dzstd=disabled \
+              -Dzlib=disabled || true
 
           echo "Aplicando parches preventivos para dependencias de Android opcionales..."
           python3 -c "
@@ -377,7 +377,8 @@ jobs:
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper \
-              -Dzstd=disabled
+              -Dzstd=disabled \
+              -Dzlib=disabled
               
           meson compile -C "$BUILD_DIR"
           EOF
