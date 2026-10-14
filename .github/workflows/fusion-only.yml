@@ -163,7 +163,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
+      - name: 🛠️ 3.6. build_inside.sh integrando libatomic real del NDK en el Sysroot
         run: |
           echo "Generando build_inside.sh..."
           
@@ -213,6 +213,19 @@ jobs:
           echo "-> NDK Sysroot real: $NDK_SYSROOT"
           echo "-> NDK Libs reales: $NDK_LIB_DIR"
           
+          # Localizar la libatomic.a real dentro del toolchain/clang del NDK y ubicarla en el sysroot
+          LIBATOMIC_SRC=$(find "$NDK_PATH" -name "libatomic.a" -type f 2>/dev/null | grep aarch64 | head -n 1)
+          if [ -z "$LIBATOMIC_SRC" ]; then
+              LIBATOMIC_SRC=$(find "$NDK_PATH" -name "libatomic.a" -type f 2>/dev/null | head -n 1)
+          fi
+          
+          if [ -n "$LIBATOMIC_SRC" ]; then
+              cp -v "$LIBATOMIC_SRC" "$NDK_LIB_DIR/"
+              echo "-> libatomic.a oficial del NDK instalada correctamente en el sysroot."
+          else
+              echo "⚠️ Advertencia: No se encontró libatomic.a en el NDK, buscando en el sistema..."
+          fi
+          
           cat << EOT > android-aarch64.txt
           [binaries]
           c = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang'
@@ -228,10 +241,10 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30', '-mno-outline-atomics']
-          cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30', '-mno-outline-atomics']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
+          c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
