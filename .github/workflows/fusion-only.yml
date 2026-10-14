@@ -219,15 +219,19 @@ jobs:
           echo "Ejecutando setup preliminar para descargar submódulos..."
           meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
           
-          # Parchear subprojects/libadrenotools/meson.build para que find_library('android') no falle si no se encuentra estrictamente
+          # Parchear subprojects/libadrenotools/meson.build para hacer flexibles las búsquedas de android y log
           if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              echo "Parcheando subprojects/libadrenotools/meson.build para hacer flexible la librería android..."
+              echo "Parcheando subprojects/libadrenotools/meson.build..."
               python3 -c "
               path = 'subprojects/libadrenotools/meson.build'
               with open(path, 'r') as f:
                   content = f.read()
               content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
               content = content.replace('cpp.find_library(\"android\")', 'cpp.find_library(\"android\", required : false)')
+              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
+              content = content.replace('c.find_library(\"log\")', 'c.find_library(\"log\", required : false)')
+              content = content.replace(\"cpp.find_library('log')\", \"cpp.find_library('log', required : false)\")
+              content = content.replace('cpp.find_library(\"log\")', 'cpp.find_library(\"log\", required : false)')
               with open(path, 'w') as f:
                   f.write(content)
               print('-> subprojects/libadrenotools/meson.build parcheado con éxito.')
