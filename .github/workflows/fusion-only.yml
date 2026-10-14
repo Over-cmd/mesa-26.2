@@ -38,7 +38,7 @@ jobs:
           rm -rf temp-wrapper
           echo "-> Estructura y drivers nativos del Wrapper 25 integrados con éxito."
 
-      - name: ⚙️ 3. Instalar absolutamente todas las herramientas y dependencias exigidas por el entorno y el Dockerfile
+      - name: ⚙️ 3. Instalar absolutamente todas las herramientas y dependencias exigidas (incluyendo soporte atómico cruzado)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -71,7 +71,9 @@ jobs:
             libwayland-egl-backend-dev \
             libglvnd-dev \
             libegl1-mesa-dev \
-            libgles2-mesa-dev
+            libgles2-mesa-dev \
+            libatomic1 \
+            libatomic1-arm64-cross
 
       - name: 🛠️ 3.5. Adaptar únicamente componentes de escritorio no aplicables (LLVM/CLC)
         run: |
@@ -163,7 +165,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
+      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android con soporte atómico
         run: |
           echo "Generando build_inside.sh..."
           
@@ -230,8 +232,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
