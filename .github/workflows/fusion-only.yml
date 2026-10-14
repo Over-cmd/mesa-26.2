@@ -138,15 +138,18 @@ jobs:
               f.write(content)
           print('-> meson.build principal adaptado.')
 
-          # Parchear src/util/bitscan.c para envolver completamente ffs y ffsll bajo #ifndef __BIONIC__
+          # Parchear src/util/bitscan.c de forma limpia para evitar conflicto con Bionic
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
               with open(bitscan_path, 'r') as f:
                   b_code = f.read()
               
-              b_code = re.sub(r'(int\s+ffs\s*\(int\s+i\)\s*\{.*?\})', r'#ifndef __BIONIC__\n\1\n#endif', b_code, flags=re.DOTALL)
-              b_code = re.sub(r'(int\s+ffsll\s*\(long\s+long\s+int\s+val\)\s*\{.*?\})', r'#ifndef __BIONIC__\n\1\n#endif', b_code, flags=re.DOTALL)
-              
+              b_code = b_code.replace("int\nffs(int i)", "#ifndef __BIONIC__\nint\nffs(int i)")
+              b_code = b_code.replace("int\nffsll(long long int val)", "#ifndef __BIONIC__\nint\nffsll(long long int val)")
+              if "#ifndef __BIONIC__" in b_code:
+                  # Cerramos el ifdef al final de las funciones o añadimos #endif donde corresponda
+                  b_code = b_code.replace("return bit + 1;\n}", "return bit + 1;\n}\n#endif")
+
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado correctamente para Android NDK.')
