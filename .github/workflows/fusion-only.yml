@@ -216,7 +216,7 @@ jobs:
           #endif
           EOF
 
-          # Stub de expat.h para satisfacer xmlconfig.c en Android
+          # Stub completo de expat.h para satisfacer xmlconfig.c en Android
           cat << 'EOF' > include/expat.h
           #ifndef EXPAT_H
           #define EXPAT_H
@@ -236,9 +236,12 @@ jobs:
           XML_Parser XML_ParserCreate(const char *encoding);
           void XML_ParserFree(XML_Parser parser);
           void XML_SetUserData(XML_Parser parser, void *userData);
+          void *XML_GetUserData(XML_Parser parser);
           void XML_SetElementHandler(XML_Parser parser, XML_StartElementHandler start, XML_EndElementHandler end);
           void XML_SetCharacterDataHandler(XML_Parser parser, XML_CharacterDataHandler handler);
           XML_Status XML_Parse(XML_Parser parser, const char *s, int len, int isFinal);
+          void *XML_GetBuffer(XML_Parser parser, int len);
+          XML_Status XML_ParseBuffer(XML_Parser parser, int len, int isFinal);
           const char *XML_ErrorString(int code);
           int XML_GetErrorCode(XML_Parser parser);
           int XML_GetCurrentLineNumber(XML_Parser parser);
@@ -248,7 +251,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras (incluyendo expat.h) y pkg-config local preparados con éxito."
+          echo "-> Cabeceras (incluyendo expat.h completo) y pkg-config local preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
