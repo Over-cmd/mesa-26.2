@@ -1555,7 +1555,7 @@ if cc.compiles('''#include <stdint.h>
   #
   # This can happen for 64-bit atomic operations on 32-bit architectures such
   # as ARM.
-  if not cc.links('''#include <stdint.h>
+  if host_machine.system() != 'android' and not cc.links('''#include <stdint.h>
                      int main() {
                        struct {
                          uint64_t *v;
