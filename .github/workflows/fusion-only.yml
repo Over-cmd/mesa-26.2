@@ -138,37 +138,37 @@ jobs:
               f.write(content)
           print('-> meson.build principal adaptado.')
 
-          # Parche robusto mediante conteo exacto de llaves para ffs y ffsll en bitscan.c
+          # Parche robusto con límites de palabra exactos para ffs y ffsll en bitscan.c
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
               with open(bitscan_path, 'r') as f:
                   b_code = f.read()
               
-              def wrap_func(code, func_sig):
-                  idx = code.find(func_sig)
-                  if idx != -1:
-                      brace_idx = code.find('{', idx)
-                      if brace_idx != -1:
-                          count = 1
-                          curr = brace_idx + 1
-                          while curr < len(code) and count > 0:
-                              if code[curr] == '{':
-                                  count += 1
-                              elif code[curr] == '}':
-                                  count -= 1
-                              curr += 1
-                          if count == 0:
-                              func_def = code[idx:curr]
-                              wrapped = f"#ifndef __BIONIC__\n{func_def}\n#endif"
-                              code = code.replace(func_def, wrapped, 1)
+              def safe_wrap(code, func_name):
+                  pattern = r'(\bint\s+' + func_name + r'\s*\([^)]*\)\s*\{)'
+                  match = re.search(pattern, code)
+                  if match:
+                      start_brace = match.end() - 1
+                      count = 1
+                      curr = start_brace + 1
+                      while curr < len(code) and count > 0:
+                          if code[curr] == '{':
+                              count += 1
+                          elif code[curr] == '}':
+                              count -= 1
+                          curr += 1
+                      if count == 0:
+                          func_body = code[match.start():curr]
+                          wrapped = f"#ifndef __BIONIC__\n{func_body}\n#endif"
+                          code = code.replace(func_body, wrapped, 1)
                   return code
 
-              b_code = wrap_func(b_code, 'ffs(')
-              b_code = wrap_func(b_code, 'ffsll(')
+              b_code = safe_wrap(b_code, 'ffs')
+              b_code = safe_wrap(b_code, 'ffsll')
 
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
-              print('-> src/util/bitscan.c adaptado de forma precisa con #ifndef __BIONIC__.')
+              print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
           EOF
 
           python3 patch_meson.py
