@@ -270,9 +270,10 @@ jobs:
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid', '-laudio']
           EOT
           
-          echo "Configurando Meson para descargar subproyectos..."
+          echo "Configurando Meson para descargar subproyectos de forma preventiva..."
           export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
           
+          # Primera ejecución para forzar la descarga de subproyectos (como libadrenotools)
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
@@ -286,25 +287,27 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          if [ -d "subprojects/libadrenotools" ]; then
-              echo "Parcheando subprojects/libadrenotools para admitir dependencias de Android opcionales..."
-              python3 -c "
-              import os, re
-              for root, dirs, files in os.walk('subprojects/libadrenotools'):
-                  for file in files:
-                      if file == 'meson.build':
-                          path = os.path.join(root, file)
-                          with open(path, 'r') as f:
-                              code = f.read()
-                          
-                          for lib in ['android', 'log', 'dl', 'aaudio']:
-                              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
-                          
-                          with open(path, 'w') as f:
-                              f.write(code)
-              print('-> subprojects/libadrenotools parcheado globalmente con éxito.')
-              "
-          fi
+          # Parche global e inmediato para neutralizar librerías estrictas en libadrenotools y src/vulkan/wrapper
+          echo "Aplicando parches preventivos para dependencias de Android opcionales..."
+          python3 -c "
+          import os, re
+          targets = ['subprojects/libadrenotools', 'src/vulkan/wrapper']
+          for target in targets:
+              if os.path.exists(target):
+                  for root, dirs, files in os.walk(target):
+                      for file in files:
+                          if file == 'meson.build':
+                              path = os.path.join(root, file)
+                              with open(path, 'r') as f:
+                                  code = f.read()
+                              
+                              for lib in ['android', 'log', 'dl', 'aaudio']:
+                                  code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
+                              
+                              with open(path, 'w') as f:
+                                  f.write(code)
+          print('-> Parches preventivos aplicados con éxito.')
+          "
 
           echo "Reconfigurando y compilando con Meson..."
           meson setup "$BUILD_DIR" \
