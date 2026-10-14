@@ -169,22 +169,30 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          # Parchear u_dynarray.h para soportar util_dynarray_append con 2 argumentos
+          # Parchear u_dynarray.h para soportar tanto 2 como 3 argumentos de forma flexible
           u_dyn_path = 'src/util/u_dynarray.h'
           if os.path.exists(u_dyn_path):
               with open(u_dyn_path, 'r') as f:
                   ud_code = f.read()
               
-              new_macro = '''#define util_dynarray_append(buf, v) do { \\
+              flexible_macro = '''
+              #define _UDYN_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
+              #define _util_dynarray_append_3(buf, type, v) do { \\
+                  type __v = (v); \\
+                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \\
+              } while(0)
+              #define _util_dynarray_append_2(buf, v) do { \\
                   __typeof__(v) __v = (v); \\
                   memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \\
-              } while(0)'''
+              } while(0)
+              #define util_dynarray_append(...) _UDYN_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
+              '''
               
-              ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', new_macro, ud_code, flags=re.DOTALL)
+              ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', flexible_macro, ud_code, flags=re.DOTALL)
               
               with open(u_dyn_path, 'w') as f:
                   f.write(ud_code)
-              print('-> src/util/u_dynarray.h parcheado para soportar 2 argumentos.')
+              print('-> src/util/u_dynarray.h parcheado con macro flexible para 2 y 3 argumentos.')
           EOF
 
           python3 patch_meson.py
