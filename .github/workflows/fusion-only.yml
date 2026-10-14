@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional librt, libdl y atómicos)
+      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional librt, libdl, atómicos y android)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -88,10 +88,11 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Neutralizar find_library para atomic, dl y rt de forma segura en Android
+          # Neutralizar find_library para atomic, dl, rt y android de forma segura en Android
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]rt['\"].*?\)", "disabler()", content, flags=re.DOTALL)
+          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]android['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_dl = cc.find_library('dl', required : true)", "dep_dl = []")
@@ -144,7 +145,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh aprovechando la estructura del Wrapper 25
+      - name: 🛠️ 3.6. build_inside.sh aprovechando la estructura del Wrapper 25 y parcheando libadrenotools
         run: |
           echo "Generando build_inside.sh..."
           
@@ -215,7 +216,26 @@ jobs:
           cpp_link_args = ['-ldrm']
           EOT
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
+          echo "Ejecutando setup preliminar para descargar submódulos..."
+          meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
+          
+          # Parchear subprojects/libadrenotools/meson.build para que find_library('android') no falle si no se encuentra estrictamente
+          if [ -f "subprojects/libadrenotools/meson.build" ]; then
+              echo "Parcheando subprojects/libadrenotools/meson.build para hacer flexible la librería android..."
+              python3 -c "
+              path = 'subprojects/libadrenotools/meson.build'
+              with open(path, 'r') as f:
+                  content = f.read()
+              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
+              content = content.replace('cpp.find_library(\"android\")', 'cpp.find_library(\"android\", required : false)')
+              with open(path, 'w') as f:
+                  f.write(content)
+              print('-> subprojects/libadrenotools/meson.build parcheado con éxito.')
+              "
+          fi
+          
+          echo "Reiniciando setup definitivo de Meson..."
+          rm -rf "$BUILD_DIR"
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
