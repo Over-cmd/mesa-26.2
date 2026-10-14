@@ -125,6 +125,7 @@ jobs:
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : true)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : false)", "dep_atomic = []")
+          content = content.replace("dep_atomic = cc.find_library('atomic')", "dep_atomic = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
