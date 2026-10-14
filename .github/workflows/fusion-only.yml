@@ -84,6 +84,7 @@ jobs:
           echo "Ejecutando script Python para adaptar meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
+          import os
 
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -136,6 +137,19 @@ jobs:
           with open('meson.build', 'w') as f:
               f.write(content)
           print('-> meson.build principal adaptado.')
+
+          # Parchear src/util/bitscan.c para evitar redefinición de ffs/ffsll con Bionic (Android NDK)
+          bitscan_path = 'src/util/bitscan.c'
+          if os.path.exists(bitscan_path):
+              with open(bitscan_path, 'r') as f:
+                  b_code = f.read()
+              
+              b_code = b_code.replace("ffs(int i)", "#ifndef __BIONIC__\nffs(int i)\n#endif")
+              b_code = b_code.replace("ffsll(long long int val)", "#ifndef __BIONIC__\nffsll(long long int val)\n#endif")
+              
+              with open(bitscan_path, 'w') as f:
+                  f.write(b_code)
+              print('-> src/util/bitscan.c adaptado para Android NDK.')
           EOF
 
           python3 patch_meson.py
@@ -272,27 +286,25 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parche global e inteligente para neutralizar librerías estrictas tanto en libadrenotools como en el wrapper de vulkan
-          echo "Aplicando parches globales para dependencias de Android opcionales..."
-          python3 -c "
-          import os, re
-          targets = ['subprojects/libadrenotools', 'src/vulkan/wrapper']
-          for target in targets:
-              if os.path.exists(target):
-                  for root, dirs, files in os.walk(target):
-                      for file in files:
-                          if file == 'meson.build':
-                              path = os.path.join(root, file)
-                              with open(path, 'r') as f:
-                                  code = f.read()
-                              
-                              for lib in ['android', 'log', 'dl', 'aaudio']:
-                                  code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
-                              
-                              with open(path, 'w') as f:
-                                  f.write(code)
-          print('-> Parches aplicados con éxito.')
-          "
+          if [ -d "subprojects/libadrenotools" ]; then
+              echo "Parcheando subprojects/libadrenotools para admitir dependencias de Android opcionales..."
+              python3 -c "
+              import os, re
+              for root, dirs, files in os.walk('subprojects/libadrenotools'):
+                  for file in files:
+                      if file == 'meson.build':
+                          path = os.path.join(root, file)
+                          with open(path, 'r') as f:
+                              code = f.read()
+                          
+                          for lib in ['android', 'log', 'dl', 'aaudio']:
+                              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
+                          
+                          with open(path, 'w') as f:
+                              f.write(code)
+              print('-> subprojects/libadrenotools parcheado globalmente con éxito.')
+              "
+          fi
 
           echo "Reconfigurando y compilando con Meson..."
           meson setup "$BUILD_DIR" \
