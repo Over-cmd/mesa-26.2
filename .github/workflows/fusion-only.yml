@@ -38,7 +38,7 @@ jobs:
           rm -rf temp-wrapper
           echo "-> Estructura y drivers nativos del Wrapper 25 integrados con éxito."
 
-      - name: ⚙️ 3. Instalar absolutamente todas las herramientas, bibliotecas y dependencias exigidas por el entorno
+      - name: ⚙️ 3. Instalar absolutamente todas las herramientas, bibliotecas y dependencias exigidas
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -166,7 +166,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android con libatomic
+      - name: 🛠️ 3.6. build_inside.sh instalando físicamente libatomic aarch64 en el Sysroot del NDK
         run: |
           echo "Generando build_inside.sh..."
           
@@ -216,9 +216,14 @@ jobs:
           echo "-> NDK Sysroot real: $NDK_SYSROOT"
           echo "-> NDK Libs reales: $NDK_LIB_DIR"
           
-          # Enlazar o copiar la libatomic real de la arquitectura aarch64 desde las librerías cruzadas instaladas o el NDK
-          if [ -f "/usr/aarch64-linux-gnu/lib/libatomic.so.1" ]; then
-              cp -v /usr/aarch64-linux-gnu/lib/libatomic.a "$NDK_LIB_DIR/" 2>/dev/null || true
+          # Instalar físicamente la libatomic aarch64 real en el directorio de librerías del NDK
+          mkdir -p "$NDK_LIB_DIR"
+          if [ -f "/usr/aarch64-linux-gnu/lib/libatomic.a" ]; then
+              cp -v /usr/aarch64-linux-gnu/lib/libatomic.a "$NDK_LIB_DIR/"
+              echo "-> libatomic.a copiada físicamente al sysroot del NDK."
+          elif [ -f "/usr/lib/aarch64-linux-gnu/libatomic.a" ]; then
+              cp -v /usr/lib/aarch64-linux-gnu/libatomic.a "$NDK_LIB_DIR/"
+              echo "-> libatomic.a copiada físicamente al sysroot del NDK."
           fi
           
           cat << EOT > android-aarch64.txt
