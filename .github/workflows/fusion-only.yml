@@ -28,27 +28,27 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Integrar todo el contenido del Wrapper 25 en el Workspace
+      - name: 🧩 2.1. Integrar todo el contenido del Wrapper 25 en el Workspace de forma íntegra
         run: |
           if [ -d "temp-wrapper" ]; then
-              echo "Copiando todos los recursos del Wrapper 25..."
+              echo "Copiando todos los recursos originales del Wrapper 25..."
               cp -av temp-wrapper/* . || true
               cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
           fi
           rm -rf temp-wrapper
-          echo "-> Estructura del Wrapper 25 integrada con éxito."
+          echo "-> Estructura original del Wrapper 25 integrada con éxito."
 
       - name: ⚙️ 3. Instalar Herramientas, patchelf y Paquetes de Desarrollo (XCB y DRM)
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear lo estrictamente necesario en meson.build principal (CLC y LLVM)
+      - name: 🛠️ 3.5. Ajustar únicamente dependencias de escritorio no aplicables (LLVM/CLC)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build principal..."
+          echo "Ejecutando script Python para adaptar compatibilidad base de Meson..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -90,7 +90,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal parcheado correctamente.')
+          print('-> meson.build principal adaptado.')
           EOF
 
           python3 patch_meson.py
@@ -133,7 +133,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh configurando el NDK Sysroot y las rutas de enlace
+      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real del NDK de Android
         run: |
           echo "Generando build_inside.sh..."
           
@@ -173,12 +173,17 @@ jobs:
           fi
           
           TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
-          NDK_SYSROOT_LIB=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
+          # Apuntar de forma estricta al sysroot y al directorio específico de librerías AArch64 para API 30 del NDK real
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          NDK_LIB_DIR="$NDK_SYSROOT/usr/lib/aarch64-linux-android/30"
+          if [ ! -d "$NDK_LIB_DIR" ]; then
+              NDK_LIB_DIR="$NDK_SYSROOT/usr/lib/aarch64-linux-android"
+          fi
           
           echo "-> Clang encontrado en: $CLANG_PATH"
-          echo "-> NDK Sysroot Lib Dir: $NDK_SYSROOT_LIB"
+          echo "-> NDK Sysroot real: $NDK_SYSROOT"
+          echo "-> NDK Libs reales: $NDK_LIB_DIR"
           
-          # Generar cross-file con las rutas exactas del sysroot del NDK para que encuentre libdl, liblog, libandroid, etc.
           cat << EOT > android-aarch64.txt
           [binaries]
           c = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang'
@@ -194,10 +199,10 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-D__ANDROID_API__=30']
-          c_link_args = ['-L${NDK_SYSROOT_LIB}', '-ldrm']
-          cpp_link_args = ['-L${NDK_SYSROOT_LIB}', '-ldrm']
+          c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
