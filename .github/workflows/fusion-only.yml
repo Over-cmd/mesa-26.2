@@ -340,7 +340,8 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper \
               -Dzstd=disabled \
-              -Dzlib=disabled || true
+              -Dzlib=disabled \
+              -Dshader-cache=disabled || true
 
           echo "Aplicando parches preventivos para dependencias de Android opcionales..."
           python3 -c "
@@ -378,7 +379,8 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper \
               -Dzstd=disabled \
-              -Dzlib=disabled
+              -Dzlib=disabled \
+              -Dshader-cache=disabled
               
           meson compile -C "$BUILD_DIR"
           EOF
