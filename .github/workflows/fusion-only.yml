@@ -38,7 +38,7 @@ jobs:
           rm -rf temp-wrapper
           echo "-> Estructura y drivers nativos del Wrapper 25 integrados con éxito."
 
-      - name: ⚙️ 3. Instalar absolutamente todas las herramientas y dependencias exigidas
+      - name: ⚙️ 3. Instalar absolutamente todas las herramientas, bibliotecas y dependencias exigidas por el entorno
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -71,7 +71,10 @@ jobs:
             libwayland-egl-backend-dev \
             libglvnd-dev \
             libegl1-mesa-dev \
-            libgles2-mesa-dev
+            libgles2-mesa-dev \
+            libatomic1 \
+            libc6-dev-arm64-cross \
+            libatomic1-arm64-cross
 
       - name: 🛠️ 3.5. Adaptar únicamente componentes de escritorio no aplicables (LLVM/CLC)
         run: |
@@ -163,7 +166,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh integrando libatomic real del NDK en el Sysroot
+      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android con libatomic
         run: |
           echo "Generando build_inside.sh..."
           
@@ -213,17 +216,9 @@ jobs:
           echo "-> NDK Sysroot real: $NDK_SYSROOT"
           echo "-> NDK Libs reales: $NDK_LIB_DIR"
           
-          # Localizar la libatomic.a real dentro del toolchain/clang del NDK y ubicarla en el sysroot
-          LIBATOMIC_SRC=$(find "$NDK_PATH" -name "libatomic.a" -type f 2>/dev/null | grep aarch64 | head -n 1)
-          if [ -z "$LIBATOMIC_SRC" ]; then
-              LIBATOMIC_SRC=$(find "$NDK_PATH" -name "libatomic.a" -type f 2>/dev/null | head -n 1)
-          fi
-          
-          if [ -n "$LIBATOMIC_SRC" ]; then
-              cp -v "$LIBATOMIC_SRC" "$NDK_LIB_DIR/"
-              echo "-> libatomic.a oficial del NDK instalada correctamente en el sysroot."
-          else
-              echo "⚠️ Advertencia: No se encontró libatomic.a en el NDK, buscando en el sistema..."
+          # Enlazar o copiar la libatomic real de la arquitectura aarch64 desde las librerías cruzadas instaladas o el NDK
+          if [ -f "/usr/aarch64-linux-gnu/lib/libatomic.so.1" ]; then
+              cp -v /usr/aarch64-linux-gnu/lib/libatomic.a "$NDK_LIB_DIR/" 2>/dev/null || true
           fi
           
           cat << EOT > android-aarch64.txt
