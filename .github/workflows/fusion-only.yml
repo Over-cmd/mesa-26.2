@@ -88,7 +88,6 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Neutralizar find_library para atomic, dl, rt y android de forma segura en Android
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
           content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]rt['\"].*?\)", "disabler()", content, flags=re.DOTALL)
@@ -145,7 +144,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh aprovechando la estructura del Wrapper 25 y parcheando libadrenotools
+      - name: 🛠️ 3.6. build_inside.sh extrayendo del Wrapper 25 y parcheando libadrenotools completamente
         run: |
           echo "Generando build_inside.sh..."
           
@@ -188,7 +187,6 @@ jobs:
           echo "-> Clang encontrado en: $CLANG_PATH"
           echo "-> Toolchain bin: $TOOLCHAIN_BIN"
           
-          # Si el Wrapper 25 incluye librerías precompiladas o sysroot custom, las copiamos al sysroot del NDK
           SYSROOT_LIB_DIR=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
           if [ -d "$SYSROOT_LIB_DIR" ]; then
               find /workspace -name "*.so" -o -name "*.a" -exec cp -v {} "$SYSROOT_LIB_DIR/" \; 2>/dev/null || true
@@ -219,24 +217,24 @@ jobs:
           echo "Ejecutando setup preliminar para descargar submódulos..."
           meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
           
-          # Parchear subprojects/libadrenotools/meson.build para hacer flexibles las búsquedas de android y log
-          if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              echo "Parcheando subprojects/libadrenotools/meson.build..."
+          # Hacer opcional cualquier find_library de librerías del sistema en libadrenotools y sus submódulos
+          find subprojects/ -name "meson.build" | while read -r sub_meson; do
+              echo "Parcheando submódulo: $sub_meson"
               python3 -c "
-              path = 'subprojects/libadrenotools/meson.build'
+              path = '$sub_meson'
               with open(path, 'r') as f:
                   content = f.read()
-              content = content.replace(\"cpp.find_library('android')\", \"cpp.find_library('android', required : false)\")
-              content = content.replace('cpp.find_library(\"android\")', 'cpp.find_library(\"android\", required : false)')
-              content = content.replace(\"c.find_library('log')\", \"c.find_library('log', required : false)\")
-              content = content.replace('c.find_library(\"log\")', 'c.find_library(\"log\", required : false)')
-              content = content.replace(\"cpp.find_library('log')\", \"cpp.find_library('log', required : false)\")
-              content = content.replace('cpp.find_library(\"log\")', 'cpp.find_library(\"log\", required : false)')
+              for lib in ['android', 'log', 'dl', 'atomic', 'rt']:
+                  content = content.replace(f\"find_library('{lib}')\", f\"find_library('{lib}', required : false)\")
+                  content = content.replace(f'find_library(\"{lib}\")', f'find_library(\"{lib}\", required : false)')
+                  content = content.replace(f\"c.find_library('{lib}')\", f\"c.find_library('{lib}', required : false)\")
+                  content = content.replace(f'c.find_library(\"{lib}\")', f'c.find_library(\"{lib}\", required : false)')
+                  content = content.replace(f\"cpp.find_library('{lib}')\", f\"cpp.find_library('{lib}', required : false)\")
+                  content = content.replace(f'cpp.find_library(\"{lib}\")', f'cpp.find_library(\"sources\", required : false)')
               with open(path, 'w') as f:
                   f.write(content)
-              print('-> subprojects/libadrenotools/meson.build parcheado con éxito.')
               "
-          fi
+          done
           
           echo "Reiniciando setup definitivo de Meson..."
           rm -rf "$BUILD_DIR"
