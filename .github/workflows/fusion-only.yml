@@ -169,7 +169,6 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          # Parchear u_dynarray.h para soportar tanto 2 como 3 argumentos de forma flexible
           u_dyn_path = 'src/util/u_dynarray.h'
           if os.path.exists(u_dyn_path):
               with open(u_dyn_path, 'r') as f:
@@ -305,6 +304,10 @@ jobs:
           enum va_nan_mode {
               VA_NAN_MODE_DEFAULT = 0
           };
+          #endif
+
+          #ifndef UTIL_DYNARRAY_INIT
+          #define UTIL_DYNARRAY_INIT { 0 }
           #endif
 
           #endif
