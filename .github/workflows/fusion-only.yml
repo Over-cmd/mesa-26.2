@@ -81,9 +81,10 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build principal..."
+          echo "Ejecutando script Python para adaptar meson.build principal y subproyectos..."
           cat << 'EOF' > patch_meson.py
           import re
+          import os
 
           with open('meson.build', 'r') as f:
               content = f.read()
@@ -137,6 +138,18 @@ jobs:
           with open('meson.build', 'w') as f:
               f.write(content)
           print('-> meson.build principal adaptado.')
+
+          # Parchear subprojects/libadrenotools/meson.build si existe
+          adrenotools_path = 'subprojects/libadrenotools/meson.build'
+          if os.path.exists(adrenotools_path):
+              with open(adrenotools_path, 'r') as af:
+                  ad_content = af.read()
+              ad_content = ad_content.replace("dependency('android'", "dependency('android', required : false")
+              ad_content = ad_content.replace("cc.find_library('android'", "cc.find_library('android', required : false")
+              ad_content = ad_content.replace("cpp.find_library('android'", "cpp.find_library('android', required : false")
+              with open(adrenotools_path, 'w') as af:
+                  af.write(ad_content)
+              print('-> subprojects/libadrenotools/meson.build adaptado.')
           EOF
 
           python3 patch_meson.py
