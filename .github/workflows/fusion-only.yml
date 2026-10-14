@@ -76,12 +76,12 @@ jobs:
             libc6-dev-arm64-cross \
             libatomic1-arm64-cross
 
-      - name: 🛠️ 3.5. Adaptar únicamente componentes de escritorio no aplicables (LLVM/CLC)
+      - name: 🛠️ 3.5. Adaptar componentes de escritorio y configurar atomic de forma nativa para Android
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar compatibilidad base de Meson..."
+          echo "Ejecutando script Python para adaptar meson.build principal..."
           cat << 'EOF' > patch_meson.py
           import re
 
@@ -120,6 +120,12 @@ jobs:
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
+
+          # Mapear dep_atomic de forma limpia para que use el soporte nativo del compilador en Android
+          content = content.replace("dep_atomic = cc.find_library('atomic', required : true)", "dep_atomic = []")
+          content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
+          content = content.replace("dep_atomic = cpp.find_library('atomic', required : true)", "dep_atomic = []")
+          content = content.replace("dep_atomic = cpp.find_library('atomic', required : false)", "dep_atomic = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
@@ -166,7 +172,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh instalando físicamente libatomic aarch64 en el Sysroot del NDK
+      - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
           echo "Generando build_inside.sh..."
           
@@ -216,16 +222,6 @@ jobs:
           echo "-> NDK Sysroot real: $NDK_SYSROOT"
           echo "-> NDK Libs reales: $NDK_LIB_DIR"
           
-          # Instalar físicamente la libatomic aarch64 real en el directorio de librerías del NDK
-          mkdir -p "$NDK_LIB_DIR"
-          if [ -f "/usr/aarch64-linux-gnu/lib/libatomic.a" ]; then
-              cp -v /usr/aarch64-linux-gnu/lib/libatomic.a "$NDK_LIB_DIR/"
-              echo "-> libatomic.a copiada físicamente al sysroot del NDK."
-          elif [ -f "/usr/lib/aarch64-linux-gnu/libatomic.a" ]; then
-              cp -v /usr/lib/aarch64-linux-gnu/libatomic.a "$NDK_LIB_DIR/"
-              echo "-> libatomic.a copiada físicamente al sysroot del NDK."
-          fi
-          
           cat << EOT > android-aarch64.txt
           [binaries]
           c = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang'
@@ -243,8 +239,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-latomic', '-ldrm', '-ldl', '-llog', '-landroid']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
