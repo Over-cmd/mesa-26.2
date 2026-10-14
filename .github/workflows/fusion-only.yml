@@ -169,7 +169,7 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          # Parchear pan_compiler.h usando macro para mesa_shader_stage
+          # Parchear pan_compiler.h insertando el macro después de los includes
           pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
           if os.path.exists(pan_compiler_path):
               with open(pan_compiler_path, 'r') as f:
@@ -181,12 +181,18 @@ jobs:
               #endif
               struct pan_stats { int dummy; };
               """
+              
               if "struct pan_stats" not in pc_code:
-                  pc_code = fix_types + "\n" + pc_code
+                  last_include = pc_code.rfind("#include")
+                  if last_include != -1:
+                      end_of_line = pc_code.find("\n", last_include)
+                      pc_code = pc_code[:end_of_line] + "\n" + fix_types + pc_code[end_of_line:]
+                  else:
+                      pc_code = fix_types + "\n" + pc_code
               
               with open(pan_compiler_path, 'w') as f:
                   f.write(pc_code)
-              print('-> src/panfrost/compiler/pan_compiler.h parcheado con macro para mesa_shader_stage.')
+              print('-> src/panfrost/compiler/pan_compiler.h parcheado correctamente tras los includes.')
           EOF
 
           python3 patch_meson.py
