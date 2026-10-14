@@ -272,16 +272,20 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parche inteligente por Python sobre libadrenotools para forzar que android y log sean opcionales
+          # Parche robusto mediante reemplazo directo de cadenas en Python sobre libadrenotools
           if [ -f "subprojects/libadrenotools/meson.build" ]; then
               echo "Parcheando subprojects/libadrenotools/meson.build con Python..."
               python3 -c "
-              import re
               path = 'subprojects/libadrenotools/meson.build'
               with open(path, 'r') as f:
                   code = f.read()
-              code = re.sub(r'(cc|cpp)\.find_library\(\s*[\'\"](android|log)[\'\"][^)]*\)', r\"\1.find_library('\2', required : false)\", code)
-              code = re.sub(r'dependency\(\s*[\'\"](android|log)[\'\"][^)]*\)', r\"dependency('\2', required : false)\", code)
+              for lib in ['android', 'log']:
+                  code = code.replace(f\"cc.find_library('{lib}')\", f\"cc.find_library('{lib}', required : false)\")
+                  code = code.replace(f'cc.find_library(\"{lib}\")', f'cc.find_library(\"{lib}\", required : false)')
+                  code = code.replace(f\"cpp.find_library('{lib}')\", f\"cpp.find_library('{lib}', required : false)\")
+                  code = code.replace(f'cpp.find_library(\"{lib}\")', f'cpp.find_library(\"{lib}\", required : false)')
+                  code = code.replace(f\"dependency('{lib}')\", f\"dependency('{lib}', required : false)\")
+                  code = code.replace(f'dependency(\"{lib}\")', f'dependency(\"{lib}\", required : false)')
               with open(path, 'w') as f:
                   f.write(code)
               print('-> subprojects/libadrenotools/meson.build parcheado con éxito.')
