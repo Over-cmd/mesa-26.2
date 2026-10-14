@@ -138,7 +138,6 @@ jobs:
               f.write(content)
           print('-> meson.build principal adaptado.')
 
-          # Parche robusto con límites de palabra exactos para ffs y ffsll en bitscan.c
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
               with open(bitscan_path, 'r') as f:
@@ -303,7 +302,8 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper || true
+              -Dvulkan-drivers=panfrost,wrapper \
+              -Dzstd=disabled || true
 
           echo "Aplicando parches preventivos para dependencias de Android opcionales..."
           python3 -c "
@@ -339,7 +339,8 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper
+              -Dvulkan-drivers=panfrost,wrapper \
+              -Dzstd=disabled
               
           meson compile -C "$BUILD_DIR"
           EOF
