@@ -169,7 +169,7 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          # Parchear pan_compiler.h para definir tipos faltantes si shader_stats está desactivado
+          # Parchear pan_compiler.h usando macro para mesa_shader_stage
           pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
           if os.path.exists(pan_compiler_path):
               with open(pan_compiler_path, 'r') as f:
@@ -177,7 +177,7 @@ jobs:
               
               fix_types = """
               #ifndef mesa_shader_stage
-              typedef enum gl_shader_stage mesa_shader_stage;
+              #define mesa_shader_stage gl_shader_stage
               #endif
               struct pan_stats { int dummy; };
               """
@@ -186,7 +186,7 @@ jobs:
               
               with open(pan_compiler_path, 'w') as f:
                   f.write(pc_code)
-              print('-> src/panfrost/compiler/pan_compiler.h parcheado con tipos de shader estadísticos.')
+              print('-> src/panfrost/compiler/pan_compiler.h parcheado con macro para mesa_shader_stage.')
           EOF
 
           python3 patch_meson.py
