@@ -81,7 +81,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build principal..."
+          echo "Ejecutando script Python para adaptar meson.build y u_dynarray.h..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -168,6 +168,23 @@ jobs:
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
+
+          # Parchear u_dynarray.h para soportar util_dynarray_append con 2 argumentos
+          u_dyn_path = 'src/util/u_dynarray.h'
+          if os.path.exists(u_dyn_path):
+              with open(u_dyn_path, 'r') as f:
+                  ud_code = f.read()
+              
+              new_macro = '''#define util_dynarray_append(buf, v) do { \\
+                  __typeof__(v) __v = (v); \\
+                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \\
+              } while(0)'''
+              
+              ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', new_macro, ud_code, flags=re.DOTALL)
+              
+              with open(u_dyn_path, 'w') as f:
+                  f.write(ud_code)
+              print('-> src/util/u_dynarray.h parcheado para soportar 2 argumentos.')
           EOF
 
           python3 patch_meson.py
@@ -281,23 +298,6 @@ jobs:
               VA_NAN_MODE_DEFAULT = 0
           };
           #endif
-
-          /* Compatibilidad para util_dynarray_append con 2 o 3 argumentos */
-          #ifdef util_dynarray_append
-          #undef util_dynarray_append
-          #endif
-          #define _VA_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
-          #define util_dynarray_append(...) _VA_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
-
-          #define _util_dynarray_append_3(buf, type, v) do { \
-              type __v = (v); \
-              memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \
-          } while(0)
-
-          #define _util_dynarray_append_2(buf, v) do { \
-              __typeof__(v) __v = (v); \
-              memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \
-          } while(0)
 
           #endif
           EOF
