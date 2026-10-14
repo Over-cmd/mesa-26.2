@@ -168,6 +168,25 @@ jobs:
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
+
+          # Parchear pan_compiler.h para definir tipos faltantes si shader_stats está desactivado
+          pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
+          if os.path.exists(pan_compiler_path):
+              with open(pan_compiler_path, 'r') as f:
+                  pc_code = f.read()
+              
+              fix_types = """
+              #ifndef mesa_shader_stage
+              typedef enum gl_shader_stage mesa_shader_stage;
+              #endif
+              struct pan_stats { int dummy; };
+              """
+              if "struct pan_stats" not in pc_code:
+                  pc_code = fix_types + "\n" + pc_code
+              
+              with open(pan_compiler_path, 'w') as f:
+                  f.write(pc_code)
+              print('-> src/panfrost/compiler/pan_compiler.h parcheado con tipos de shader estadísticos.')
           EOF
 
           python3 patch_meson.py
@@ -252,15 +271,13 @@ jobs:
           #endif
           EOF
 
-          # Stub para shader_stats.h para satisfacer pan_compiler.h
           cat << 'EOF' > include/util/shader_stats.h
           #ifndef UTIL_SHADER_STATS_H
           #define UTIL_SHADER_STATS_H
-          /* Stub de shader_stats.h para compilación cruzada en Android */
           #endif
           EOF
 
-          echo "-> Cabeceras, util/shader_stats.h y stubs locales preparados con éxito."
+          echo "-> Cabeceras y stubs locales preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
