@@ -141,8 +141,8 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
-          mkdir -p /usr/lib/pkgconfig
-          cat << 'EOF' > /usr/lib/pkgconfig/android.pc
+          mkdir -p local-pkgconfig
+          cat << 'EOF' > local-pkgconfig/android.pc
           Name: android
           Description: Android system library stub
           Version: 30
@@ -184,7 +184,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras y stubs de pkg-config preparados con éxito."
+          echo "-> Cabeceras y pkg-config local preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
@@ -257,6 +257,8 @@ jobs:
           EOT
           
           echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
+          
+          export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
