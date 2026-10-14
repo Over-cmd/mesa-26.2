@@ -307,7 +307,7 @@ jobs:
           #endif
 
           #ifndef UTIL_DYNARRAY_INIT
-          #define UTIL_DYNARRAY_INIT { 0 }
+          #define UTIL_DYNARRAY_INIT {0}
           #endif
 
           #endif
