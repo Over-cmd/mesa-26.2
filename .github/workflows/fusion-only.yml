@@ -121,7 +121,6 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Mapear dep_atomic de forma limpia para que use el soporte nativo del compilador en Android
           content = content.replace("dep_atomic = cc.find_library('atomic', required : true)", "dep_atomic = []")
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : true)", "dep_atomic = []")
@@ -185,7 +184,6 @@ jobs:
           echo "Limpiando directorios de compilación previos..."
           rm -rf "$BUILD_DIR"
           
-          # Resolver conflicto entre meson.options y meson_options.txt
           rm -f meson_options.txt
           
           CLANG_PATH=""
