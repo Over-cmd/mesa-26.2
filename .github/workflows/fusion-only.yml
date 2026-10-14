@@ -76,7 +76,7 @@ jobs:
             libc6-dev-arm64-cross \
             libatomic1-arm64-cross
 
-      - name: 🛠️ 3.5. Adaptar componentes de escritorio y configurar dlopen/atomic para Android
+      - name: 🛠️ 3.5. Adaptar componentes de escritorio y configurar dependencias nativas para Android
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -121,15 +121,18 @@ jobs:
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
 
-          # Mantener atomic y dlopen operativos pero evitando que fallen por restricciones estrictas de búsqueda de ficheros en NDK
+          # Manejo seguro de librerías del sistema que no usan archivos separados en Android NDK
           content = content.replace("dep_atomic = cc.find_library('atomic', required : true)", "dep_atomic = []")
           content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : true)", "dep_atomic = []")
           content = content.replace("dep_atomic = cpp.find_library('atomic', required : false)", "dep_atomic = []")
           content = content.replace("dep_atomic = cc.find_library('atomic')", "dep_atomic = []")
 
-          # Permitir que dlopen use el sistema nativo sin requerir archivo estricto obligatorio
           content = content.replace("cc.find_library('dl', required : true)", "cc.find_library('dl', required : false)")
+
+          content = content.replace("dep_clock = cc.find_library('rt')", "dep_clock = []")
+          content = content.replace("dep_clock = cc.find_library('rt', required : true)", "dep_clock = []")
+          content = content.replace("dep_clock = cc.find_library('rt', required : false)", "dep_clock = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
