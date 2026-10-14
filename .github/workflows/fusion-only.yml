@@ -282,6 +282,23 @@ jobs:
           };
           #endif
 
+          /* Compatibilidad para util_dynarray_append con 2 o 3 argumentos */
+          #ifdef util_dynarray_append
+          #undef util_dynarray_append
+          #endif
+          #define _VA_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
+          #define util_dynarray_append(...) _VA_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
+
+          #define _util_dynarray_append_3(buf, type, v) do { \
+              type __v = (v); \
+              memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \
+          } while(0)
+
+          #define _util_dynarray_append_2(buf, v) do { \
+              __typeof__(v) __v = (v); \
+              memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \
+          } while(0)
+
           #endif
           EOF
 
