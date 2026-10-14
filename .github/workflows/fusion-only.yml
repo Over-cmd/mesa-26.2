@@ -20,7 +20,7 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Recuperar el Wrapper 25 completo
+      - name: 📥 2. Recuperar el Wrapper 25 completo (Restaurando Android y Wrapper nativos)
         uses: actions/checkout@v4
         with:
           repository: Over-cmd/gamenative-wrapper
@@ -36,7 +36,7 @@ jobs:
               cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
           fi
           rm -rf temp-wrapper
-          echo "-> Estructura original del Wrapper 25 integrada con éxito."
+          echo "-> Estructura y drivers nativos del Wrapper 25 integrados con éxito."
 
       - name: ⚙️ 3. Instalar absolutamente todas las herramientas y dependencias exigidas por el entorno y el Dockerfile
         run: |
@@ -73,7 +73,7 @@ jobs:
             libEGL-dev \
             libGLES2-dev
 
-      - name: 🛠️ 3.5. Ajustar únicamente compatibilidad base de Meson (sin alterar dependencias reales)
+      - name: 🛠️ 3.5. Adaptar únicamente componentes de escritorio no aplicables (LLVM/CLC)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -234,7 +234,7 @@ jobs:
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
@@ -264,7 +264,7 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
 
-      - name: 📦 6. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2)
+      - name: 📦 6. Forjar Paquete Esencial Original de Rendimiento Máximo (Mesa 26.2 + Wrapper)
         run: |
           WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
           
