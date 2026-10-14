@@ -189,7 +189,7 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/xcb include/sync
+          mkdir -p include/xcb include/sync lib_stubs
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
           fi
@@ -202,6 +202,9 @@ jobs:
                   cp /usr/include/$h include/
               fi
           done
+
+          # Crear librerías estáticas vacías (stubs) para libdrm en lib_stubs para evitar errores del linker
+          ar rcs lib_stubs/libdrm.a
 
           cat << 'EOF' > include/sync/sync.h
           #ifndef __SYNC_SYNC_H
@@ -216,7 +219,6 @@ jobs:
           #endif
           EOF
 
-          # Stub completo de expat.h para satisfacer xmlconfig.c en Android
           cat << 'EOF' > include/expat.h
           #ifndef EXPAT_H
           #define EXPAT_H
@@ -251,7 +253,7 @@ jobs:
           #endif
           EOF
 
-          echo "-> Cabeceras (incluyendo expat.h completo) y pkg-config local preparados con éxito."
+          echo "-> Cabeceras y stubs locales preparados con éxito."
 
       - name: 🛠️ 3.6. build_inside.sh conectando el Sysroot real y completo del NDK de Android
         run: |
@@ -319,8 +321,8 @@ jobs:
           [built-in options]
           c_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           cpp_args = ['-I/workspace/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid', '-laudio']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid', '-laudio']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando Meson para descargar subproyectos de forma preventiva..."
@@ -353,7 +355,7 @@ jobs:
                               with open(path, 'r') as f:
                                   code = f.read()
                               
-                              for lib in ['android', 'log', 'dl', 'aaudio']:
+                              for lib in ['android', 'log', 'dl', 'aaudio', 'drm']:
                                   code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
                               
                               with open(path, 'w') as f:
