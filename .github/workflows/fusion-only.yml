@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd patchelf python3 bc libxcb1-dev libxcb-dri3-dev libxcb-present-dev libx11-xcb-dev x11proto-dev libdrm-dev
 
-      - name: 🛠️ 3.5. Parchear limpiamente meson.build principal (hacer opcional librt, libdl, atómicos y android)
+      - name: 🛠️ 3.5. Parchear lo estrictamente necesario en meson.build principal (CLC y LLVM)
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -87,17 +87,6 @@ jobs:
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
           content = content.replace('if system_has_kms_drm', 'if false # system_has_kms_drm bypassed')
-
-          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]atomic['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]dl['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]rt['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          content = re.sub(r"(?:cc\.|cpp\.)?find_library\s*\(\s*['\"]android['\"].*?\)", "disabler()", content, flags=re.DOTALL)
-          
-          content = content.replace("dep_atomic = cc.find_library('atomic', required : false)", "dep_atomic = []")
-          content = content.replace("dep_dl = cc.find_library('dl', required : true)", "dep_dl = []")
-          content = content.replace("dep_dl = cc.find_library('dl', required : false)", "dep_dl = []")
-          content = content.replace("dep_rt = cc.find_library('rt', required : true)", "dep_rt = []")
-          content = content.replace("dep_rt = cc.find_library('rt', required : false)", "dep_rt = []")
 
           with open('meson.build', 'w') as f:
               f.write(content)
@@ -144,7 +133,7 @@ jobs:
 
           echo "-> Cabeceras preparadas con éxito."
 
-      - name: 🛠️ 3.6. build_inside.sh extrayendo del Wrapper 25 y parcheando libadrenotools completamente
+      - name: 🛠️ 3.6. build_inside.sh configurando el NDK Sysroot y las rutas de enlace
         run: |
           echo "Generando build_inside.sh..."
           
@@ -184,15 +173,12 @@ jobs:
           fi
           
           TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
+          NDK_SYSROOT_LIB=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
+          
           echo "-> Clang encontrado en: $CLANG_PATH"
-          echo "-> Toolchain bin: $TOOLCHAIN_BIN"
+          echo "-> NDK Sysroot Lib Dir: $NDK_SYSROOT_LIB"
           
-          SYSROOT_LIB_DIR=$(dirname "$CLANG_PATH")/../sysroot/usr/lib/aarch64-linux-android
-          if [ -d "$SYSROOT_LIB_DIR" ]; then
-              find /workspace -name "*.so" -o -name "*.a" -exec cp -v {} "$SYSROOT_LIB_DIR/" \; 2>/dev/null || true
-              echo "-> Librerías del Wrapper 25 integradas en el sysroot del NDK."
-          fi
-          
+          # Generar cross-file con las rutas exactas del sysroot del NDK para que encuentre libdl, liblog, libandroid, etc.
           cat << EOT > android-aarch64.txt
           [binaries]
           c = '${TOOLCHAIN_BIN}/aarch64-linux-android30-clang'
@@ -208,36 +194,13 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include']
-          cpp_args = ['-I/workspace/include']
-          c_link_args = ['-ldrm']
-          cpp_link_args = ['-ldrm']
+          c_args = ['-I/workspace/include', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '-D__ANDROID_API__=30']
+          c_link_args = ['-L${NDK_SYSROOT_LIB}', '-ldrm']
+          cpp_link_args = ['-L${NDK_SYSROOT_LIB}', '-ldrm']
           EOT
           
-          echo "Ejecutando setup preliminar para descargar submódulos..."
-          meson setup "$BUILD_DIR" --cross-file android-aarch64.txt --prefix=/usr --libdir=lib --buildtype=release -Dplatforms=x11,wayland -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-opencl=disabled -Dvideo-codecs="" -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost,wrapper || true
-          
-          # Hacer opcional cualquier find_library de librerías del sistema en libadrenotools y sus submódulos
-          find subprojects/ -name "meson.build" | while read -r sub_meson; do
-              echo "Parcheando submódulo: $sub_meson"
-              python3 -c "
-              path = '$sub_meson'
-              with open(path, 'r') as f:
-                  content = f.read()
-              for lib in ['android', 'log', 'dl', 'atomic', 'rt']:
-                  content = content.replace(f\"find_library('{lib}')\", f\"find_library('{lib}', required : false)\")
-                  content = content.replace(f'find_library(\"{lib}\")', f'find_library(\"{lib}\", required : false)')
-                  content = content.replace(f\"c.find_library('{lib}')\", f\"c.find_library('{lib}', required : false)\")
-                  content = content.replace(f'c.find_library(\"{lib}\")', f'c.find_library(\"{lib}\", required : false)')
-                  content = content.replace(f\"cpp.find_library('{lib}')\", f\"cpp.find_library('{lib}', required : false)\")
-                  content = content.replace(f'cpp.find_library(\"{lib}\")', f'cpp.find_library(\"sources\", required : false)')
-              with open(path, 'w') as f:
-                  f.write(content)
-              "
-          done
-          
-          echo "Reiniciando setup definitivo de Meson..."
-          rm -rf "$BUILD_DIR"
+          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland)..."
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
