@@ -259,7 +259,6 @@ jobs:
           echo "Configurando Meson para descargar subproyectos..."
           export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
           
-          # Hacemos una ejecución preliminar de setup para que Meson descargue libadrenotools
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
@@ -273,12 +272,13 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parchear subprojects/libadrenotools/meson.build si se ha descargado para que no exija dependency('android') estricta
           if [ -f "subprojects/libadrenotools/meson.build" ]; then
               echo "Parcheando subprojects/libadrenotools/meson.build..."
               sed -i "s/dependency('android'/dependency('android', required : false/g" subprojects/libadrenotools/meson.build
               sed -i "s/cc.find_library('android'/cc.find_library('android', required : false/g" subprojects/libadrenotools/meson.build
               sed -i "s/cpp.find_library('android'/cpp.find_library('android', required : false/g" subprojects/libadrenotools/meson.build
+              sed -i "s/cc.find_library('log'/cc.find_library('log', required : false/g" subprojects/libadrenotools/meson.build
+              sed -i "s/cpp.find_library('log'/cpp.find_library('log', required : false/g" subprojects/libadrenotools/meson.build
           fi
 
           echo "Reconfigurando y compilando con Meson..."
