@@ -138,21 +138,37 @@ jobs:
               f.write(content)
           print('-> meson.build principal adaptado.')
 
-          # Parchear src/util/bitscan.c de forma limpia para evitar conflicto con Bionic
+          # Parche robusto mediante conteo exacto de llaves para ffs y ffsll en bitscan.c
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
               with open(bitscan_path, 'r') as f:
                   b_code = f.read()
               
-              b_code = b_code.replace("int\nffs(int i)", "#ifndef __BIONIC__\nint\nffs(int i)")
-              b_code = b_code.replace("int\nffsll(long long int val)", "#ifndef __BIONIC__\nint\nffsll(long long int val)")
-              if "#ifndef __BIONIC__" in b_code:
-                  # Cerramos el ifdef al final de las funciones o añadimos #endif donde corresponda
-                  b_code = b_code.replace("return bit + 1;\n}", "return bit + 1;\n}\n#endif")
+              def wrap_func(code, func_sig):
+                  idx = code.find(func_sig)
+                  if idx != -1:
+                      brace_idx = code.find('{', idx)
+                      if brace_idx != -1:
+                          count = 1
+                          curr = brace_idx + 1
+                          while curr < len(code) and count > 0:
+                              if code[curr] == '{':
+                                  count += 1
+                              elif code[curr] == '}':
+                                  count -= 1
+                              curr += 1
+                          if count == 0:
+                              func_def = code[idx:curr]
+                              wrapped = f"#ifndef __BIONIC__\n{func_def}\n#endif"
+                              code = code.replace(func_def, wrapped, 1)
+                  return code
+
+              b_code = wrap_func(b_code, 'ffs(')
+              b_code = wrap_func(b_code, 'ffsll(')
 
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
-              print('-> src/util/bitscan.c adaptado correctamente para Android NDK.')
+              print('-> src/util/bitscan.c adaptado de forma precisa con #ifndef __BIONIC__.')
           EOF
 
           python3 patch_meson.py
