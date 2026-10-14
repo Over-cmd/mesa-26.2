@@ -272,21 +272,24 @@ jobs:
               -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper || true
 
-          # Parche dinámico corregido sin barras invertidas erróneas
-          if [ -f "subprojects/libadrenotools/meson.build" ]; then
-              echo "Parcheando subprojects/libadrenotools/meson.build limpiamente con Python..."
+          # Parche inteligente en Python que recorre todos los meson.build de libadrenotools para android, log y dl
+          if [ -d "subprojects/libadrenotools" ]; then
+              echo "Parcheando subprojects/libadrenotools para admitir dependencias de Android opcionales..."
               python3 -c "
-              import re
-              path = 'subprojects/libadrenotools/meson.build'
-              with open(path, 'r') as f:
-                  code = f.read()
-              
-              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]android[\'\"][^\)]*\)', r\"\1.find_library('android', required : false)\", code)
-              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]log[\'\"][^\)]*\)', r\"\1.find_library('log', required : false)\", code)
-              
-              with open(path, 'w') as f:
-                  f.write(code)
-              print('-> subprojects/libadrenotools/meson.build parcheado correctamente.')
+              import os, re
+              for root, dirs, files in os.walk('subprojects/libadrenotools'):
+                  for file in files:
+                      if file == 'meson.build':
+                          path = os.path.join(root, file)
+                          with open(path, 'r') as f:
+                              code = f.read()
+                          
+                          for lib in ['android', 'log', 'dl']:
+                              code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
+                          
+                          with open(path, 'w') as f:
+                              f.write(code)
+              print('-> subprojects/libadrenotools parcheado globalmente con éxito.')
               "
           fi
 
