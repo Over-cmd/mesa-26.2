@@ -256,10 +256,10 @@ jobs:
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
-          echo "Configurando Meson para Mesa 26.2 (Android Cross-Compile con X11 + Wayland + Wrapper restaurado)..."
-          
+          echo "Configurando Meson para descargar subproyectos..."
           export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
           
+          # Hacemos una ejecución preliminar de setup para que Meson descargue libadrenotools
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
@@ -271,9 +271,31 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
+              -Dvulkan-drivers=panfrost,wrapper || true
+
+          # Parchear subprojects/libadrenotools/meson.build si se ha descargado para que no exija dependency('android') estricta
+          if [ -f "subprojects/libadrenotools/meson.build" ]; then
+              echo "Parcheando subprojects/libadrenotools/meson.build..."
+              sed -i "s/dependency('android'/dependency('android', required : false/g" subprojects/libadrenotools/meson.build
+              sed -i "s/cc.find_library('android'/cc.find_library('android', required : false/g" subprojects/libadrenotools/meson.build
+              sed -i "s/cpp.find_library('android'/cpp.find_library('android', required : false/g" subprojects/libadrenotools/meson.build
+          fi
+
+          echo "Reconfigurando y compilando con Meson..."
+          meson setup "$BUILD_DIR" \
+              --cross-file android-aarch64.txt \
+              --prefix=/usr \
+              --libdir=lib \
+              --buildtype=release \
+              --reconfigure \
+              -Dplatforms=x11,wayland \
+              -Dllvm=disabled \
+              -Dshared-llvm=disabled \
+              -Dgallium-opencl=disabled \
+              -Dvideo-codecs="" \
+              -Dgallium-drivers=panfrost \
               -Dvulkan-drivers=panfrost,wrapper
               
-          echo "Compilando con Meson..."
           meson compile -C "$BUILD_DIR"
           EOF
           
