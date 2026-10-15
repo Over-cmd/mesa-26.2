@@ -29,13 +29,13 @@
 #include "util/log.h"
 #include "vk_alloc.h"
 #include "vk_dispatch_table.h"
-#include "vk_internal_exts.h"
-#include "vk_util.h"
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_icd.h>
 
-/* Tipos de compatibilidad para versiones modernas de Vulkan en Android */
+/* Compatibilidad para tipos modernos de Vulkan en entornos Android */
 #ifndef VK_VERSION_1_3
+#ifndef VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
+#define VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
 typedef VkFlags VkImageUsageFlags2KHR;
 typedef struct VkImageUsageFlags2CreateInfoKHR {
     VkStructureType sType;
@@ -46,6 +46,10 @@ typedef struct VkImageUsageFlags2CreateInfoKHR {
 #define VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR ((VkStructureType) 1000499000)
 #endif
 #endif
+#endif
+
+#include "vk_internal_exts.h"
+#include "vk_util.h"
 
 #ifdef __cplusplus
 extern "C" {
