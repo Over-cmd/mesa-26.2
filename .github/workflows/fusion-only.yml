@@ -198,85 +198,6 @@ jobs:
                       f.write(dh_code)
                   print('-> src/panfrost/genxml/decode.h parcheado con typedef de pandecode.')
 
-          cs_builder_path = 'src/panfrost/genxml/cs_builder.h'
-          if os.path.exists(cs_builder_path):
-              with open(cs_builder_path, 'r') as f:
-                  cs_code = f.read()
-              # Reemplazar asignaciones directas de UTIL_DYNARRAY_INIT para evitar errores de tipo en C
-              cs_code = cs_code.replace("b->blocks.instrs = UTIL_DYNARRAY_INIT;", "memset(&b->blocks.instrs, 0, sizeof(b->blocks.instrs));")
-              with open(cs_builder_path, 'w') as f:
-                  f.write(cs_code)
-              print('-> src/panfrost/genxml/cs_builder.h parcheado para inicialización segura de instrs.')
-
-          u_dyn_path = 'src/util/u_dynarray.h'
-          if os.path.exists(u_dyn_path):
-              with open(u_dyn_path, 'r') as f:
-                  ud_code = f.read()
-              
-              ud_code = re.sub(r'#define\s+UTIL_DYNARRAY_INIT\s+.*', '#define UTIL_DYNARRAY_INIT ((struct util_dynarray){ 0, 0, NULL })', ud_code)
-
-              flexible_macro = '''
-              #define _UDYN_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
-              #define _util_dynarray_append_3(buf, type, v) do { \\
-                  type __v = (v); \\
-                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \\
-              } while(0)
-              #define _util_dynarray_append_2(buf, v) do { \\
-                  __typeof__(v) __v = (v); \\
-                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \\
-              } while(0)
-              #define util_dynarray_append(...) _UDYN_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
-              '''
-              ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', flexible_macro, ud_code, flags=re.DOTALL)
-              with open(u_dyn_path, 'w') as f:
-                  f.write(ud_code)
-              print('-> src/util/u_dynarray.h parcheado con UTIL_DYNARRAY_INIT robusto.')
-
-          pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
-          if os.path.exists(pan_compiler_path):
-              with open(pan_compiler_path, 'r') as f:
-                  pc_code = f.read()
-              patch_content = """
-              #ifndef mesa_shader_stage
-              #define mesa_shader_stage gl_shader_stage
-              #endif
-              #ifndef pan_stats_defined
-              #define pan_stats_defined
-              struct pan_stats { int dummy; };
-              #endif
-              """
-              last_include = pc_code.rfind("#include")
-              if last_include != -1:
-                  end_of_line = pc_code.find("\n", last_include)
-                  pc_code = pc_code[:end_of_line] + "\n" + patch_content + pc_code[end_of_line:]
-              else:
-                  pc_code = patch_content + "\n" + pc_code
-              with open(pan_compiler_path, 'w') as f:
-                  f.write(pc_code)
-              print('-> src/panfrost/compiler/pan_compiler.h parcheado.')
-
-          bifrost_compiler_path = 'src/panfrost/compiler/bifrost/compiler.h'
-          if os.path.exists(bifrost_compiler_path):
-              with open(bifrost_compiler_path, 'r') as f:
-                  bc_code = f.read()
-              stubs = """
-              #ifndef UNREACHABLE
-              #define UNREACHABLE(str) __builtin_unreachable()
-              #endif
-              #ifndef VA_NAN_MODE_DEFINED
-              #define VA_NAN_MODE_DEFINED
-              enum va_nan_mode { VA_NAN_MODE_DEFAULT = 0 };
-              #endif
-              struct nir_instr_debug_info;
-              #ifndef nir_instr_debug_info_defined
-              #define nir_instr_debug_info_defined
-              typedef struct nir_instr_debug_info nir_instr_debug_info;
-              #endif
-              """
-              bc_code = stubs + "\n" + bc_code
-              with open(bifrost_compiler_path, 'w') as f:
-                  f.write(bc_code)
-              print('-> src/panfrost/compiler/bifrost/compiler.h parcheado con stubs.')
           EOF
 
           python3 patch_meson.py
@@ -464,7 +385,7 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper \
+              -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
               -Dshader-cache=disabled || true
@@ -504,7 +425,7 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper \
+              -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
               -Dshader-cache=disabled
