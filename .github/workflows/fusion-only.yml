@@ -81,7 +81,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build y neutralizar pandecode..."
+          echo "Ejecutando script Python para adaptar meson.build, parchar pan_compiler.h y neutralizar pandecode..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -174,6 +174,33 @@ jobs:
               with open(decode_csf, 'w') as f:
                   f.write("/* Neutralizado para Android */\n")
               print('-> decode_csf.c neutralizado con éxito.')
+
+          # Parchear pan_compiler.h para inyectar los tipos faltantes directamente
+          pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
+          if os.path.exists(pan_compiler_path):
+              with open(pan_compiler_path, 'r') as f:
+                  pc_code = f.read()
+              
+              patch_content = """
+              #ifndef mesa_shader_stage
+              #define mesa_shader_stage gl_shader_stage
+              #endif
+              #ifndef pan_stats_defined
+              #define pan_stats_defined
+              struct pan_stats { int dummy; };
+              #endif
+              """
+              
+              last_include = pc_code.rfind("#include")
+              if last_include != -1:
+                  end_of_line = pc_code.find("\n", last_include)
+                  pc_code = pc_code[:end_of_line] + "\n" + patch_content + pc_code[end_of_line:]
+              else:
+                  pc_code = patch_content + "\n" + pc_code
+              
+              with open(pan_compiler_path, 'w') as f:
+                  f.write(pc_code)
+              print('-> src/panfrost/compiler/pan_compiler.h parcheado directamente con éxito.')
           EOF
 
           python3 patch_meson.py
