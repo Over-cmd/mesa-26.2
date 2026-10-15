@@ -198,7 +198,7 @@ jobs:
                   if '#include <sys/cdefs.h>' not in sh_code:
                       sh_code = '#include <sys/cdefs.h>\n#include <android/api-level.h>\n' + sh_code
                   with open(stub_h, 'w') as f:
-                      f.write(sh_code)
+                      sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
 
           wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
@@ -265,7 +265,7 @@ jobs:
               fi
           done
 
-          # Localizar el compilador Android Clang del NDK instalado por defecto o buscarlo
+          # Localizar el compilador Android Clang del NDK
           CLANG_PATH=$(find / -name "aarch64-linux-android*-clang" -type f 2>/dev/null | head -n 1)
           if [ -z "$CLANG_PATH" ]; then
               CLANG_PATH="/home/builder/lib/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con stubs para AArch64
+          # Crear código fuente con stubs completos para Wayland y DRM
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <wayland-client.h>
@@ -295,8 +295,20 @@ jobs:
           int wl_display_flush(struct wl_display *display) { return 0; }
           int wl_display_read_events(struct wl_display *display) { return 0; }
           int wl_display_dispatch_queue_pending(struct wl_display *display, struct wl_event_queue *queue) { return 0; }
+          void wl_display_cancel_read(struct wl_display *display) {}
+          int wl_display_get_fd(struct wl_display *display) { return -1; }
+          struct wl_event_queue* wl_display_create_queue(struct wl_display *display) { return NULL; }
+          int wl_display_dispatch_queue(struct wl_display *display, struct wl_event_queue *queue) { return 0; }
           
           const struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
+
+          void* drmModeGetResources(int fd) { return NULL; }
+          void drmModeFreeResources(void* ptr) {}
+          int drmAuthMagic(int fd, uint32_t magic) { return 0; }
+          int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle) { return -1; }
+          int drmModeAddFB2(int fd, uint32_t width, uint32_t height, uint32_t pixel_format, const uint32_t bo_handles[4], const uint32_t pitches[4], const uint32_t offsets[4], uint32_t *buf_id, uint32_t flags) { return -1; }
+          int drmIoctl(int fd, unsigned long request, void *arg) { return -1; }
+          int drmModeRmFB(int fd, uint32_t buffer_id) { return -1; }
           EOF
 
           # Compilar usando el toolchain cruzado de Android para AArch64
