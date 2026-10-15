@@ -51,7 +51,8 @@ jobs:
             ninja-build \
             meson \
             cmake \
-            libwayland-bin \
+            wayland-scanner \
+            libwayland-dev \
             wayland-protocols \
             bc \
             flex \
@@ -178,7 +179,7 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
-          echo "Creando directorio local de pkg-config con stubs vacíos para aislar el entorno cruzado..."
+          echo "Creando directorio local de pkg-config con stubs vacíos..."
           mkdir -p local-pkgconfig
           for pc in android wayland-client xcb xcb-shm xrandr expat x11-xcb xcb-dri2 xcb-dri3 xcb-present xcb-randr xcb-sync xshmfence; do
               cat << EOF > local-pkgconfig/$pc.pc
@@ -301,9 +302,9 @@ jobs:
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
-          echo "Configurando entorno estricto de pkg-config aislado..."
-          export PKG_CONFIG_LIBDIR="/workspace/local-pkgconfig"
-          export PKG_CONFIG_PATH=""
+          echo "Configurando entorno de pkg-config con PKG_CONFIG_PATH..."
+          export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
+          unset PKG_CONFIG_LIBDIR
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
@@ -344,8 +345,8 @@ jobs:
           "
 
           echo "Reconfigurando y compilando con Meson..."
-          export PKG_CONFIG_LIBDIR="/workspace/local-pkgconfig"
-          export PKG_CONFIG_PATH=""
+          export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
+          unset PKG_CONFIG_LIBDIR
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
