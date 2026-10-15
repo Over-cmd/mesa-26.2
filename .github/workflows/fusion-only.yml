@@ -80,7 +80,7 @@ jobs:
             libc6-dev-arm64-cross \
             libatomic1-arm64-cross
 
-      - name: 🛠️ 3.5. Adaptar componentes de escritorio y configurar dependencias nativas para Android
+      - name: 🛠️ 3.5. Adaptar componentes y definir variables globales faltantes como soong_compat_c_args
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -98,6 +98,7 @@ jobs:
           prog_vtn_bindgen2 = disabler()
           dep_llvm = disabler()
           clang_version_dir = '0'
+          soong_compat_c_args = []
           """
           content = content.replace("project_version = meson.project_version()", f"{clc_stub}\nproject_version = meson.project_version()")
 
@@ -140,7 +141,50 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal adaptado.')
+          print('-> meson.build principal adaptado con soong_compat_c_args.')
+
+          # Limpiar VkRenderingAttachmentInitialLayoutInfoMESA duplicado en vk_render_pass.h si existe
+          render_pass_h = 'src/vulkan/runtime/vk_render_pass.h'
+          if os.path.exists(render_pass_h):
+              with open(render_pass_h, 'r') as f:
+                  rp_code = f.read()
+              rp_code = re.sub(r'typedef struct VkRenderingAttachmentInitialLayoutInfoMESA\s*\{[^}]*\}\s*VkRenderingAttachmentInitialLayoutInfoMESA\s*;', '', rp_code, flags=re.DOTALL)
+              with open(render_pass_h, 'w') as f:
+                  f.write(rp_code)
+              print('-> vk_render_pass.h limpiado.')
+
+          # Inyectar compatibilidad de VkImageUsageFlags2KHR en wsi_common.h
+          wsi_common_h = 'src/vulkan/wsi/wsi_common.h'
+          if os.path.exists(wsi_common_h):
+              with open(wsi_common_h, 'r') as f:
+                  wc_code = f.read()
+              
+              compat_types = """
+              #ifndef VK_VERSION_1_3
+              #ifndef VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
+              #define VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
+              typedef VkFlags VkImageUsageFlags2KHR;
+              typedef struct VkImageUsageFlags2CreateInfoKHR {
+                  VkStructureType sType;
+                  const void *pNext;
+                  VkImageUsageFlags2KHR usage;
+              } VkImageUsageFlags2CreateInfoKHR;
+              #ifndef VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR
+              #define VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR ((VkStructureType) 1000499000)
+              #endif
+              #endif
+              #endif
+              """
+              
+              if 'VkImageUsageFlags2KHR' not in wc_code:
+                  if '#include <vulkan/vulkan.h>' in wc_code:
+                      wc_code = wc_code.replace('#include <vulkan/vulkan.h>', '#include <vulkan/vulkan.h>\n' + compat_types)
+                  else:
+                      wc_code = compat_types + wc_code
+              
+              with open(wsi_common_h, 'w') as f:
+                  f.write(wc_code)
+              print('-> wsi_common.h parcheado con tipos de compatibilidad Vulkan.')
 
           bitscan_path = 'src/util/bitscan.c'
           if os.path.exists(bitscan_path):
@@ -171,37 +215,6 @@ jobs:
 
               with open(bitscan_path, 'w') as f:
                   f.write(b_code)
-              print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
-
-          wrapper_log_path = 'src/vulkan/wrapper/wrapper_log.c'
-          if os.path.exists(wrapper_log_path):
-              with open(wrapper_log_path, 'r') as f:
-                  wl_code = f.read()
-              if '#include <fcntl.h>' not in wl_code:
-                  wl_code = '#include <fcntl.h>\n#include <unistd.h>\n' + wl_code
-              with open(wrapper_log_path, 'w') as f:
-                  f.write(wl_code)
-              print('-> src/vulkan/wrapper/wrapper_log.c parcheado con headers de fcntl y unistd.')
-
-          sync_stub_path = 'src/android_stub/sync_stub.cpp'
-          if os.path.exists(sync_stub_path):
-              with open(sync_stub_path, 'r') as f:
-                  ss_code = f.read()
-              if '#include <cstddef>' not in ss_code:
-                  ss_code = '#include <cstddef>\n' + ss_code
-              with open(sync_stub_path, 'w') as f:
-                  f.write(ss_code)
-              print('-> src/android_stub/sync_stub.cpp parcheado con cstddef.')
-
-          for stub_h in ['include/android_stub/android/hardware_buffer.h', 'include/android_stub/android/native_window.h']:
-              if os.path.exists(stub_h):
-                  with open(stub_h, 'r') as f:
-                      sh_code = f.read()
-                  if '#include <sys/cdefs.h>' not in sh_code:
-                      sh_code = '#include <sys/cdefs.h>\n#include <android/api-level.h>\n' + sh_code
-                  with open(stub_h, 'w') as f:
-                      sh_code = f.write(sh_code)
-                  print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
           EOF
 
           python3 patch_meson.py
