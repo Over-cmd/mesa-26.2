@@ -54,6 +54,8 @@ jobs:
             libwayland-bin \
             libwayland-dev \
             wayland-protocols \
+            libxcb1-dev \
+            libx11-dev \
             bc \
             flex \
             bison \
@@ -219,14 +221,22 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/sync include/util include/expat lib_stubs
+          mkdir -p include/sync include/util include/expat include/xcb include/X11 lib_stubs
           
-          # Copiar cabeceras de Wayland al workspace local de forma segura
+          # Copiar cabeceras necesarias de Wayland y XCB/X11 de forma segura al workspace local
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
               fi
           done
+
+          if [ -d "/usr/include/xcb" ]; then
+              cp -r /usr/include/xcb/* include/xcb/
+          fi
+
+          if [ -d "/usr/include/X11" ]; then
+              cp -r /usr/include/X11/* include/X11/
+          fi
 
           for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
               if [ -f "/usr/include/libdrm/$h" ]; then
