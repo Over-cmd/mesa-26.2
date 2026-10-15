@@ -265,7 +265,7 @@ jobs:
               fi
           done
 
-          # Crear código fuente con stubs válidos e inclusión de cabeceras de Wayland para evitar errores de tamaño de struct
+          # Crear código fuente con stubs que coincidan exactamente con los tipos de Wayland
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <wayland-client.h>
@@ -283,12 +283,12 @@ jobs:
           int XML_GetErrorCode(void* parser) { return 0; }
           int XML_GetCurrentLineNumber(void* parser) { return 0; }
 
-          int wl_display_prepare_read_queue(void* d, void* q) { return 0; }
-          int wl_display_flush(void* d) { return 0; }
-          int wl_display_read_events(void* d) { return 0; }
-          int wl_display_dispatch_queue_pending(void* d, void* q) { return 0; }
+          int wl_display_prepare_read_queue(struct wl_display *display, struct wl_event_queue *queue) { return 0; }
+          int wl_display_flush(struct wl_display *display) { return 0; }
+          int wl_display_read_events(struct wl_display *display) { return 0; }
+          int wl_display_dispatch_queue_pending(struct wl_display *display, struct wl_event_queue *queue) { return 0; }
           
-          struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
+          const struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
           EOF
 
           gcc -c -Iinclude stubs_impl.c -o stubs_impl.o
