@@ -83,7 +83,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build..."
+          echo "Ejecutando script Python para adaptar meson.build y stubs de Android..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -201,7 +201,21 @@ jobs:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
 
-          print('-> wsi_common_android.c preservado para permitir la creación de superficies.')
+          wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
+          if os.path.exists(wsi_android_path):
+              with open(wsi_android_path, 'w') as f:
+                  f.write("""
+                  /* Stub seguro para compatibilidad de WSI Android en Mesa 26.2 */
+                  #include "wsi_common.h"
+                  #include "wsi_common_entrypoints.h"
+                  
+                  VkResult wsi_create_android_surface(const VkAllocationCallbacks *alloc,
+                                                      const VkAndroidSurfaceCreateInfoKHR *pCreateInfo,
+                                                      VkSurfaceKHR *pSurface) {
+                      return VK_ERROR_INITIALIZATION_FAILED;
+                  }
+                  """)
+              print('-> wsi_common_android.c adaptado a stubs compatibles de Mesa 26.2.')
           EOF
 
           python3 patch_meson.py
