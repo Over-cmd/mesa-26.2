@@ -32,7 +32,7 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_icd.h>
 
-/* Compatibilidad para tipos modernos de Vulkan en entornos Android */
+/* Compatibilidad para tipos modernos de Vulkan en entornos Android (DEBE ir antes de vk_internal_exts.h) */
 #ifndef VK_VERSION_1_3
 #ifndef VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
 #define VK_IMAGE_USAGE_FLAGS_2_KHR_DEFINED
