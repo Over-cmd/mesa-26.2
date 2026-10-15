@@ -198,12 +198,21 @@ jobs:
                       f.write(dh_code)
                   print('-> src/panfrost/genxml/decode.h parcheado con typedef de pandecode.')
 
+          cs_builder_path = 'src/panfrost/genxml/cs_builder.h'
+          if os.path.exists(cs_builder_path):
+              with open(cs_builder_path, 'r') as f:
+                  cs_code = f.read()
+              # Reemplazar asignaciones directas de UTIL_DYNARRAY_INIT para evitar errores de tipo en C
+              cs_code = cs_code.replace("b->blocks.instrs = UTIL_DYNARRAY_INIT;", "memset(&b->blocks.instrs, 0, sizeof(b->blocks.instrs));")
+              with open(cs_builder_path, 'w') as f:
+                  f.write(cs_code)
+              print('-> src/panfrost/genxml/cs_builder.h parcheado para inicialización segura de instrs.')
+
           u_dyn_path = 'src/util/u_dynarray.h'
           if os.path.exists(u_dyn_path):
               with open(u_dyn_path, 'r') as f:
                   ud_code = f.read()
               
-              # Redefinir UTIL_DYNARRAY_INIT como un compound literal válido para asignaciones directas
               ud_code = re.sub(r'#define\s+UTIL_DYNARRAY_INIT\s+.*', '#define UTIL_DYNARRAY_INIT ((struct util_dynarray){ 0, 0, NULL })', ud_code)
 
               flexible_macro = '''
@@ -221,7 +230,7 @@ jobs:
               ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', flexible_macro, ud_code, flags=re.DOTALL)
               with open(u_dyn_path, 'w') as f:
                   f.write(ud_code)
-              print('-> src/util/u_dynarray.h parcheado con UTIL_DYNARRAY_INIT robusto y macro flexible.')
+              print('-> src/util/u_dynarray.h parcheado con UTIL_DYNARRAY_INIT robusto.')
 
           pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
           if os.path.exists(pan_compiler_path):
