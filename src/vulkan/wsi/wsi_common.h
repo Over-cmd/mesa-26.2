@@ -34,6 +34,19 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_icd.h>
 
+/* Tipos de compatibilidad para versiones modernas de Vulkan en Android */
+#ifndef VK_VERSION_1_3
+typedef VkFlags VkImageUsageFlags2KHR;
+typedef struct VkImageUsageFlags2CreateInfoKHR {
+    VkStructureType sType;
+    const void *pNext;
+    VkImageUsageFlags2KHR usage;
+} VkImageUsageFlags2CreateInfoKHR;
+#ifndef VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR
+#define VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR ((VkStructureType) 1000499000)
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
