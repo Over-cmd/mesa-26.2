@@ -220,6 +220,14 @@ jobs:
           "
 
           mkdir -p include/sync include/util include/expat lib_stubs
+          
+          # Copiar cabeceras de Wayland al workspace local de forma segura
+          for wh in /usr/include/wayland-*.h; do
+              if [ -f "$wh" ]; then
+                  cp "$wh" include/
+              fi
+          done
+
           for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
               if [ -f "/usr/include/libdrm/$h" ]; then
                   cp /usr/include/libdrm/$h include/
