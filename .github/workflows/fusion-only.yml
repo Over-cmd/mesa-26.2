@@ -199,7 +199,7 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
-          echo "Creando directorio local de pkg-config con stubs vacíos..."
+          echo "Creando directorio local de pkg-config con stubs limpios..."
           mkdir -p local-pkgconfig
           for pc in android wayland-client xcb xcb-shm xrandr expat x11-xcb xcb-dri2 xcb-dri3 xcb-present xcb-randr xcb-sync xshmfence; do
               cat << EOF > local-pkgconfig/$pc.pc
@@ -207,7 +207,7 @@ jobs:
           Description: Stub $pc for Android cross-compilation
           Version: 1.0
           Libs:
-          Cflags: -I/workspace/include -I/usr/include
+          Cflags: -I/workspace/include
           EOF
           done
 
@@ -220,11 +220,10 @@ jobs:
           "
 
           mkdir -p include/sync include/util include/expat lib_stubs
-          if [ -d "/usr/include/libdrm" ]; then
-              cp -r /usr/include/libdrm/* include/
-          fi
           for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
-              if [ -f "/usr/include/$h" ]; then
+              if [ -f "/usr/include/libdrm/$h" ]; then
+                  cp /usr/include/libdrm/$h include/
+              elif [ -f "/usr/include/$h" ]; then
                   cp /usr/include/$h include/
               fi
           done
@@ -351,8 +350,8 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/usr/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/usr/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
