@@ -187,7 +187,7 @@ jobs:
           Description: Stub $pc for Android cross-compilation
           Version: 1.0
           Libs:
-          Cflags: -I/workspace/include
+          Cflags: -I/workspace/include -I/usr/include
           EOF
           done
 
@@ -331,8 +331,8 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/usr/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/usr/include', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
