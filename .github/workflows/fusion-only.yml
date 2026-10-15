@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con los stubs completos incluyendo iteradores de XCB
+          # Crear código fuente con los stubs completos incluyendo randr y drm faltantes
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -317,6 +317,9 @@ jobs:
           int drmModeAddFB2(int fd, uint32_t width, uint32_t height, uint32_t pixel_format, const uint32_t bo_handles[4], const uint32_t pitches[4], const uint32_t offsets[4], uint32_t *buf_id, uint32_t flags) { return -1; }
           int drmIoctl(int fd, unsigned long request, void *arg) { return -1; }
           int drmModeRmFB(int fd, uint32_t buffer_id) { return -1; }
+          int drmModeConnectorSetProperty(int fd, uint32_t connector_id, uint32_t property_id, uint64_t value) { return -1; }
+          int drmSyncobjFDToHandle(int fd, int syncobj_fd, uint32_t *handle) { return -1; }
+          int drmCrtcQueueSequence(int fd, uint32_t crtc_id, uint32_t flags, uint64_t sequence, uint64_t *target_sequence, uint64_t user_data) { return -1; }
 
           void* XGetXCBConnection(void* dpy) { return NULL; }
           void* xcb_randr_get_screen_resources(void* c, uint32_t window) { return NULL; }
@@ -332,6 +335,24 @@ jobs:
           void xcb_screen_next(void *R) {}
           void xcb_depth_next(void *R) {}
           xcb_generic_iterator_t xcb_depth_visuals_iterator(const void *R) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
+
+          void* xcb_randr_get_screen_resources_outputs(void* reply) { return NULL; }
+          void* xcb_randr_get_output_property(void* c, uint32_t output, uint32_t property, uint32_t type, uint32_t long_offset, uint32_t long_length, uint8_t delete, uint8_t pending) { return NULL; }
+          void* xcb_randr_get_output_property_reply(void* c, void* cookie, void* e) { return NULL; }
+          void* xcb_randr_get_output_property_data(void* reply) { return NULL; }
+          void* xcb_intern_atom(void* c, uint8_t only_if_exists, uint16_t name_len, const char* name) { return NULL; }
+          void* xcb_intern_atom_reply(void* c, void* cookie, void* e) { return NULL; }
+          void* xcb_randr_get_crtc_info(void* c, uint32_t crtc, uint32_t config_timestamp) { return NULL; }
+          void* xcb_randr_get_crtc_info_reply(void* c, void* cookie, void* e) { return NULL; }
+          int xcb_randr_get_crtc_info_outputs_length(const void* reply) { return 0; }
+          void* xcb_randr_get_crtc_info_outputs(const void* reply) { return NULL; }
+          int xcb_randr_get_crtc_info_possible_length(const void* reply) { return 0; }
+          void* xcb_randr_get_crtc_info_possible(const void* reply) { return NULL; }
+          void* xcb_randr_get_output_info(void* c, uint32_t output, uint32_t config_timestamp) { return NULL; }
+          void* xcb_randr_get_output_info_reply(void* c, void* cookie, void* e) { return NULL; }
+          void* xcb_randr_get_output_info_modes(const void* reply) { return NULL; }
+          void* xcb_randr_get_screen_resources_modes_iterator(const void* reply) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
+          void xcb_randr_mode_info_next(void* i) {}
           EOF
 
           # Compilar usando el toolchain cruzado de Android para AArch64
