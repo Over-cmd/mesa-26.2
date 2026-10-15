@@ -199,6 +199,22 @@ jobs:
                   with open(stub_h, 'w') as f:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
+
+          # Evitar redefinición de VkRenderingAttachmentInitialLayoutInfoMESA en vk_render_pass.h
+          render_pass_h = 'src/vulkan/runtime/vk_render_pass.h'
+          if os.path.exists(render_pass_h):
+              with open(render_pass_h, 'r') as f:
+                  rp_code = f.read()
+              if '#ifndef VkRenderingAttachmentInitialLayoutInfoMESA_DEFINED' not in rp_code:
+                  rp_code = rp_code.replace(
+                      'typedef struct VkRenderingAttachmentInitialLayoutInfoMESA {',
+                      '#ifndef VkRenderingAttachmentInitialLayoutInfoMESA_DEFINED\n#define VkRenderingAttachmentInitialLayoutInfoMESA_DEFINED\ntypedef struct VkRenderingAttachmentInitialLayoutInfoMESA {'
+                  )
+                  if not rp_code.endswith('#endif\n'):
+                      rp_code = rp_code + '\n#endif\n'
+              with open(render_pass_h, 'w') as f:
+                  f.write(rp_code)
+              print('-> vk_render_pass.h protegido contra redefiniciones.')
           EOF
 
           python3 patch_meson.py
