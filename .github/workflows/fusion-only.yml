@@ -233,7 +233,7 @@ jobs:
 
           mkdir -p include/sync include/util include/expat include/xcb include/X11 include/libdrm lib_stubs
           
-          # Copiar cabeceras necesarias de Wayland, XCB/X11 y libdrm de forma completa al workspace local
+          # Copiar exhaustivamente cabeceras de Wayland, XCB/X11 y libdrm a la raíz y carpetas dedicadas
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
@@ -258,9 +258,10 @@ jobs:
               cp -r /usr/include/libdrm/* include/libdrm/
           fi
 
-          for dh in /usr/include/drm*.h; do
+          for dh in /usr/include/drm*.h /usr/include/xf86drm*.h; do
               if [ -f "$dh" ]; then
                   cp "$dh" include/
+                  cp "$dh" include/libdrm/
               fi
           done
 
@@ -386,8 +387,8 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdir', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdir', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
           c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
