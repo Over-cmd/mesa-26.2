@@ -83,7 +83,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build..."
+          echo "Ejecutando script Python para adaptar meson.build y crear wsi_common_android.c compatible con Mesa 26.2..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -201,7 +201,32 @@ jobs:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
 
-          print('-> wsi_common_android.c personalizado detectado en el repositorio y listo para compilar.')
+          # Generar un wsi_common_android.c compatible y limpio para Mesa 26.2
+          wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
+          with open(wsi_android_path, 'w') as f:
+              f.write("""
+              #include "wsi_common.h"
+              #include "wsi_common_private.h"
+              #include "vk_log.h"
+
+              enum wsi_swapchain_blit_type
+              wsi_get_android_blit_type(const struct wsi_device *wsi,
+                                          const struct wsi_base_image_params *params,
+                                          VkDevice device)
+              {
+                 return WSI_SWAPCHAIN_IMAGE_BLIT;
+              }
+
+              VkResult
+              wsi_configure_android_image(const struct wsi_swapchain *chain,
+                                          const VkSwapchainCreateInfoKHR *pCreateInfo,
+                                          const struct wsi_base_image_params *params,
+                                          struct wsi_image_info *info)
+              {
+                 return VK_ERROR_INITIALIZATION_FAILED;
+              }
+              """)
+          print('-> wsi_common_android.c sobreescrito con stubs limpios y compatibles con Mesa 26.2.')
           EOF
 
           python3 patch_meson.py
