@@ -182,6 +182,23 @@ jobs:
                       f.write("/* Neutralizado para Android */\n")
                   print(f'-> {path_target} neutralizado con éxito.')
 
+          # Inyectar typedef para pandecode_shader_disassemble_cb en decode.h
+          decode_h_path = 'src/panfrost/genxml/decode.h'
+          if os.path.exists(decode_h_path):
+              with open(decode_h_path, 'r') as f:
+                  dh_code = f.read()
+              if 'pandecode_shader_disassemble_cb' in dh_code and 'pandecode_shader_disassemble_cb_defined' not in dh_code:
+                  stub_typedef = """
+                  #ifndef pandecode_shader_disassemble_cb_defined
+                  #define pandecode_shader_disassemble_cb_defined
+                  typedef void (*pandecode_shader_disassemble_cb)(void);
+                  #endif
+                  """
+                  dh_code = stub_typedef + "\n" + dh_code
+                  with open(decode_h_path, 'w') as f:
+                      f.write(dh_code)
+                  print('-> src/panfrost/genxml/decode.h parcheado con typedef de pandecode.')
+
           u_dyn_path = 'src/util/u_dynarray.h'
           if os.path.exists(u_dyn_path):
               with open(u_dyn_path, 'r') as f:
