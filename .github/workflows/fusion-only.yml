@@ -172,6 +172,16 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
+          wrapper_log_path = 'src/vulkan/wrapper/wrapper_log.c'
+          if os.path.exists(wrapper_log_path):
+              with open(wrapper_log_path, 'r') as f:
+                  wl_code = f.read()
+              if '#include <fcntl.h>' not in wl_code:
+                  wl_code = '#include <fcntl.h>\n#include <unistd.h>\n' + wl_code
+              with open(wrapper_log_path, 'w') as f:
+                  f.write(wl_code)
+              print('-> src/vulkan/wrapper/wrapper_log.c parcheado con headers de fcntl y unistd.')
+
           wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
           if os.path.exists(wsi_android_path):
               with open(wsi_android_path, 'w') as f:
