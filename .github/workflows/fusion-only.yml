@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con todos los stubs necesarios de Wayland y DRM adicionales
+          # Crear código fuente con los tipos correctos para Wayland y DRM
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -310,10 +310,10 @@ jobs:
           uint32_t wl_proxy_get_version(struct wl_proxy *proxy) { return 1; }
           struct wl_proxy* wl_proxy_marshal_flags(struct wl_proxy *proxy, uint32_t opcode, const struct wl_interface *interface, uint32_t version, uint32_t flags, ...) { return NULL; }
           int wl_proxy_add_listener(struct wl_proxy *proxy, void (**implementation)(void), void *data) { return 0; }
-          void wl_proxy_destroy(void *proxy) {}
+          void wl_proxy_destroy(struct wl_proxy *proxy) {}
           void wl_proxy_wrapper_destroy(void *proxy) {}
           void wl_event_queue_destroy(struct wl_event_queue *queue) {}
-          void wl_list_init(void *list) {}
+          void wl_list_init(struct wl_list *list) {}
 
           void* drmModeGetResources(int fd) { return NULL; }
           void drmModeFreeResources(void* ptr) {}
