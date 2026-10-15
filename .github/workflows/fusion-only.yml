@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con los tipos correctos exigidos por Wayland y DRM
+          # Crear código fuente con los stubs completos incluyendo iteradores de XCB
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -325,6 +325,13 @@ jobs:
           void* xcb_randr_query_version(void* c, uint32_t major, uint32_t minor) { return NULL; }
           void* xcb_randr_query_version_reply(void* c, void* cookie, void* e) { return NULL; }
           const void* xcb_get_setup(void* c) { return NULL; }
+
+          typedef struct { void *data; int rem; } xcb_generic_iterator_t;
+          xcb_generic_iterator_t xcb_setup_roots_iterator(const void *R) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
+          xcb_generic_iterator_t xcb_screen_allowed_depths_iterator(const void *R) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
+          void xcb_screen_next(void *R) {}
+          void xcb_depth_next(void *R) {}
+          xcb_generic_iterator_t xcb_depth_visuals_iterator(const void *R) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
           EOF
 
           # Compilar usando el toolchain cruzado de Android para AArch64
