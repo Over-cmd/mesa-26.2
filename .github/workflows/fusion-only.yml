@@ -66,6 +66,7 @@ jobs:
             libxcb-present-dev \
             libxcb-randr0-dev \
             libxcb-sync-dev \
+            libxcb-shm0-dev \
             libxshmfence-dev \
             libdrm-dev \
             libwayland-dev \
