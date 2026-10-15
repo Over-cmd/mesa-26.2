@@ -199,6 +199,16 @@ jobs:
                   with open(stub_h, 'w') as f:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
+
+          wsi_meson_path = 'src/vulkan/wsi/meson.build'
+          if os.path.exists(wsi_meson_path):
+              with open(wsi_meson_path, 'r') as f:
+                  wsi_m_code = f.read()
+              wsi_m_code = wsi_m_code.replace("color-management-v1", "color_management_v1_bypass")
+              wsi_m_code = wsi_m_code.replace("protocols.get('color-management-v1')", "''")
+              with open(wsi_meson_path, 'w') as f:
+                  f.write(wsi_m_code)
+              print('-> src/vulkan/wsi/meson.build parcheado para omitir color-management-v1.')
           EOF
 
           python3 patch_meson.py
@@ -542,7 +552,7 @@ jobs:
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
-              -Dplatforms=x11,wayland \
+              -Dplatforms=x11 \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
@@ -585,7 +595,7 @@ jobs:
               --libdir=lib \
               --buildtype=release \
               --reconfigure \
-              -Dplatforms=x11,wayland \
+              -Dplatforms=x11 \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
