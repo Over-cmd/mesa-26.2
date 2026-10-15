@@ -81,7 +81,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build, parchar pan_compiler.h y neutralizar pandecode..."
+          echo "Ejecutando script Python para adaptar meson.build, u_dynarray.h, pan_compiler.h y compiler.h..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -175,12 +175,34 @@ jobs:
                   f.write("/* Neutralizado para Android */\n")
               print('-> decode_csf.c neutralizado con éxito.')
 
-          # Parchear pan_compiler.h para inyectar los tipos faltantes directamente
+          # Parchear u_dynarray.h para soportar 2 y 3 argumentos flexiblemente
+          u_dyn_path = 'src/util/u_dynarray.h'
+          if os.path.exists(u_dyn_path):
+              with open(u_dyn_path, 'r') as f:
+                  ud_code = f.read()
+              
+              flexible_macro = '''
+              #define _UDYN_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
+              #define _util_dynarray_append_3(buf, type, v) do { \\
+                  type __v = (v); \\
+                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \\
+              } while(0)
+              #define _util_dynarray_append_2(buf, v) do { \\
+                  __typeof__(v) __v = (v); \\
+                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \\
+              } while(0)
+              #define util_dynarray_append(...) _UDYN_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
+              '''
+              ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', flexible_macro, ud_code, flags=re.DOTALL)
+              with open(u_dyn_path, 'w') as f:
+                  f.write(ud_code)
+              print('-> src/util/u_dynarray.h parcheado con macro flexible.')
+
+          # Parchear pan_compiler.h
           pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
           if os.path.exists(pan_compiler_path):
               with open(pan_compiler_path, 'r') as f:
                   pc_code = f.read()
-              
               patch_content = """
               #ifndef mesa_shader_stage
               #define mesa_shader_stage gl_shader_stage
@@ -190,17 +212,39 @@ jobs:
               struct pan_stats { int dummy; };
               #endif
               """
-              
               last_include = pc_code.rfind("#include")
               if last_include != -1:
                   end_of_line = pc_code.find("\n", last_include)
                   pc_code = pc_code[:end_of_line] + "\n" + patch_content + pc_code[end_of_line:]
               else:
                   pc_code = patch_content + "\n" + pc_code
-              
               with open(pan_compiler_path, 'w') as f:
                   f.write(pc_code)
-              print('-> src/panfrost/compiler/pan_compiler.h parcheado directamente con éxito.')
+              print('-> src/panfrost/compiler/pan_compiler.h parcheado.')
+
+          # Parchear compiler.h de bifrost para inyectar UNREACHABLE, va_nan_mode y nir_instr_debug_info
+          bifrost_compiler_path = 'src/panfrost/compiler/bifrost/compiler.h'
+          if os.path.exists(bifrost_compiler_path):
+              with open(bifrost_compiler_path, 'r') as f:
+                  bc_code = f.read()
+              stubs = """
+              #ifndef UNREACHABLE
+              #define UNREACHABLE(str) __builtin_unreachable()
+              #endif
+              #ifndef VA_NAN_MODE_DEFINED
+              #define VA_NAN_MODE_DEFINED
+              enum va_nan_mode { VA_NAN_MODE_DEFAULT = 0 };
+              #endif
+              struct nir_instr_debug_info;
+              #ifndef nir_instr_debug_info_defined
+              #define nir_instr_debug_info_defined
+              typedef struct nir_instr_debug_info nir_instr_debug_info;
+              #endif
+              """
+              bc_code = stubs + "\n" + bc_code
+              with open(bifrost_compiler_path, 'w') as f:
+                  f.write(bc_code)
+              print('-> src/panfrost/compiler/bifrost/compiler.h parcheado con stubs.')
           EOF
 
           python3 patch_meson.py
