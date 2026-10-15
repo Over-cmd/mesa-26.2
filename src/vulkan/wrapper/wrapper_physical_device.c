@@ -14,9 +14,7 @@
 #include "wsi_common.h"
 #include "util/os_misc.h"
 
-/* 🚨 SOLUCIÓN PASO 1376: Declaramos el prototipo de la función al principio del archivo. 
-   Esto le avisa a Clang++ que la función está escrita más abajo, eliminando el fallo 
-   de declaración implícita por completo sin tocar el código original de fábrica.[span_2](start_span)[span_2](end_span) */
+/* Declaración del prototipo */
 static VkResult wrapper_setup_device_extensions(struct wrapper_physical_device *pdevice);
 
 static uint32_t
@@ -56,10 +54,6 @@ wrapper_filter_enabled_extensions(const struct wrapper_device *device,
          vk_device_extensions[idx].extensionName;
    }
 
-   /* The app enabled one of the vertex_attribute_divisor aliases (both are
-    * advertised). Forward whichever one the base driver actually supports;
-    * symmetric so a future Mali that gains EXT is handled too. On r44 (neither
-    * is present) nothing is forwarded -- the extension is purely spoofed.[span_3](start_span)[span_3](end_span) */
    if (device->vk.enabled_extensions.EXT_vertex_attribute_divisor &&
        !device->vk.enabled_extensions.KHR_vertex_attribute_divisor &&
        device->physical->base_supported_extensions.KHR_vertex_attribute_divisor) {
@@ -129,7 +123,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
    result = instance->dispatch_table.EnumeratePhysicalDevices(
       instance->dispatch_handle, &physical_device_count, physical_devices);
       
-   if (result!= VK_SUCCESS) {
+   if (result != VK_SUCCESS) {
       WRAPPER_LOG(error, "Failed to enumerate physical devices, res %d", result);
       free(physical_devices);
       return result;
@@ -139,10 +133,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       PFN_vkGetInstanceProcAddr get_instance_proc_addr;
       struct wrapper_physical_device *pdevice;
 
-      /* 🚨 BALANCER ATÓMICO MULTI-ARCH DE ALINEACIÓN: 
-         Cambiamos la alineación fija de 8 bytes por 'sizeof(void*)'. Esto hace que en juegos 
-         de 32 bits la estructura se alinee perfectamente a 4 bytes, y en juegos de 64 bits 
-         a 8 bytes, destruyendo por completo la corrupción de punteros y los cierres silenciosos.[span_4](start_span)[span_4](end_span) */
       pdevice = vk_zalloc(&_instance->alloc, sizeof(*pdevice), sizeof(void*),
                           VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
       if (!pdevice) {
@@ -176,7 +166,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
                                              get_instance_proc_addr,
                                              instance->dispatch_handle);
 
-	  if (wrapper_disable_placed == -1)
+      if (wrapper_disable_placed == -1)
           wrapper_disable_placed = getenv("WRAPPER_DISABLE_PLACED") ? atoi(getenv("WRAPPER_DISABLE_PLACED")) : 0;
 
       if (wrapper_disable_present_wait == -1)
@@ -195,14 +185,14 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       if (!wrapper_disable_placed) {
         pdevice->vk.supported_extensions.EXT_map_memory_placed = true;
         pdevice->vk.supported_extensions.KHR_map_memory2 = true;
-      	supported_features->memoryMapPlaced = true;
-      	supported_features->memoryUnmapReserve = true;
+        supported_features->memoryMapPlaced = true;
+        supported_features->memoryUnmapReserve = true;
       } else {
         WRAPPER_LOG(info, "Disabling VK_EXT_map_memory_placed");
-      	pdevice->vk.supported_extensions.EXT_map_memory_placed = false;
+        pdevice->vk.supported_extensions.EXT_map_memory_placed = false;
         pdevice->vk.supported_extensions.KHR_map_memory2 = false;
-      	supported_features->memoryMapPlaced = false;
-      	supported_features->memoryUnmapReserve = false;
+        supported_features->memoryMapPlaced = false;
+        supported_features->memoryUnmapReserve = false;
       }
       supported_features->textureCompressionBC = true;
       supported_features->fillModeNonSolid = true;
@@ -259,8 +249,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
 
       const uint32_t engine_version = instance->vk.app_info.engine_version;
       const uint32_t driver_version = pdevice->properties2.properties.driverVersion;
-
-      /* HACK: Specific prop drivers workarounds for Adreno and Mali GPUs[span_5](start_span)[span_5](end_span) */
       
       if (pdevice->driver_properties.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
          if (strstr(engine_name, "DXVK")) {
@@ -301,12 +289,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
             supported_features->dualSrcBlend = true;
             supported_features->multiDrawIndirect = true;
          }
-         /* Spoof both vertex_attribute_divisor extensions as supported. Mali r51
-          * exposes KHR (we forward that); r44 exposes neither, so we advertise
-          * it purely to get vkd3d past its requirement check. Advertising BOTH
-          * (rather than hiding KHR) is fine -- the device-side filter below
-          * forwards whichever alias the base driver actually has, and
-          * process_pnext_chain aliases the feature struct EXT<->KHR to match.[span_6](start_span)[span_6](end_span) */
          WRAPPER_LOG(info, "Spoofing VK_EXT/KHR_vertex_attribute_divisor as supported");
          pdevice->vk.supported_extensions.EXT_vertex_attribute_divisor = true;
          pdevice->vk.supported_extensions.KHR_vertex_attribute_divisor = true;
@@ -319,12 +301,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          }
       }
 
-      /* Samsung Xclipse: vkd3d 3.x needs VK_EXT_dynamic_rendering_unused_attachments
-       * for correct rendering (draws with unused/mismatched render targets get
-       * dropped -> objects vanish, e.g. the player character), but Xclipse doesn't
-       * expose it. Advertise it -- it is a validation relaxation the RDNA driver
-       * tolerates; the feature is faked in Features2 and the struct is unlinked from
-       * the real CreateDevice pNext.[span_7](start_span)[span_7](end_span) */
       if (pdevice->driver_properties.driverID == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
          bool samsung_d3d = strstr(engine_name, "DXVK") || strstr(engine_name, "vkd3d");
          pdevice->is_vkd3d = strstr(engine_name, "vkd3d") != NULL;
@@ -335,11 +311,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          }
       }
 
-      /* DXVK > 2.4.1 requires VK_KHR_maintenance5. Some drivers (e.g. Xclipse)
-       * don't expose it. Emulate it for any D3D client whose base driver lacks
-       * it (NOT Samsung-gated -- the base-lacks guard limits it to drivers that
-       * actually need it). Feature faked in Features2, struct unlinked from the
-       * real CreateDevice, entrypoints implemented in wrapper_device.c.[span_8](start_span)[span_8](end_span) */
       {
          bool is_d3d = strstr(engine_name, "DXVK") || strstr(engine_name, "vkd3d");
          if (is_d3d && !pdevice->base_supported_extensions.KHR_maintenance5) {
@@ -348,11 +319,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          }
       }
 
-      /* VK_KHR_push_descriptor: vkd3d/DXVK effectively require it, but some
-       * drivers (e.g. Mali r44) don't expose it. Advertise + emulate it for D3D
-       * clients whose base driver lacks it. maxPushDescriptors is reported in
-       * wrapper_GetPhysicalDeviceProperties2; the entrypoints are emulated in
-       * wrapper_device.c.[span_9](start_span)[span_9](end_span) */
       {
          bool is_d3d = strstr(engine_name, "DXVK") || strstr(engine_name, "vkd3d");
          if (is_d3d && !pdevice->base_supported_extensions.KHR_push_descriptor) {
@@ -470,9 +436,6 @@ wrapper_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
    VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
    vk_common_GetPhysicalDeviceFeatures(physicalDevice, pFeatures);
 
-   /* 🚨 EXPANSION DE MÚSCULO REAL MALI-G52:
-      Activamos características premium de PC respaldadas al 100% por tus listas de hardware. 
-      Las banderas se clavan directamente en la raíz de la estructura clásica.[span_10](start_span)[span_10](end_span) */
    pFeatures->textureCompressionBC = true;
    pFeatures->fillModeNonSolid = true;
    pFeatures->shaderClipDistance = true;
@@ -504,7 +467,6 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
    VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
    vk_common_GetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
 
-   /* 1. Filtros y escudos condicionales por fabricante (Mantienen estable a Zink)[span_11](start_span)[span_11](end_span) */
    if (pdevice->driver_properties.driverID == VK_DRIVER_ID_ARM_PROPRIETARY) {
       vk_foreach_struct(s, pFeatures->pNext) {
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT) {
@@ -541,9 +503,6 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       }
    }
 
-   /* 🚨 2. SINCRO DE CAPACIDADES REALES EN EL CANAL FEATURES2 (SANADA AL 100%):
-      Asignamos obligatoriamente a través de '.features.' todo el arsenal gráfico.
-      Las tres líneas problemáticas de abajo ahora heredan del carril reglamentario.[span_12](start_span)[span_12](end_span) */
    pFeatures->features.textureCompressionBC = true;
    pFeatures->features.fillModeNonSolid = true;
    pFeatures->features.shaderClipDistance = true;
@@ -568,11 +527,6 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
    pFeatures->features.independentBlend = true;
    pFeatures->features.variableMultisampleRate = false;
 
-   /* 🚨 3. EXPOSICIÓN FINAL, COMPLETA Y ABSOLUTA DEL MAPA DE EXTENSIONES COMPATIBLES:
-      Activamos de forma incondicional en la tabla física todas las extensiones válidas 
-      que tu interceptor de device.c deja pasar. Esto unifica de golpe los divisores de vértices, 
-      estados dinámicos extendidos, descriptores push, renderpass de alta fidelidad y renderizado dinámico,
-      brindándole a tu chip Mali-G52 compatibilidad total con motores modernos 3D.[span_13](start_span)[span_13](end_span) */
    pdevice->vk.supported_extensions.EXT_vertex_attribute_divisor = true;
    pdevice->vk.supported_extensions.KHR_vertex_attribute_divisor = true;
    pdevice->vk.supported_extensions.EXT_extended_dynamic_state = false;
@@ -613,7 +567,6 @@ wrapper_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
    device_id = getenv("WRAPPER_DEVICE_ID") ? atoi(getenv("WRAPPER_DEVICE_ID")) : 0;
    vendor_id = getenv("WRAPPER_VENDOR_ID") ? atoi(getenv("WRAPPER_VENDOR_ID")) : 0;
    
-   /* 🚨 RESTAURACIÓN SEGURA VULKAN: Devolvemos la lectura nativa de Mesa.[span_14](start_span)[span_14](end_span) */
    uint32_t api_version = parse_vk_version_from_env();
    if (api_version > 0)
       pProperties->apiVersion = api_version;
@@ -673,7 +626,6 @@ wrapper_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
    device_id = getenv("WRAPPER_DEVICE_ID") ? atoi(getenv("WRAPPER_DEVICE_ID")) : 0;
    vendor_id = getenv("WRAPPER_VENDOR_ID") ? atoi(getenv("WRAPPER_VENDOR_ID")) : 0;
 
-   /* 🚨 SOLUCIÓN PASO 1377 CORREGIDO: Usamos '.properties.' de forma estricta.[span_15](start_span)[span_15](end_span) */
    uint32_t api_version = parse_vk_version_from_env();
    if (api_version > 0)
       pProperties->properties.apiVersion = api_version;
@@ -1174,6 +1126,25 @@ wrapper_setup_device_extensions(struct wrapper_physical_device *pdevice) {
    }
 
    exts->KHR_present_wait = exts->KHR_timeline_semaphore;
+
+   return VK_SUCCESS;
+}
+
+/* Interceptamos directamente la consulta de soporte de superficies para forzar compatibilidad */
+VKAPI_ATTR VkResult VKAPI_CALL
+wrapper_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
+                                           uint32_t queueFamilyIndex,
+                                           VkSurfaceKHR surface,
+                                           VkBool32 *pSupported)
+{
+   VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
+   
+   if (pdevice->dispatch_table.GetPhysicalDeviceSurfaceSupportKHR) {
+      pdevice->dispatch_table.GetPhysicalDeviceSurfaceSupportKHR(
+         pdevice->dispatch_handle, queueFamilyIndex, surface, pSupported);
+   }
+
+   *pSupported = VK_TRUE;
 
    return VK_SUCCESS;
 }
