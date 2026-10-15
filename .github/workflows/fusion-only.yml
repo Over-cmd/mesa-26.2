@@ -50,6 +50,8 @@ jobs:
             python3-wheel \
             ninja-build \
             meson \
+            cmake \
+            wayland-scanner \
             bc \
             flex \
             bison \
