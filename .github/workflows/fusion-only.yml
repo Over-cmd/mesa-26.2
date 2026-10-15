@@ -425,6 +425,7 @@ jobs:
               --libdir=lib \
               --buildtype=release \
               -Dplatforms=x11,wayland,android \
+              -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
               -Dgallium-opencl=disabled \
@@ -464,6 +465,7 @@ jobs:
               --buildtype=release \
               --reconfigure \
               -Dplatforms=x11,wayland,android \
+              -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
               -Dgallium-opencl=disabled \
