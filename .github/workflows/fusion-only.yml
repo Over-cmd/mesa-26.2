@@ -56,25 +56,8 @@ jobs:
             git \
             build-essential \
             pkg-config \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxrandr-dev \
-            libxext-dev \
-            libxcb1-dev \
-            libxcb-dri2-0-dev \
-            libxcb-dri3-dev \
-            libxcb-present-dev \
-            libxcb-randr0-dev \
-            libxcb-sync-dev \
-            libxcb-shm0-dev \
-            libxshmfence-dev \
             libdrm-dev \
-            libwayland-dev \
-            wayland-protocols \
-            libwayland-egl-backend-dev \
             libglvnd-dev \
-            libegl1-mesa-dev \
-            libgles2-mesa-dev \
             libatomic1 \
             libc6-dev-arm64-cross \
             libatomic1-arm64-cross
@@ -119,7 +102,7 @@ jobs:
 
           content = re.sub(r"dependency\(\s*['\"]wayland-egl-backend['\"].*?\)", "dependency('wayland-egl-backend', required : false)", content, flags=re.DOTALL)
 
-          for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence']:
+          for dep in ['xcb-glx', 'x11-xcb', 'xcb-randr', 'xcb-xfixes', 'xcb-shm', 'xcb-sync', 'xcb-dri3', 'xcb-present', 'xshmfence', 'wayland-client', 'xcb', 'xrandr', 'expat']:
               content = content.replace(f"dependency('{dep}'", f"dependency('{dep}', required : false")
               content = content.replace(f'dependency("{dep}"', f'dependency("{dep}", required : false')
 
@@ -192,13 +175,17 @@ jobs:
           python3 patch_meson.py
           rm patch_meson.py
 
+          echo "Creando directorio local de pkg-config con stubs vacíos para aislar el entorno cruzado..."
           mkdir -p local-pkgconfig
-          cat << 'EOF' > local-pkgconfig/android.pc
-          Name: android
-          Description: Android system library stub
-          Version: 30
-          Libs: -landroid
+          for pc in android wayland-client xcb xcb-shm xrandr expat x11-xcb xcb-dri2 xcb-dri3 xcb-present xcb-randr xcb-sync xshmfence; do
+              cat << EOF > local-pkgconfig/$pc.pc
+          Name: $pc
+          Description: Stub $pc for Android cross-compilation
+          Version: 1.0
+          Libs:
+          Cflags: -I/workspace/include
           EOF
+          done
 
           python3 -c "
           with open('src/egl/meson.build', 'r') as f:
@@ -208,27 +195,13 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/xcb include/sync include/util include/X11 lib_stubs
-          if [ -d "/usr/include/xcb" ]; then
-              cp -r /usr/include/xcb/* include/xcb/
-          fi
-          
-          if [ -d "/usr/include/X11" ]; then
-              cp -r /usr/include/X11/* include/X11/
-          fi
-          
+          mkdir -p include/sync include/util lib_stubs
           if [ -d "/usr/include/libdrm" ]; then
               cp -r /usr/include/libdrm/* include/
           fi
           for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
               if [ -f "/usr/include/$h" ]; then
                   cp /usr/include/$h include/
-              fi
-          done
-
-          for wf in /usr/include/wayland-*.h; do
-              if [ -f "$wf" ]; then
-                  cp "$wf" include/
               fi
           done
 
@@ -244,40 +217,6 @@ jobs:
           int sync_wait(int fd, int timeout);
           int sync_merge(const char *name, int fd1, int fd2);
           __END_DECLS
-          #endif
-          EOF
-
-          cat << 'EOF' > include/expat.h
-          #ifndef EXPAT_H
-          #define EXPAT_H
-          #include <stddef.h>
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          typedef struct xml_parser *XML_Parser;
-          typedef enum {
-              XML_STATUS_ERROR = 0,
-              XML_STATUS_OK = 1
-          } XML_Status;
-          typedef void (*XML_StartElementHandler)(void *userData, const char *name, const char **atts);
-          typedef void (*XML_EndElementHandler)(void *userData, const char *name);
-          typedef void (*XML_CharacterDataHandler)(void *userData, const char *s, int len);
-          
-          XML_Parser XML_ParserCreate(const char *encoding);
-          void XML_ParserFree(XML_Parser parser);
-          void XML_SetUserData(XML_Parser parser, void *userData);
-          void *XML_GetUserData(XML_Parser parser);
-          void XML_SetElementHandler(XML_Parser parser, XML_StartElementHandler start, XML_EndElementHandler end);
-          void XML_SetCharacterDataHandler(XML_Parser parser, XML_CharacterDataHandler handler);
-          XML_Status XML_Parse(XML_Parser parser, const char *s, int len, int isFinal);
-          void *XML_GetBuffer(XML_Parser parser, int len);
-          XML_Status XML_ParseBuffer(XML_Parser parser, int len, int isFinal);
-          const char *XML_ErrorString(int code);
-          int XML_GetErrorCode(XML_Parser parser);
-          int XML_GetCurrentLineNumber(XML_Parser parser);
-          #ifdef __cplusplus
-          }
-          #endif
           #endif
           EOF
 
@@ -359,8 +298,9 @@ jobs:
           cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
           EOT
           
-          echo "Configurando Meson para descargar subproyectos de forma preventiva..."
-          export PKG_CONFIG_PATH="/workspace/local-pkgconfig"
+          echo "Configurando entorno estricto de pkg-config aislado..."
+          export PKG_CONFIG_LIBDIR="/workspace/local-pkgconfig"
+          export PKG_CONFIG_PATH=""
           
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
@@ -401,6 +341,9 @@ jobs:
           "
 
           echo "Reconfigurando y compilando con Meson..."
+          export PKG_CONFIG_LIBDIR="/workspace/local-pkgconfig"
+          export PKG_CONFIG_PATH=""
+          
           meson setup "$BUILD_DIR" \
               --cross-file android-aarch64.txt \
               --prefix=/usr \
