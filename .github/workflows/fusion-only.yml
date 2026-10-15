@@ -60,6 +60,7 @@ jobs:
             libxcb-randr0-dev \
             libxcb-xfixes0-dev \
             libxcb-sync-dev \
+            libxcb-shm0-dev \
             libx11-dev \
             libx11-xcb-dev \
             libxrandr-dev \
