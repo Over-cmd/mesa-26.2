@@ -11,20 +11,39 @@ endif
 
 if with_platform_x11
   files_vulkan_wsi += files('wsi_common_x11.c')
-  links_vulkan_wsi += libloader_x11
-  links_vulkan_wsi += libloader
+  if is_variable('libloader_x11')
+    links_vulkan_wsi += libloader_x11
+  endif
+  if is_variable('libloader')
+    links_vulkan_wsi += libloader
+  endif
 endif
 
 if with_platform_wayland
   files_vulkan_wsi += files('wsi_common_wayland.c')
-  files_vulkan_wsi += wp_files['fifo-v1']
-  files_vulkan_wsi += wp_files['commit-timing-v1']
-  files_vulkan_wsi += wp_files['linux-dmabuf-unstable-v1']
-  files_vulkan_wsi += wp_files['presentation-time']
-  files_vulkan_wsi += wp_files['tearing-control-v1']
-  links_vulkan_wsi += libloader_wayland_helper
-  files_vulkan_wsi += wp_files['linux-drm-syncobj-v1']
-  files_vulkan_wsi += wp_files['color-management-v1']
+  if is_variable('wp_files')
+    if wp_files.has_key('fifo-v1')
+      files_vulkan_wsi += wp_files['fifo-v1']
+    endif
+    if wp_files.has_key('commit-timing-v1')
+      files_vulkan_wsi += wp_files['commit-timing-v1']
+    endif
+    if wp_files.has_key('linux-dmabuf-unstable-v1')
+      files_vulkan_wsi += wp_files['linux-dmabuf-unstable-v1']
+    endif
+    if wp_files.has_key('presentation-time')
+      files_vulkan_wsi += wp_files['presentation-time']
+    endif
+    if wp_files.has_key('tearing-control-v1')
+      files_vulkan_wsi += wp_files['tearing-control-v1']
+    endif
+    if wp_files.has_key('linux-drm-syncobj-v1')
+      files_vulkan_wsi += wp_files['linux-drm-syncobj-v1']
+    endif
+  endif
+  if is_variable('libloader_wayland_helper')
+    links_vulkan_wsi += libloader_wayland_helper
+  endif
 endif
 
 if with_platform_windows
@@ -74,9 +93,6 @@ idep_vulkan_wsi_headers = declare_dependency(
   include_directories : include_directories('.')
 )
 
-# This is likely a bug in the Meson VS backend, as MSVC with ninja works fine.
-# See this discussion here:
-# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/10506
 if get_option('backend').startswith('vs')
   idep_vulkan_wsi = declare_dependency(
     link_with : libvulkan_wsi,
@@ -84,8 +100,6 @@ if get_option('backend').startswith('vs')
   )
 else
   idep_vulkan_wsi = declare_dependency(
-    # Instruct users of this library to link with --whole-archive.  Otherwise,
-    # our weak function overloads may not resolve properly.
     link_whole : libvulkan_wsi,
     dependencies : [
       idep_vulkan_wsi_headers, dep_libudev
