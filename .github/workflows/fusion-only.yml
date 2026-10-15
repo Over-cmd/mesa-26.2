@@ -1,4 +1,4 @@
-Name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
+name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
 
 on:
   push:
