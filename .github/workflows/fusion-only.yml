@@ -1,4 +1,3 @@
-_library('atomic', required : false)", "dep_atomic = []
 name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
 
 on:
