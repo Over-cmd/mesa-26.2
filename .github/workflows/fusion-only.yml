@@ -172,58 +172,11 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          for path_target in [
-              'src/panfrost/lib/genxml/decode_csf.c', 
-              'src/gallium/drivers/panfrost/pan_csf.c',
-              'src/vulkan/wsi/wsi_common_android.c'
-          ]:
-              if os.path.exists(path_target):
-                  with open(path_target, 'w') as f:
-                      f.write("/* Neutralizado para Android */\n")
-                  print(f'-> {path_target} neutralizado con éxito.')
-
-          pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
-          if os.path.exists(pan_compiler_path):
-              with open(pan_compiler_path, 'r') as f:
-                  pc_code = f.read()
-              patch_content = """
-              #ifndef mesa_shader_stage
-              #define mesa_shader_stage gl_shader_stage
-              #endif
-              #ifndef pan_stats_defined
-              #define pan_stats_defined
-              struct pan_stats { int dummy; };
-              #endif
-              """
-              if patch_content not in pc_code:
-                  pc_code = patch_content + "\n" + pc_code
-              with open(pan_compiler_path, 'w') as f:
-                  f.write(pc_code)
-              print('-> src/panfrost/compiler/pan_compiler.h parcheado con mesa_shader_stage.')
-
-          bifrost_compiler_path = 'src/panfrost/compiler/bifrost/compiler.h'
-          if os.path.exists(bifrost_compiler_path):
-              with open(bifrost_compiler_path, 'r') as f:
-                  bc_code = f.read()
-              stubs = """
-              #ifndef UNREACHABLE
-              #define UNREACHABLE(str) __builtin_unreachable()
-              #endif
-              #ifndef VA_NAN_MODE_DEFINED
-              #define VA_NAN_MODE_DEFINED
-              enum va_nan_mode { VA_NAN_MODE_DEFAULT = 0 };
-              #endif
-              struct nir_instr_debug_info;
-              #ifndef nir_instr_debug_info_defined
-              #define nir_instr_debug_info_defined
-              typedef struct nir_instr_debug_info nir_instr_debug_info;
-              #endif
-              """
-              if stubs not in bc_code:
-                  bc_code = stubs + "\n" + bc_code
-              with open(bifrost_compiler_path, 'w') as f:
-                  f.write(bc_code)
-              print('-> src/panfrost/compiler/bifrost/compiler.h parcheado con stubs.')
+          wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
+          if os.path.exists(wsi_android_path):
+              with open(wsi_android_path, 'w') as f:
+                  f.write("/* Neutralizado para Android */\n")
+              print('-> wsi_common_android.c neutralizado con éxito.')
           EOF
 
           python3 patch_meson.py
@@ -410,7 +363,7 @@ jobs:
               -Dshared-llvm=disabled \
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
-              -Dgallium-drivers=panfrost \
+              -Dgallium-drivers="" \
               -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
@@ -450,7 +403,7 @@ jobs:
               -Dshared-llvm=disabled \
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
-              -Dgallium-drivers=panfrost \
+              -Dgallium-drivers="" \
               -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
