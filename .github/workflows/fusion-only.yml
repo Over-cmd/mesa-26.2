@@ -263,9 +263,13 @@ jobs:
               f.write(content)
           "
 
-          mkdir -p include/xcb include/sync include/util lib_stubs
+          mkdir -p include/xcb include/sync include/util include/X11 lib_stubs
           if [ -d "/usr/include/xcb" ]; then
               cp -r /usr/include/xcb/* include/xcb/
+          fi
+          
+          if [ -d "/usr/include/X11" ]; then
+              cp -r /usr/include/X11/* include/X11/
           fi
           
           if [ -d "/usr/include/libdrm" ]; then
@@ -277,7 +281,6 @@ jobs:
               fi
           done
 
-          # Copiar cabeceras de Wayland para satisfacer el loader_wayland_helper en Android
           for wf in /usr/include/wayland-*.h; do
               if [ -f "$wf" ]; then
                   cp "$wf" include/
