@@ -265,10 +265,35 @@ jobs:
               fi
           done
 
-          # Crear archivos estáticos vacíos para satisfacer el enlazador lld
-          ar rcs lib_stubs/libdrm.a
-          ar rcs lib_stubs/libexpat.a
-          ar rcs lib_stubs/libwayland-client.a
+          # Crear código fuente con stubs válidos para las funciones faltantes y compilarlas en librerías estáticas
+          cat << 'EOF' > stubs_impl.c
+          #include <stddef.h>
+          void* XML_ParserCreate(const char* encoding) { return NULL; }
+          void XML_ParserFree(void* parser) {}
+          void XML_SetUserData(void* parser, void* userData) {}
+          void* XML_GetUserData(void* parser) { return NULL; }
+          void XML_SetElementHandler(void* parser, void* start, void* end) {}
+          void XML_SetCharacterDataHandler(void* parser, void* handler) {}
+          int XML_Parse(void* parser, const char* s, int len, int isFinal) { return 1; }
+          void* XML_GetBuffer(void* parser, int len) { return NULL; }
+          int XML_ParseBuffer(void* parser, int len, int isFinal) { return 1; }
+          const char* XML_ErrorString(int code) { return ""; }
+          int XML_GetErrorCode(void* parser) { return 0; }
+          int XML_GetCurrentLineNumber(void* parser) { return 0; }
+
+          int wl_display_prepare_read_queue(void* d, void* q) { return 0; }
+          int wl_display_flush(void* d) { return 0; }
+          int wl_display_read_events(void* d) { return 0; }
+          int wl_display_dispatch_queue_pending(void* d, void* q) { return 0; }
+          
+          struct wl_interface wl_surface_interface;
+          EOF
+
+          gcc -c stubs_impl.c -o stubs_impl.o
+          ar rcs lib_stubs/libdrm.a stubs_impl.o
+          ar rcs lib_stubs/libexpat.a stubs_impl.o
+          ar rcs lib_stubs/libwayland-client.a stubs_impl.o
+          rm -f stubs_impl.c stubs_impl.o
 
           cat << 'EOF' > include/sync/sync.h
           #ifndef __SYNC_SYNC_H
