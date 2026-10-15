@@ -424,7 +424,7 @@ jobs:
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
-              -Dplatforms=x11,wayland \
+              -Dplatforms=x11,wayland,android \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
@@ -464,7 +464,7 @@ jobs:
               --libdir=lib \
               --buildtype=release \
               --reconfigure \
-              -Dplatforms=x11,wayland \
+              -Dplatforms=x11,wayland,android \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
