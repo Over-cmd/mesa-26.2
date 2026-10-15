@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con los tipos correctos para Wayland y DRM
+          # Crear código fuente con todos los stubs necesarios de Wayland, XCB y DRM
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -304,6 +304,11 @@ jobs:
           
           const struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
           const struct wl_interface wl_registry_interface = { "wl_registry", 1, 0, NULL };
+          const struct wl_interface wl_buffer_interface = { "wl_buffer", 1, 0, NULL };
+          const struct wl_interface wl_shm_pool_interface = { "wl_shm_pool", 1, 0, NULL };
+          const struct wl_interface wl_shm_interface = { "wl_shm", 1, 0, NULL };
+          const struct wl_interface wl_callback_interface = { "wl_callback", 1, 0, NULL };
+          const struct wl_interface wl_output_interface = { "wl_output", 1, 0, NULL };
 
           void* wl_proxy_create_wrapper(void *proxy) { return NULL; }
           void wl_proxy_set_queue(struct wl_proxy *proxy, struct wl_event_queue *queue) {}
@@ -313,7 +318,12 @@ jobs:
           void wl_proxy_destroy(struct wl_proxy *proxy) {}
           void wl_proxy_wrapper_destroy(void *proxy) {}
           void wl_event_queue_destroy(struct wl_event_queue *queue) {}
+          uint32_t wl_proxy_get_id(struct wl_proxy *proxy) { return 1; }
+
           void wl_list_init(struct wl_list *list) {}
+          void wl_list_insert(struct wl_list *list, struct wl_list *elm) {}
+          int wl_list_length(const struct wl_list *list) { return 0; }
+          void wl_list_remove(struct wl_list *elm) {}
 
           void* drmModeGetResources(int fd) { return NULL; }
           void drmModeFreeResources(void* ptr) {}
@@ -340,6 +350,7 @@ jobs:
           void* drmModeGetEncoder(int fd, uint32_t encoder_id) { return NULL; }
           void drmModeFreeEncoder(void* encoder) {}
           void drmModeFreeCrtc(void* crtc) {}
+          void* drmModeGetCrtc(int fd, uint32_t crtc_id) { return NULL; }
 
           void* XGetXCBConnection(void* dpy) { return NULL; }
           void* xcb_randr_get_screen_resources(void* c, uint32_t window) { return NULL; }
@@ -394,6 +405,10 @@ jobs:
           void* xcb_free_pixmap(void* c, uint32_t pixmap) { return NULL; }
           void* xcb_sync_await_fence(void* c, uint32_t len, const void* fence_list) { return NULL; }
           uint32_t xcb_get_maximum_request_length(void* c) { return 65535; }
+          void* xcb_put_image(void* c, uint8_t format, uint32_t drawable, uint32_t gc, uint16_t width, uint16_t height, int16_t dst_x, int16_t dst_y, uint8_t left_pad, uint8_t depth, uint32_t data_len, const uint8_t *data) { return NULL; }
+          int xcb_flush(void* c) { return 1; }
+          void* xcb_wait_for_special_event(void* c, void* se) { return NULL; }
+          void* xcb_change_property(void* c, uint8_t mode, uint32_t window, uint32_t property, uint32_t type, uint8_t format, uint32_t data_len, const void* data) { return NULL; }
           EOF
 
           # Compilar usando el toolchain cruzado de Android para AArch64
