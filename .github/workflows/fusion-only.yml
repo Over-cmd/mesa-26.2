@@ -233,7 +233,7 @@ jobs:
 
           mkdir -p include/sync include/util include/expat include/xcb include/X11 include/libdrm lib_stubs
           
-          # Copiar exhaustivamente cabeceras de Wayland, XCB/X11 y libdrm a la raíz y carpetas dedicadas
+          # Copiar exhaustivamente cabeceras de Wayland, XCB/X11 y libdrm
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
@@ -265,7 +265,10 @@ jobs:
               fi
           done
 
+          # Crear archivos estáticos vacíos para satisfacer el enlazador lld
           ar rcs lib_stubs/libdrm.a
+          ar rcs lib_stubs/libexpat.a
+          ar rcs lib_stubs/libwayland-client.a
 
           cat << 'EOF' > include/sync/sync.h
           #ifndef __SYNC_SYNC_H
@@ -387,10 +390,10 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdir', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdir', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
-          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
-          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-ldl', '-llog', '-landroid']
+          c_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          cpp_args = ['-I/workspace/include', '-I/workspace/include/expat', '-I/workspace/include/libdrm', '--sysroot=${NDK_SYSROOT}', '-D__ANDROID_API__=30']
+          c_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-lexpat', '-lwayland-client', '-ldl', '-llog', '-landroid']
+          cpp_link_args = ['--sysroot=${NDK_SYSROOT}', '-L${NDK_LIB_DIR}', '-L/workspace/lib_stubs', '-ldrm', '-lexpat', '-lwayland-client', '-ldl', '-llog', '-landroid']
           EOT
           
           echo "Configurando entorno de pkg-config con PKG_CONFIG_PATH..."
@@ -427,7 +430,7 @@ jobs:
                               with open(path, 'r') as f:
                                   code = f.read()
                               
-                              for lib in ['android', 'log', 'dl', 'aaudio', 'drm']:
+                              for lib in ['android', 'log', 'dl', 'aaudio', 'drm', 'expat', 'wayland-client']:
                                   code = re.sub(r'([a-zA-Z0-9_]+)\.find_library\s*\(\s*[\'\"]' + lib + r'[\'\"][^\)]*\)', rf\"\1.find_library('{lib}', required : false)\", code)
                               
                               with open(path, 'w') as f:
