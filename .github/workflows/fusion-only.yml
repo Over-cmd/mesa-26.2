@@ -51,7 +51,7 @@ jobs:
             ninja-build \
             meson \
             cmake \
-            wayland-scanner \
+            libwayland-bin \
             libwayland-dev \
             wayland-protocols \
             bc \
