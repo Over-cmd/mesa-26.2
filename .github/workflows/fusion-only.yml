@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con los stubs completos incluyendo randr y drm faltantes
+          # Crear código fuente con los stubs completos incluyendo randr y drm corregidos
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -351,7 +351,7 @@ jobs:
           void* xcb_randr_get_output_info(void* c, uint32_t output, uint32_t config_timestamp) { return NULL; }
           void* xcb_randr_get_output_info_reply(void* c, void* cookie, void* e) { return NULL; }
           void* xcb_randr_get_output_info_modes(const void* reply) { return NULL; }
-          void* xcb_randr_get_screen_resources_modes_iterator(const void* reply) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
+          xcb_generic_iterator_t xcb_randr_get_screen_resources_modes_iterator(const void* reply) { xcb_generic_iterator_t it = {NULL, 0}; return it; }
           void xcb_randr_mode_info_next(void* i) {}
           EOF
 
