@@ -59,6 +59,7 @@ jobs:
             libx11-xcb-dev \
             libxrandr-dev \
             libxext-dev \
+            libxshmfence-dev \
             bc \
             flex \
             bison \
@@ -226,7 +227,7 @@ jobs:
 
           mkdir -p include/sync include/util include/expat include/xcb include/X11 lib_stubs
           
-          # Copiar cabeceras necesarias de Wayland y XCB/X11 de forma completa al workspace local
+          # Copiar cabeceras necesarias de Wayland y XCB/X11 al workspace local
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
@@ -239,6 +240,11 @@ jobs:
 
           if [ -d "/usr/include/X11" ]; then
               cp -r /usr/include/X11/* include/X11/
+          fi
+
+          if [ -f "/usr/include/xshmfence.h" ]; then
+              cp /usr/include/xshmfence.h include/
+              cp /usr/include/xshmfence.h include/X11/
           fi
 
           for h in xf86drm.h xf86drmMode.h drm.h drm_fourcc.h; do
