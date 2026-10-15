@@ -172,6 +172,16 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
+          for path_target in [
+              'src/panfrost/lib/genxml/decode_csf.c', 
+              'src/gallium/drivers/panfrost/pan_csf.c',
+              'src/vulkan/wsi/wsi_common_android.c'
+          ]:
+              if os.path.exists(path_target):
+                  with open(path_target, 'w') as f:
+                      f.write("/* Neutralizado para Android */\n")
+                  print(f'-> {path_target} neutralizado con éxito.')
+
           pan_compiler_path = 'src/panfrost/compiler/pan_compiler.h'
           if os.path.exists(pan_compiler_path):
               with open(pan_compiler_path, 'r') as f:
@@ -214,29 +224,6 @@ jobs:
               with open(bifrost_compiler_path, 'w') as f:
                   f.write(bc_code)
               print('-> src/panfrost/compiler/bifrost/compiler.h parcheado con stubs.')
-
-          u_dyn_path = 'src/util/u_dynarray.h'
-          if os.path.exists(u_dyn_path):
-              with open(u_dyn_path, 'r') as f:
-                  ud_code = f.read()
-              
-              flexible_macro = '''
-              #define _UDYN_CHOOSER(_1, _2, _3, MACRO, ...) MACRO
-              #define _util_dynarray_append_3(buf, type, v) do { \\
-                  type __v = (v); \\
-                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(type)), &__v, sizeof(type)); \\
-              } while(0)
-              #define _util_dynarray_append_2(buf, v) do { \\
-                  __typeof__(v) __v = (v); \\
-                  memcpy(util_dynarray_grow_bytes((buf), 1, sizeof(__typeof__(v))), &__v, sizeof(__typeof__(v))); \\
-              } while(0)
-              #define util_dynarray_append(...) _UDYN_CHOOSER(__VA_ARGS__, _util_dynarray_append_3, _util_dynarray_append_2)(__VA_ARGS__)
-              '''
-              if 'util_dynarray_append' in ud_code:
-                  ud_code = re.sub(r'#define\s+util_dynarray_append\(buf,\s*type,\s*v\).*?while\(0\)', flexible_macro, ud_code, flags=re.DOTALL)
-              with open(u_dyn_path, 'w') as f:
-                  f.write(ud_code)
-              print('-> src/util/u_dynarray.h parcheado con macro flexible.')
           EOF
 
           python3 patch_meson.py
