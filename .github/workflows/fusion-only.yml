@@ -84,7 +84,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build y neutralizar archivos CSF y decode..."
+          echo "Ejecutando script Python para adaptar meson.build y neutralizar archivos incompatibles..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -172,7 +172,11 @@ jobs:
                   f.write(b_code)
               print('-> src/util/bitscan.c adaptado de forma precisa con límites de palabra.')
 
-          for path_target in ['src/panfrost/lib/genxml/decode_csf.c', 'src/gallium/drivers/panfrost/pan_csf.c']:
+          for path_target in [
+              'src/panfrost/lib/genxml/decode_csf.c', 
+              'src/gallium/drivers/panfrost/pan_csf.c',
+              'src/vulkan/wsi/wsi_common_android.c'
+          ]:
               if os.path.exists(path_target):
                   with open(path_target, 'w') as f:
                       f.write("/* Neutralizado para Android */\n")
@@ -425,7 +429,7 @@ jobs:
               --prefix=/usr \
               --libdir=lib \
               --buildtype=release \
-              -Dplatforms=x11,wayland,android \
+              -Dplatforms=x11,wayland \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
@@ -465,7 +469,7 @@ jobs:
               --libdir=lib \
               --buildtype=release \
               --reconfigure \
-              -Dplatforms=x11,wayland,android \
+              -Dplatforms=x11,wayland \
               -Degl=disabled \
               -Dllvm=disabled \
               -Dshared-llvm=disabled \
