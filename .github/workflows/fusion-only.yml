@@ -277,6 +277,13 @@ jobs:
               fi
           done
 
+          # Copiar cabeceras de Wayland para satisfacer el loader_wayland_helper en Android
+          for wf in /usr/include/wayland-*.h; do
+              if [ -f "$wf" ]; then
+                  cp "$wf" include/
+              fi
+          done
+
           ar rcs lib_stubs/libdrm.a
 
           cat << 'EOF' > include/sync/sync.h
