@@ -179,6 +179,16 @@ jobs:
                   f.write(ss_code)
               print('-> src/android_stub/sync_stub.cpp parcheado con cstddef.')
 
+          for stub_h in ['include/android_stub/android/hardware_buffer.h', 'include/android_stub/android/native_window.h']:
+              if os.path.exists(stub_h):
+                  with open(stub_h, 'r') as f:
+                      sh_code = f.read()
+                  if '#include <sys/cdefs.h>' not in sh_code:
+                      sh_code = '#include <sys/cdefs.h>\n#include <android/api-level.h>\n' + sh_code
+                  with open(stub_h, 'w') as f:
+                      f.write(sh_code)
+                  print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
+
           wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
           if os.path.exists(wsi_android_path):
               with open(wsi_android_path, 'w') as f:
