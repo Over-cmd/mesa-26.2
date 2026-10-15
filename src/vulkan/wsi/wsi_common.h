@@ -93,20 +93,8 @@ struct wsi_device {
    bool has_timeline_semaphore;
    bool has_host_query_reset;
 
-   /** Whether the device uses 32bpp formats for 24bpp
-    *
-    * If true, VkImages created with R8G8B8/B8G8R8 formats will be
-    * exported as 32bpp to the window system, as if they were B8G8R8A8
-    * or R8G8B8A8
-    */
    bool emulate_24as32;
-
-   /** Indicates if wsi_image_create_info::scanout is supported
-    *
-    * If false, WSI will always use either modifiers or the prime blit path.
-    */
    bool supports_scanout;
-
    bool supports_protected[VK_ICD_WSI_PLATFORM_MAX];
 
    bool supports_modifiers;
@@ -115,49 +103,23 @@ struct wsi_device {
    VkPresentModeKHR override_present_mode;
    bool force_bgra8_unorm_first;
 
-   /* Cached result for wsi_drm_check_dma_buf_sync_file_import_export(). */
    uint32_t cached_sync_file_import_export_result;
-
-   /* Whether to enable adaptive sync for a swapchain if implemented and
-    * available. Not all window systems might support this. */
    bool enable_adaptive_sync;
-
-   /* List of fences to signal when hotplug event happens. */
    struct list_head hotplug_fences;
-
-   /* Create headless swapchains. */
    bool force_headless_swapchain;
-
    bool force_swapchain_to_currentExtent;
-
    bool disable_unordered_submits;
 
    struct {
-      /* Override the minimum number of images on the swapchain.
-       * 0 = no override */
       uint32_t override_minImageCount;
-
-      /* Forces strict number of image on the swapchain using application
-       * provided VkSwapchainCreateInfoKH::RminImageCount.
-       */
       bool strict_imageCount;
-
-      /* Ensures to create at least the number of image specified by the
-       * driver in VkSurfaceCapabilitiesKHR::minImageCount.
-       */
       bool ensure_minImageCount;
-
-      /* adds an extra minImageCount when running under xwayland */
       bool extra_xwayland_image;
-
-      /* Never report VK_SUBOPTIMAL_KHR. Used to workaround
-       * games that cannot handle SUBOPTIMAL correctly. */
       bool ignore_suboptimal;
    } x11;
 
    struct {
       void *(*get_d3d12_command_queue)(VkDevice device);
-      /* Needs to be per VkDevice, not VkPhysicalDevice, depends on queue config */
       bool (*requires_blits)(VkDevice device);
       VkResult (*create_image_memory)(VkDevice device, void *resource,
                                       const VkAllocationCallbacks *alloc,
@@ -166,54 +128,22 @@ struct wsi_device {
 
    struct {
       VkResult (*bind_drawable_to_vkimage)(VkImage image, void *drawable);
-      /* Does not transfer the ownership to the command buffer. The command
-       * buffer must retain the drawable to ensure lifespan. */
       void (*encode_drawable_present)(VkCommandBuffer cmd, void *drawable);
    } metal;
 
-
    bool sw;
-
-   /* Set to true if the implementation is ok with linear WSI images. */
    bool wants_linear;
-
-   /* Whether present_wait functionality is enabled on the device.
-    * In this case, we have to create an extra timeline semaphore
-    * to be able to synchronize with the WSI present semaphore being unsignalled.
-    * This requires VK_KHR_timeline_semaphore. */
    bool has_present_wait;
 
    struct {
-      /* Don't use the commit-timing protocol for pacing */
       bool disable_timestamps;
    } wayland;
 
-   /*
-    * This sets the ownership for a WSI memory object:
-    *
-    * The ownership is true if and only if the application is allowed to submit
-    * command buffers that reference the buffer.
-    *
-    * This can be used to prune BO lists without too many adverse affects on
-    * implicit sync.
-    *
-    * Side note: care needs to be taken for internally delayed submissions wrt
-    * timeline semaphores.
-    */
    void (*set_memory_ownership)(VkDevice device,
                                 VkDeviceMemory memory,
                                 VkBool32 ownership);
 
-   /*
-    * If this is set, the WSI device will call it to let the driver backend
-    * decide if it can present images directly on the given device fd.
-    */
    bool (*can_present_on_device)(VkPhysicalDevice pdevice, int fd);
-
-   /*
-    * A driver can implement this callback to return a special queue to execute
-    * buffer blits.
-    */
    struct vk_queue *(*get_blit_queue)(VkDevice device);
 
 #define WSI_CB(cb) PFN_vk##cb cb
@@ -291,7 +221,6 @@ void
 wsi_device_finish(struct wsi_device *wsi,
                   const VkAllocationCallbacks *alloc);
 
-/* Setup file descriptor to be used with imported sync_fd's in wsi fences. */
 void
 wsi_device_setup_syncobj_fd(struct wsi_device *wsi_device,
                             int fd);
