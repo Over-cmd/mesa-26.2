@@ -182,7 +182,6 @@ jobs:
                       f.write("/* Neutralizado para Android */\n")
                   print(f'-> {path_target} neutralizado con éxito.')
 
-          # Inyectar typedef para pandecode_shader_disassemble_cb en decode.h
           decode_h_path = 'src/panfrost/genxml/decode.h'
           if os.path.exists(decode_h_path):
               with open(decode_h_path, 'r') as f:
@@ -453,7 +452,7 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper \
+              -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
               -Dshader-cache=disabled || true
@@ -493,7 +492,7 @@ jobs:
               -Dgallium-opencl=disabled \
               -Dvideo-codecs="" \
               -Dgallium-drivers=panfrost \
-              -Dvulkan-drivers=panfrost,wrapper \
+              -Dvulkan-drivers=wrapper \
               -Dzstd=disabled \
               -Dzlib=disabled \
               -Dshader-cache=disabled
