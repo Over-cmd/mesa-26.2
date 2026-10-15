@@ -28,15 +28,14 @@ jobs:
           path: temp-wrapper
           fetch-depth: 1
 
-      - name: 🧩 2.1. Integrar todo el contenido del Wrapper 25 en el Workspace de forma íntegra
+      - name: 🧩 2.1. Integrar el Wrapper 25 de forma segura (Protegiendo el WSI de Mesa 26.2)
         run: |
           if [ -d "temp-wrapper" ]; then
-              echo "Copiando todos los recursos originales del Wrapper 25..."
-              cp -av temp-wrapper/* . || true
-              cp -av temp-wrapper/.[^.]* . 2>/dev/null || true
+              echo "Copiando recursos del Wrapper 25 y excluyendo el WSI antiguo..."
+              rsync -av --exclude='src/vulkan/wsi' temp-wrapper/ . || true
           fi
           rm -rf temp-wrapper
-          echo "-> Estructura y drivers nativos del Wrapper 25 integrados con éxito."
+          echo "-> Estructura del Wrapper 25 integrada manteniendo el WSI limpio."
 
       - name: ⚙️ 3. Instalar absolutamente todas las herramientas, bibliotecas y dependencias exigidas
         run: |
@@ -83,7 +82,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build y crear wsi_common_android.c compatible con Mesa 26.2..."
+          echo "Ejecutando script Python para adaptar meson.build..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -200,33 +199,6 @@ jobs:
                   with open(stub_h, 'w') as f:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
-
-          # Generar un wsi_common_android.c compatible y limpio para Mesa 26.2
-          wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
-          with open(wsi_android_path, 'w') as f:
-              f.write("""
-              #include "wsi_common.h"
-              #include "wsi_common_private.h"
-              #include "vk_log.h"
-
-              enum wsi_swapchain_blit_type
-              wsi_get_android_blit_type(const struct wsi_device *wsi,
-                                          const struct wsi_base_image_params *params,
-                                          VkDevice device)
-              {
-                 return WSI_SWAPCHAIN_IMAGE_BLIT;
-              }
-
-              VkResult
-              wsi_configure_android_image(const struct wsi_swapchain *chain,
-                                          const VkSwapchainCreateInfoKHR *pCreateInfo,
-                                          const struct wsi_base_image_params *params,
-                                          struct wsi_image_info *info)
-              {
-                 return VK_ERROR_INITIALIZATION_FAILED;
-              }
-              """)
-          print('-> wsi_common_android.c sobreescrito con stubs limpios y compatibles con Mesa 26.2.')
           EOF
 
           python3 patch_meson.py
