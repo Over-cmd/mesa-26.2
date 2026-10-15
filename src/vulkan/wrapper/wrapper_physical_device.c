@@ -105,6 +105,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
    static int wrapper_disable_placed = -1;
    static int wrapper_dmaheap_cached = -1;
    static int wrapper_disable_present_wait = -1;
+   static int wrapper_force_swapchain_blit = -1;
    int wrapper_emulate_bcn;
    VkResult result;
 
@@ -171,6 +172,9 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
 
       if (wrapper_disable_present_wait == -1)
          wrapper_disable_present_wait = getenv("WRAPPER_DISABLE_PRESENT_WAIT") && atoi(getenv("WRAPPER_DISABLE_PRESENT_WAIT"));
+
+      if (wrapper_force_swapchain_blit == -1)
+         wrapper_force_swapchain_blit = getenv("WRAPPER_FORCE_SWAPCHAIN_BLIT") ? atoi(getenv("WRAPPER_FORCE_SWAPCHAIN_BLIT")) : 1;
 
       wrapper_setup_device_extensions(pdevice);
       wrapper_apply_device_extension_blacklist(pdevice);
@@ -1130,7 +1134,7 @@ wrapper_setup_device_extensions(struct wrapper_physical_device *pdevice) {
    return VK_SUCCESS;
 }
 
-/* Interceptamos directamente la consulta de soporte de superficies para forzar compatibilidad */
+/* Intercepción de soporte de superficies con blit de swapchain garantizado */
 VKAPI_ATTR VkResult VKAPI_CALL
 wrapper_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
                                            uint32_t queueFamilyIndex,
