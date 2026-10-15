@@ -273,7 +273,7 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con stubs completos para Wayland, DRM, X11 y XCB
+          # Crear código fuente con los tipos correctos para Wayland y DRM
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -304,11 +304,11 @@ jobs:
           const struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
           const struct wl_interface wl_registry_interface = { "wl_registry", 1, 0, NULL };
 
-          void* wl_proxy_create_wrapper(void *proxy) { return NULL; }
-          void wl_proxy_set_queue(void *proxy, struct wl_event_queue *queue) {}
-          uint32_t wl_proxy_get_version(void *proxy) { return 1; }
-          void* wl_proxy_marshal_flags(void *proxy, uint32_t opcode, const struct wl_interface *interface, uint32_t version, uint32_t flags, ...) { return NULL; }
-          int wl_proxy_add_listener(void *proxy, void (**implementation)(void), void *data) { return 0; }
+          struct wl_proxy* wl_proxy_create_wrapper(struct wl_proxy *proxy) { return NULL; }
+          void wl_proxy_set_queue(struct wl_proxy *proxy, struct wl_event_queue *queue) {}
+          uint32_t wl_proxy_get_version(struct wl_proxy *proxy) { return 1; }
+          struct wl_proxy* wl_proxy_marshal_flags(struct wl_proxy *proxy, uint32_t opcode, const struct wl_interface *interface, uint32_t version, uint32_t flags, ...) { return NULL; }
+          int wl_proxy_add_listener(struct wl_proxy *proxy, void (**implementation)(void), void *data) { return 0; }
 
           void* drmModeGetResources(int fd) { return NULL; }
           void drmModeFreeResources(void* ptr) {}
