@@ -1,4 +1,4 @@
-name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
+Name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
 
 on:
   push:
@@ -83,7 +83,7 @@ jobs:
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
 
-          echo "Ejecutando script Python para adaptar meson.build y neutralizar archivos incompatibles..."
+          echo "Ejecutando script Python para adaptar meson.build..."
           cat << 'EOF' > patch_meson.py
           import re
           import os
@@ -201,11 +201,7 @@ jobs:
                       sh_code = f.write(sh_code)
                   print(f'-> {stub_h} parcheado con sys/cdefs.h y api-level.h.')
 
-          wsi_android_path = 'src/vulkan/wsi/wsi_common_android.c'
-          if os.path.exists(wsi_android_path):
-              with open(wsi_android_path, 'w') as f:
-                  f.write("/* Neutralizado para Android */\n")
-              print('-> wsi_common_android.c neutralizado con éxito.')
+          print('-> wsi_common_android.c preservado para permitir la creación de superficies.')
           EOF
 
           python3 patch_meson.py
@@ -233,7 +229,6 @@ jobs:
 
           mkdir -p include/sync include/util include/expat include/xcb include/X11 include/libdrm lib_stubs
           
-          # Copiar exhaustivamente cabeceras de Wayland, XCB/X11 y libdrm
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
@@ -265,7 +260,6 @@ jobs:
               fi
           done
 
-          # Localizar el compilador Android Clang del NDK
           CLANG_PATH=$(find / -name "aarch64-linux-android*-clang" -type f 2>/dev/null | head -n 1)
           if [ -z "$CLANG_PATH" ]; then
               CLANG_PATH="/home/builder/lib/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
@@ -273,7 +267,6 @@ jobs:
           NDK_TOOLCHAIN_BIN=$(dirname "$CLANG_PATH")
           NDK_SYSROOT="$(dirname "$NDK_TOOLCHAIN_BIN")/sysroot"
 
-          # Crear código fuente con todos los stubs necesarios de Wayland, XCB y DRM
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
           #include <stdint.h>
@@ -411,7 +404,6 @@ jobs:
           void* xcb_change_property(void* c, uint8_t mode, uint32_t window, uint32_t property, uint32_t type, uint8_t format, uint32_t data_len, const void* data) { return NULL; }
           EOF
 
-          # Compilar usando el toolchain cruzado de Android para AArch64
           "$NDK_TOOLCHAIN_BIN/aarch64-linux-android30-clang" --sysroot="$NDK_SYSROOT" -c -Iinclude stubs_impl.c -o stubs_impl.o
           "$NDK_TOOLCHAIN_BIN/llvm-ar" rcs lib_stubs/libdrm.a stubs_impl.o
           "$NDK_TOOLCHAIN_BIN/llvm-ar" rcs lib_stubs/libexpat.a stubs_impl.o
