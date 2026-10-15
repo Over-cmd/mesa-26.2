@@ -56,6 +56,8 @@ jobs:
             wayland-protocols \
             libxcb1-dev \
             libx11-dev \
+            libxrandr-dev \
+            libxext-dev \
             bc \
             flex \
             bison \
@@ -223,7 +225,7 @@ jobs:
 
           mkdir -p include/sync include/util include/expat include/xcb include/X11 lib_stubs
           
-          # Copiar cabeceras necesarias de Wayland y XCB/X11 de forma segura al workspace local
+          # Copiar cabeceras necesarias de Wayland y XCB/X11 (incluyendo extensiones) al workspace local
           for wh in /usr/include/wayland-*.h; do
               if [ -f "$wh" ]; then
                   cp "$wh" include/
