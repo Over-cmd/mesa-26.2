@@ -34,16 +34,6 @@ extern "C" {
 struct vk_command_buffer;
 struct vk_image;
 
-/* Protección contra redefinición de VkRenderingAttachmentInitialLayoutInfoMESA */
-#ifndef VkRenderingAttachmentInitialLayoutInfoMESA_DEFINED
-#define VkRenderingAttachmentInitialLayoutInfoMESA_DEFINED
-typedef struct VkRenderingAttachmentInitialLayoutInfoMESA {
-   VkStructureType sType;
-   void *pNext;
-   VkImageLayout initialLayout;
-} VkRenderingAttachmentInitialLayoutInfoMESA;
-#endif
-
 /***/
 struct vk_subpass_attachment {
    /** VkAttachmentReference2::attachment */
