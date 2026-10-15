@@ -265,9 +265,11 @@ jobs:
               fi
           done
 
-          # Crear código fuente con stubs válidos para las funciones faltantes y compilarlas en librerías estáticas
+          # Crear código fuente con stubs válidos e inclusión de cabeceras de Wayland para evitar errores de tamaño de struct
           cat << 'EOF' > stubs_impl.c
           #include <stddef.h>
+          #include <wayland-client.h>
+          
           void* XML_ParserCreate(const char* encoding) { return NULL; }
           void XML_ParserFree(void* parser) {}
           void XML_SetUserData(void* parser, void* userData) {}
@@ -286,10 +288,10 @@ jobs:
           int wl_display_read_events(void* d) { return 0; }
           int wl_display_dispatch_queue_pending(void* d, void* q) { return 0; }
           
-          struct wl_interface wl_surface_interface;
+          struct wl_interface wl_surface_interface = { "wl_surface", 1, 0, NULL };
           EOF
 
-          gcc -c stubs_impl.c -o stubs_impl.o
+          gcc -c -Iinclude stubs_impl.c -o stubs_impl.o
           ar rcs lib_stubs/libdrm.a stubs_impl.o
           ar rcs lib_stubs/libexpat.a stubs_impl.o
           ar rcs lib_stubs/libwayland-client.a stubs_impl.o
