@@ -302,11 +302,19 @@ with_egl = false
 prog_python = import('python').find_installation('python3')
 devenv = environment()
 
-# Inicialización de dep_thread para gtest y subsistemas
 if host_machine.system() == 'windows'
   dep_thread = null_dep
 else
   dep_thread = dependency('threads')
+endif
+
+# Inicialización de with_c11_threads requerido por src/c11/impl/meson.build
+with_c11_threads = false
+if cc.has_function('thrd_create', prefix: '#include <threads.h>')
+  if with_platform_android
+    pre_args += '-DHAVE_THRD_CREATE'
+    with_c11_threads = true
+  endif
 endif
 
 with_glx = get_option('glx')
