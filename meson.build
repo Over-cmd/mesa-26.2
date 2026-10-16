@@ -255,14 +255,8 @@ with_kosmickrisp_vk = false
 with_wrapper_vk = true
 with_any_vk = _vulkan_drivers.length() != 0
 
-with_dri = false
-if with_gallium and (system_has_kms_drm or host_machine.system() == 'darwin')
-  _glx = get_option('glx')
-  _egl = get_option('egl')
-  if _glx == 'dri' or _egl.enabled() or (_glx == 'disabled' and _egl.allowed())
-    with_dri = true
-  endif
-endif
+with_dri = true
+with_egl = get_option('egl').allowed()
 
 with_vulkan_beta = get_option('vulkan-beta')
 if with_vulkan_beta
@@ -357,8 +351,6 @@ with_gbm = get_option('gbm') \
   .require(system_has_kms_drm, error_message : 'GBM only supports DRM/KMS platforms') \
   .disable_auto_if(not with_dri) \
   .allowed()
-
-with_egl = get_option('egl').allowed()
 
 if with_gbm
   pre_args += '-DHAVE_LIBGBM'
