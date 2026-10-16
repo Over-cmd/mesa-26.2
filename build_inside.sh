@@ -7,19 +7,15 @@ BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
+# 🛡️ RESTAURAR BITSCAN.C POR SI QUEDÓ MODIFICADO
+git checkout src/util/bitscan.c 2>/dev/null || true
+
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🗡️ PARCHE CIRÚRGICO DE BITSCAN.C: Eliminamos las definiciones duplicadas de ffs/ffsll que choca con Bionic
-if [ -f "src/util/bitscan.c" ]; then
-    echo "-> Aplicando parche anti-redefinición en src/util/bitscan.c..."
-    sed -i '/int\s\+ffs\s*(/,/^\}/d' src/util/bitscan.c
-    sed -i '/ffsll\s*(/,/^\}/d' src/util/bitscan.c
-fi
-
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (LIMPIEZA AUTOMÁTICA SI ES NECESARIO)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -37,6 +33,13 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dvulkan-drivers=wrapper \
   -Degl=enabled \
   -Dglx=disabled
+fi
+
+# 🗡️ PARCHE CIRÚRGICO DE CONFIG.H: Forzamos que Mesa reconozca ffs y ffsll como nativos
+if [ -f "${BUILD_DIR}/config.h" ]; then
+    echo "-> Actualizando config.h para habilitar ffs/ffsll nativos de Bionic..."
+    sed -i 's/#define HAVE_FFS 0/#define HAVE_FFS 1/g' "${BUILD_DIR}/config.h"
+    sed -i 's/#define HAVE_FFSLL 0/#define HAVE_FFSLL 1/g' "${BUILD_DIR}/config.h"
 fi
 
 ninja -C "${BUILD_DIR}"
