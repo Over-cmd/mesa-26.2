@@ -87,6 +87,7 @@ cpp_args = []
 
 c_msvc_compat_args = []
 cpp_msvc_compat_args = []
+soong_compat_c_args = []
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
