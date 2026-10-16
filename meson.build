@@ -98,6 +98,7 @@ pre_args = [
 
 c_cpp_args = []
 c_args = []
+asan_c_args = []
 cpp_args = []
 
 c_msvc_compat_args = []
