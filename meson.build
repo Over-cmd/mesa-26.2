@@ -59,6 +59,7 @@ ld_args_gc_sections = []
 gbm_priv_libs = []
 gl_priv_libs = []
 gl_priv_reqs = []
+gl_pkgconfig_c_flags = []
 with_symbols_check = false
 
 if get_option('layout') != 'mirror'
