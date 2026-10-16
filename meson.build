@@ -103,6 +103,7 @@ with_poly = false
 with_wayland_bind_display = false
 with_ld_version_script = false
 with_xcb_keysyms = false
+with_xlib_lease = false
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
@@ -440,7 +441,7 @@ dep_expat = dependency('expat', required : get_option('expat'), allow_fallback :
 add_project_arguments(pre_args, language : ['c', 'cpp'])
 add_project_arguments(c_cpp_args, language : ['c', 'cpp'])
 add_project_arguments(c_args, language : ['c'])
-add_project_arguments(cpp_args, language : ['cpp'])
+add_cpp_arguments(cpp_args, language : ['cpp'])
 
 subdir('include')
 subdir('bin')
