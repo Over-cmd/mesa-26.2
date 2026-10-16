@@ -100,6 +100,7 @@ pre_args = [
   '-D__STDC_CONSTANT_MACROS',
   '-D__STDC_FORMAT_MACROS',
   '-D__STDC_LIMIT_MACROS',
+  '-DHAVE_STRUCT_TIMESPEC=1',
   '-DPACKAGE_VERSION="@0@"'.format(project_version),
   '-DPACKAGE_BUGREPORT="https://gitlab.freedesktop.org/mesa/mesa/-/issues"',
 ]
