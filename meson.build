@@ -309,6 +309,7 @@ with_perfetto = false
 with_gpuvis = false
 with_sysprof = false
 use_xmlconfig = false
+with_dri_platform = ''
 
 prog_python = import('python').find_installation('python3')
 devenv = environment()
