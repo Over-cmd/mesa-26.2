@@ -3,16 +3,18 @@ set -e
 
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 
-# 🛡️ LIMPIEZA DE ENTORNO: Eliminamos -U__ANDROID__ si viene heredado del sistema
-# y aseguramos que Android esté correctamente definido para Bionic.
-export CFLAGS="${CFLAGS//-U__ANDROID__/} -D__ANDROID__ -laaudio"
-export CPPFLAGS="${CPPFLAGS//-U__ANDROID__/} -D__ANDROID__"
-export CXXFLAGS="${CXXFLAGS//-U__ANDROID__/} -D__ANDROID__"
+# 🚀 INYECCIÓN MAESTRA DE ENLACE AAUDIO:
+export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
+
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
+LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
+cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
+sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON PARA TERMUX-X11 (SOLO WRAPPER)
 if [ ! -d "${BUILD_DIR}" ]; then
-meson setup "${BUILD_DIR}" --cross-file /root/build-config/cross_file.txt \
+meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Db_sanitize=none \
 -Db_lundef=true \
 -Dcpp_rtti=false \
