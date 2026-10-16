@@ -43,6 +43,7 @@ prog_flex = find_program('flex', required : false)
 prog_flex_cpp = find_program('flex', required : false)
 prog_glslang = find_program('glslangValidator', required : false)
 glslang_quiet = []
+glslang_depfile = []
 
 if get_option('layout') != 'mirror'
   error('`mirror` is the only build directory layout supported')
