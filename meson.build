@@ -316,6 +316,7 @@ dep_atomic = null_dep
 dep_m = cc.find_library('m', required : false)
 dep_valgrind = null_dep
 dep_unwind = null_dep
+dep_futex = null_dep
 
 with_c11_threads = false
 if cc.has_function('thrd_create', prefix: '#include <threads.h>')
