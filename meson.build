@@ -54,7 +54,7 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
+with_mesa_ndebug = get_option('b_ndebug'] == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
@@ -301,6 +301,13 @@ with_egl = false
 
 prog_python = import('python').find_installation('python3')
 devenv = environment()
+
+# Inicialización de dep_thread para gtest y subsistemas
+if host_machine.system() == 'windows'
+  dep_thread = null_dep
+else
+  dep_thread = dependency('threads')
+endif
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
