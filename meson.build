@@ -116,6 +116,7 @@ with_bvh = false
 with_vdrm = false
 with_any_broadcom = false
 with_any_intel = false
+with_any_nouveau = false
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
