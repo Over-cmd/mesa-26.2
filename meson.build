@@ -109,6 +109,7 @@ with_xcb_keysyms = false
 with_xlib_lease = false
 with_bvh = false
 with_vdrm = false
+with_any_broadcom = false
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
@@ -272,7 +273,7 @@ with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
 with_nouveau_vk = _vulkan_drivers.contains('nouveau')
 with_asahi_vk = _vulkan_drivers.contains('asahi')
 with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
-with_wrapper_vk = _vulkan_drivers.contains('wrapper')
+with_wrapper_vk = true
 with_any_vk = _vulkan_drivers.length() != 0
 
 with_dri = false
