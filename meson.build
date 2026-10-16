@@ -291,8 +291,12 @@ with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
 
-# --- DEFINICIÓN CRUCIAL AÑADIDA PARA EVITAR EL ERROR DE ANDROID_STUB ---
+# --- VARIABLES REQUERIDAS POR INCLUDE/MESON.BUILD ---
 with_android_stub = get_option('android-stub')
+with_glvnd = false
+with_shared_glapi = false
+with_gbm = false
+with_egl = false
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
