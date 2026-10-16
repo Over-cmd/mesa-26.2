@@ -441,7 +441,7 @@ dep_expat = dependency('expat', required : get_option('expat'), allow_fallback :
 add_project_arguments(pre_args, language : ['c', 'cpp'])
 add_project_arguments(c_cpp_args, language : ['c', 'cpp'])
 add_project_arguments(c_args, language : ['c'])
-add_cpp_arguments(cpp_args, language : ['cpp'])
+add_project_arguments(cpp_args, language : ['cpp'])
 
 subdir('include')
 subdir('bin')
