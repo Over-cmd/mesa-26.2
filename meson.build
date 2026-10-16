@@ -137,8 +137,7 @@ with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
     'amd', 'asahi', 'dlclose-skip', 'drm-shim', 'etnaviv',
-    'freedreno', 'glsl', 'imagination', 'intel', 'intel-ui',
-    'lima', 'nir', 'nouveau', 'panfrost', 'gamma', 'zink',
+    'freedreno', 'glsl', 'imagination', 'lima', 'nir', 'nouveau', 'gamma', 'zink',
   ]
 endif
 
@@ -170,34 +169,11 @@ system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly
 
 gallium_drivers = get_option('gallium-drivers')
 if gallium_drivers.contains('auto')
-  if system_has_kms_drm
-    if ['x86', 'x86_64'].contains(host_machine.cpu_family())
-      gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'svga', 'llvmpipe', 'softpipe',
-        'iris', 'crocus', 'i915', 'zink'
-      ]
-    elif ['aarch64'].contains(host_machine.cpu_family())
-      gallium_drivers = [
-        'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau', 'svga',
-        'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
-        'zink', 'asahi'
-      ]
-    elif ['arm'].contains(host_machine.cpu_family())
-      gallium_drivers = [
-        'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau', 'svga',
-        'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
-        'zink'
-      ]
-    else
-      gallium_drivers = ['amd', 'swrast']
-    endif
-  else
-    gallium_drivers = ['llvmpipe', 'softpipe']
-  endif
+  gallium_drivers = []
 elif gallium_drivers.contains('all')
    gallium_drivers = [
      'r300', 'r600', 'radeonsi', 'crocus', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'i915',
-     'nouveau', 'svga', 'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
+     'nouveau', 'svga', 'tegra', 'virgl', 'lima', 'llvmpipe', 'softpipe', 'iris',
      'zink', 'd3d12', 'asahi', 'rocket', 'ethosu'
    ]
 endif
@@ -244,25 +220,14 @@ with_gallium_drm = system_has_kms_drm and [
   with_gallium_vc4,
 ].contains(true)
 
-# Variable combinada requerida por src/meson.build
 with_gallium_or_lvp = with_gallium or with_gallium_swrast
 
 _vulkan_drivers = get_option('vulkan-drivers')
 if _vulkan_drivers.contains('auto')
-  if system_has_kms_drm
-    if ['x86', 'x86_64'].contains(host_machine.cpu_family())
-      _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'nouveau', 'swrast']
-    elif ['aarch64'].contains(host_machine.cpu_family())
-      _vulkan_drivers = ['swrast', 'intel', 'panfrost', 'freedreno', 'asahi']
-    else
-      _vulkan_drivers = ['amd', 'swrast']
-    endif
-  else
-    _vulkan_drivers = []
-  endif
+  _vulkan_drivers = ['wrapper']
 elif _vulkan_drivers.contains('all')
    _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'swrast',
-                      'freedreno', 'panfrost', 'virtio', 'broadcom',
+                      'freedreno', 'virtio', 'broadcom',
                       'imagination', 'microsoft-experimental',
                       'nouveau', 'asahi', 'gfxstream', 'kosmickrisp']
 endif
@@ -271,7 +236,7 @@ with_intel_vk = _vulkan_drivers.contains('intel')
 with_intel_hasvk = _vulkan_drivers.contains('intel_hasvk')
 with_amd_vk = _vulkan_drivers.contains('amd')
 with_freedreno_vk = _vulkan_drivers.contains('freedreno')
-with_panfrost_vk = _vulkan_drivers.contains('panfrost')
+with_panfrost_vk = false
 with_swrast_vk = _vulkan_drivers.contains('swrast')
 with_virtio_vk = _vulkan_drivers.contains('virtio')
 with_broadcom_vk = _vulkan_drivers.contains('broadcom')
@@ -314,11 +279,7 @@ endforeach
 
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
-  if system_has_kms_drm
-    _platforms = ['x11', 'wayland']
-  else
-    _platforms = ['x11']
-  endif
+  _platforms = ['x11']
 endif
 
 with_platform_android = _platforms.contains('android')
@@ -328,7 +289,6 @@ with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
 
-# --- VARIABLES REQUERIDAS POR LOS SUBDIRECTORIOS ---
 with_android_stub = get_option('android-stub')
 with_glvnd = false
 with_shared_glapi = false
@@ -358,7 +318,6 @@ dep_futex = null_dep
 dep_regex = null_dep
 dep_llvm = null_dep
 
-# Dependencias XCB/X11 y externas requeridas por submódulos de Mesa
 dep_xcb = null_dep
 dep_xcb_dri3 = null_dep
 dep_xcb_glx = null_dep
@@ -385,13 +344,7 @@ endif
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
-  if not with_opengl or with_platform_android
-    with_glx = 'disabled'
-  elif with_dri or with_gallium
-    with_glx = 'dri'
-  else
-    with_glx = 'disabled'
-  endif
+  with_glx = 'disabled'
 endif
 
 with_gbm = get_option('gbm') \
@@ -409,9 +362,6 @@ endif
 
 if with_egl
   _platforms += 'surfaceless'
-  if with_gbm and not with_platform_android
-    _platforms += 'drm'
-  endif
   egl_native_platform = get_option('egl-native-platform')
   if egl_native_platform.contains('auto')
     egl_native_platform = 'surfaceless'
@@ -431,14 +381,11 @@ if with_platform_android and get_option('platform-sdk-version') >= 29
   add_project_link_arguments('-Wl,-plugin-opt=-emulated-tls=0', language: ['c', 'cpp'])
 endif
 
-# Desactivación estricta y limpia de CLC y LLVM
 with_clc = false
-
 with_llvm = with_llvm \
   .enable_if(with_clc, error_message : 'CLC requires LLVM')
 
 dep_clc = null_dep
-
 dep_dl = null_dep
 if host_machine.system() != 'windows'
   if not cc.has_function('dlopen')
@@ -448,7 +395,6 @@ endif
 
 dep_zlib = dependency('zlib', required : get_option('zlib'), allow_fallback : true)
 dep_zstd = dependency('libzstd', required : get_option('zstd'))
-
 dep_libdrm = dependency('libdrm', required : false)
 dep_expat = dependency('expat', required : get_option('expat'), allow_fallback : true)
 
