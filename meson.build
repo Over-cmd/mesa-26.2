@@ -85,6 +85,10 @@ c_cpp_args = []
 c_args = []
 cpp_args = []
 
+# Inicialización de argumentos de compatibilidad MSVC requeridos por utilidades
+c_msvc_compat_args = []
+cpp_msvc_compat_args = []
+
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
@@ -308,7 +312,12 @@ else
   dep_thread = dependency('threads')
 endif
 
-# Inicialización de with_c11_threads requerido por src/c11/impl/meson.build
+# Inicialización de dependencias auxiliares requeridas por c11 y otros subsistemas
+dep_clock = null_dep
+dep_atomic = null_dep
+dep_m = cc.find_library('m', required : false)
+dep_valgrind = null_dep
+
 with_c11_threads = false
 if cc.has_function('thrd_create', prefix: '#include <threads.h>')
   if with_platform_android
