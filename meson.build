@@ -263,6 +263,7 @@ with_wrapper_vk = true
 with_any_vk = _vulkan_drivers.length() != 0
 
 with_dri = true
+with_dri2 = true
 with_egl = get_option('egl').allowed()
 
 with_vulkan_beta = get_option('vulkan-beta')
