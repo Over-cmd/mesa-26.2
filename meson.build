@@ -85,7 +85,6 @@ c_cpp_args = []
 c_args = []
 cpp_args = []
 
-# Inicialización de argumentos de compatibilidad MSVC requeridos por utilidades
 c_msvc_compat_args = []
 cpp_msvc_compat_args = []
 
@@ -312,11 +311,11 @@ else
   dep_thread = dependency('threads')
 endif
 
-# Inicialización de dependencias auxiliares requeridas por c11 y otros subsistemas
 dep_clock = null_dep
 dep_atomic = null_dep
 dep_m = cc.find_library('m', required : false)
 dep_valgrind = null_dep
+dep_unwind = null_dep
 
 with_c11_threads = false
 if cc.has_function('thrd_create', prefix: '#include <threads.h>')
