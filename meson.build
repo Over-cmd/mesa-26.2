@@ -350,7 +350,6 @@ with_gbm = get_option('gbm') \
   .disable_auto_if(not with_dri) \
   .allowed()
 
-# Permitimos EGL sin requerir estrictamente DRI, Windows o Android
 with_egl = get_option('egl').allowed()
 
 if with_gbm
@@ -379,6 +378,7 @@ if with_platform_android and get_option('platform-sdk-version') >= 29
 endif
 
 with_clc = false
+with_microsoft_clc = false
 with_llvm = with_llvm \
   .enable_if(with_clc, error_message : 'CLC requires LLVM')
 
