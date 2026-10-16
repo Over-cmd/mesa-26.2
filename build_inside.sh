@@ -12,24 +12,24 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON PARA TERMUX-X11 (SOLO WRAPPER)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (LIMPIEZA AUTOMÁTICA SI ES NECESARIO)
 if [ ! -d "${BUILD_DIR}" ]; then
-meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
--Db_sanitize=none \
--Db_lundef=true \
--Dcpp_rtti=false \
--Dgbm=enabled \
--Dopengl=true \
--Dllvm=disabled \
--Dshared-llvm=disabled \
--Dplatforms=x11 \
--Degl-native-platform=x11 \
--Dgallium-drivers="" \
--Ddraw-use-llvm=false \
--Dxmlconfig=disabled \
--Dvulkan-drivers=wrapper \
--Degl=enabled \
--Dglx=disabled
+  meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
+  -Db_sanitize=none \
+  -Db_lundef=true \
+  -Dcpp_rtti=false \
+  -Dgbm=enabled \
+  -Dopengl=true \
+  -Dllvm=disabled \
+  -Dshared-llvm=disabled \
+  -Dplatforms=x11 \
+  -Degl-native-platform=x11 \
+  -Dgallium-drivers="" \
+  -Ddraw-use-llvm=false \
+  -Dxmlconfig=disabled \
+  -Dvulkan-drivers=wrapper \
+  -Degl=enabled \
+  -Dglx=disabled
 fi
 
 ninja -C "${BUILD_DIR}"
