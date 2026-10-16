@@ -298,8 +298,9 @@ with_shared_glapi = false
 with_gbm = false
 with_egl = false
 
-# Inicialización obligatoria de prog_python para bin/meson.build
+# Inicialización obligatoria de prog_python y devenv
 prog_python = import('python').find_installation('python3')
+devenv = environment()
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
