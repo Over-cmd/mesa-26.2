@@ -101,6 +101,7 @@ yacc_is_bison = false
 with_panfrost_rust = false
 with_poly = false
 with_wayland_bind_display = false
+with_ld_version_script = false
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
