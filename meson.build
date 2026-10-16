@@ -291,12 +291,15 @@ with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
 
-# --- VARIABLES REQUERIDAS POR INCLUDE/MESON.BUILD ---
+# --- VARIABLES REQUERIDAS POR LOS SUBDIRECTORIOS ---
 with_android_stub = get_option('android-stub')
 with_glvnd = false
 with_shared_glapi = false
 with_gbm = false
 with_egl = false
+
+# Inicialización obligatoria de prog_python para bin/meson.build
+prog_python = import('python').find_installation('python3')
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
