@@ -302,6 +302,7 @@ with_shared_glapi = false
 with_gbm = false
 with_egl = false
 with_perfetto = false
+with_gpuvis = false
 
 prog_python = import('python').find_installation('python3')
 devenv = environment()
