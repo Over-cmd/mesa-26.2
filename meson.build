@@ -49,6 +49,7 @@ glslang_depfile = []
 dir_compiler_nir = 'src/compiler/nir'
 inc_compiler = include_directories('src/compiler/nir')
 ld_args_build_id = []
+ld_args_gc_sections = []
 
 if get_option('layout') != 'mirror'
   error('`mirror` is the only build directory layout supported')
