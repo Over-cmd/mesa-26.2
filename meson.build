@@ -39,6 +39,7 @@ pkg = import('pkgconfig')
 sizeof_pointer = cc.sizeof('void*').to_string()
 
 null_dep = dependency('', required : false)
+libgallium_dri = null_dep
 prog_bison = find_program('bison', required : false)
 prog_flex = find_program('flex', required : false)
 prog_flex_cpp = find_program('flex', required : false)
