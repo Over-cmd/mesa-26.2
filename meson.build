@@ -54,7 +54,7 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
+with_mesa_ndebug = get_option('b_ndebug'] == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
@@ -334,7 +334,7 @@ dep_futex = null_dep
 dep_regex = null_dep
 dep_llvm = null_dep
 
-# Dependencias XCB/X11 requeridas por src/x11/meson.build y src/loader/meson.build
+# Dependencias XCB/X11 y externas requeridas por submódulos de Mesa
 dep_xcb = null_dep
 dep_xcb_dri3 = null_dep
 dep_xcb_glx = null_dep
@@ -346,6 +346,7 @@ dep_xcb_sync = null_dep
 dep_xcb_xfixes = null_dep
 dep_xshmfence = null_dep
 dep_x11 = null_dep
+dep_spirv_tools = null_dep
 
 with_c11_threads = false
 if cc.has_function('thrd_create', prefix: '#include <threads.h>')
