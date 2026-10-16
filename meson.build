@@ -106,6 +106,9 @@ pre_args = [
   '-DHAVE_THRD_CREATE=1',
   '-D_POSIX_C_SOURCE=200809L',
   '-DHAVE_PTHREAD=1',
+  '-DHAVE___BUILTIN_FFS=1',
+  '-DHAVE_FFS=1',
+  '-DHAVE_FFSLL=1',
   '-DPACKAGE_VERSION="@0@"'.format(project_version),
   '-DPACKAGE_BUGREPORT="https://gitlab.freedesktop.org/mesa/mesa/-/issues"',
 ]
