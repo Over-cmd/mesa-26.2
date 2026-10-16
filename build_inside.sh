@@ -3,10 +3,11 @@ set -e
 
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 
-# 🚀 INYECCIÓN MAESTRA DE ENLACE AAUDIO:
-# Forzamos las banderas del compilador y del linker para arrastrar las firmas
-# de la API AAudio de baja latencia del NDK de Android.
-export CFLAGS="$CFLAGS -laaudio"
+# 🛡️ LIMPIEZA DE ENTORNO: Eliminamos -U__ANDROID__ si viene heredado del sistema
+# y aseguramos que Android esté correctamente definido para Bionic.
+export CFLAGS="${CFLAGS//-U__ANDROID__/} -D__ANDROID__ -laaudio"
+export CPPFLAGS="${CPPFLAGS//-U__ANDROID__/} -D__ANDROID__"
+export CXXFLAGS="${CXXFLAGS//-U__ANDROID__/} -D__ANDROID__"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON PARA TERMUX-X11 (SOLO WRAPPER)
@@ -34,12 +35,10 @@ ninja -C "${BUILD_DIR}"
 # 🟢 2. EXTRACCIÓN DEL BINARIO DEL WRAPPER VULKAN
 python3 -c '
 import os, shutil
-# Ajusta esta ruta si el binario del wrapper se ubica en otro subdirectorio de src/vulkan o similar
 src = "'"${BUILD_DIR}"'/src/vulkan/wrapper/libvulkan_wrapper.so"
 dst = "'"${BUILD_DIR}"'/libvulkan_wrapper.so.unstripped"
 
 if not os.path.exists(src):
-    # Búsqueda elástica alternativa en caso de variar la ruta exacta
     for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
         if "libvulkan_wrapper.so" in fs:
             src = os.path.join(r, "libvulkan_wrapper.so")
