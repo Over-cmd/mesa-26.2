@@ -43,7 +43,6 @@ prog_flex = find_program('flex', required : false)
 prog_flex_cpp = find_program('flex', required : false)
 prog_glslang = find_program('glslangValidator', required : false)
 
-# Evitamos listas vacías que causan errores en custom_target(command:)
 glslang_quiet = prog_glslang.found() ? ['-s'] : []
 glslang_depfile = []
 
@@ -293,7 +292,6 @@ with_android_stub = get_option('android-stub')
 with_glvnd = false
 with_shared_glapi = false
 with_gbm = false
-with_egl = false
 with_perfetto = false
 with_gpuvis = false
 with_sysprof = false
@@ -352,9 +350,8 @@ with_gbm = get_option('gbm') \
   .disable_auto_if(not with_dri) \
   .allowed()
 
-with_egl = get_option('egl') \
-  .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Windows or Android') \
-  .allowed()
+# Permitimos EGL sin requerir estrictamente DRI, Windows o Android
+with_egl = get_option('egl').allowed()
 
 if with_gbm
   pre_args += '-DHAVE_LIBGBM'
