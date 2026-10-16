@@ -65,7 +65,7 @@ with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
 
-dir_compiler_nir = include_directories('../compiler/nir')
+dir_compiler_nir = include_directories('src/compiler/nir')
 
 cl_args = [
   '-fmacro-prefix-map=@0@/='.format(relative_dir),
