@@ -80,7 +80,7 @@ jobs:
             libc6-dev-arm64-cross \
             libatomic1-arm64-cross
 
-      - name: 🛠️ 3.5. Adaptar componentes y definir variables globales de Android (soong_compat_c_args)
+      - name: 🛠️ 3.5. Adaptar componentes y definir soong_compat_c_args y no_override_init_args globalmente
         run: |
           echo "Neutralizando src/compiler/clc/meson.build..."
           echo "idep_mesaclc = disabler()" > src/compiler/clc/meson.build
@@ -142,7 +142,7 @@ jobs:
 
           with open('meson.build', 'w') as f:
               f.write(content)
-          print('-> meson.build principal adaptado con soong_compat_c_args y no_override_init_args.')
+          print('-> meson.build principal adaptado con variables globales de compilación.')
 
           # Limpiar VkRenderingAttachmentInitialLayoutInfoMESA duplicado en vk_render_pass.h si existe
           render_pass_h = 'src/vulkan/runtime/vk_render_pass.h'
