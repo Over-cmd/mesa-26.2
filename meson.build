@@ -379,6 +379,7 @@ endif
 
 with_clc = false
 with_microsoft_clc = false
+with_spirv_to_dxil = false
 with_llvm = with_llvm \
   .enable_if(with_clc, error_message : 'CLC requires LLVM')
 
