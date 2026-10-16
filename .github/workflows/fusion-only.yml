@@ -20,25 +20,14 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Recuperar el Wrapper 25 completo (Restaurando Android y Wrapper nativos)
-        uses: actions/checkout@v4
-        with:
-          repository: Over-cmd/gamenative-wrapper
-          ref: wrapper-25
-          path: temp-wrapper
-          fetch-depth: 1
-
-      - name: 🧩 2.1. Integrar el Wrapper 25 de forma segura (Protegiendo el WSI y Runtime de Mesa 26.2)
+      - name: 📥 2. Sincronizar únicamente componentes faltantes (libadrenotools)
         run: |
-          if [ -d "temp-wrapper" ]; then
-              echo "Copiando recursos del Wrapper 25 y excluyendo WSI y Runtime antiguos..."
-              rsync -av \
-                --exclude='src/vulkan/wsi' \
-                --exclude='src/vulkan/runtime' \
-                temp-wrapper/ . || true
+          echo "Verificando componentes complementarios necesarios..."
+          if [ ! -d "subprojects/libadrenotools" ]; then
+              mkdir -p subprojects
+              git clone --depth 1 https://github.com/bylaws/libadrenotools subprojects/libadrenotools || true
           fi
-          rm -rf temp-wrapper
-          echo "-> Estructura del Wrapper 25 integrada manteniendo los módulos limpios de Mesa 26.2."
+          echo "-> Módulos complementarios listos sin interferir con Mesa 26.2."
 
       - name: ⚙️ 3. Instalar absolutamente todas las herramientas, bibliotecas y dependencias exigidas
         run: |
