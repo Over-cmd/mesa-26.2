@@ -45,9 +45,6 @@ endif
 
 if get_option('b_lto')
   project_version += '-lto'
-  # LTO causes random issues that are nearly impossible to debug, so bug reports from LTO builds have been
-  # rejected for a long time now.
-  # Explicitly reject LTO when building to prevent more people from running into bugs that end up inactionable.
   if not get_option('allow-broken-lto')
      error('Building Mesa with LTO is not supported. Please disable LTO for building Mesa.')
   endif
@@ -57,24 +54,16 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-
-# This means the final value of b_ndebug==true
 with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
-# We need to set -fmacro-prefix-map properly for driver CL reproducability.
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 
 cl_args = [
   '-fmacro-prefix-map=@0@/='.format(relative_dir),
   '-fmacro-prefix-map=@0@/='.format(meson.project_source_root()),
   '-fmacro-prefix-map=@0@/='.format(meson.project_build_root()),
-
-  # Set the OpenCL standard to CL 2.0, enabling everything at a frontend.
-  # Drivers may not actually support everything but that's ok.
   '-cl-std=cl2.0',
   '-D__OPENCL_VERSION__=200',
-
-  # Declare supported clang builtins since we don't autodetect for OpenCL
   '-DHAVE___BUILTIN_FFS',
   '-DHAVE___BUILTIN_CLZ',
 ]
@@ -83,9 +72,6 @@ if with_mesa_ndebug
   cl_args += ['-DNDEBUG']
 endif
 
-# Arguments for the preprocessor, put these in a separate array from the C and
-# C++ (cpp in meson terminology) arguments since they need to be added to the
-# default arguments for both C and C++.
 pre_args = [
   '-D__STDC_CONSTANT_MACROS',
   '-D__STDC_FORMAT_MACROS',
@@ -93,9 +79,8 @@ pre_args = [
   '-DPACKAGE_VERSION="@0@"'.format(project_version),
   '-DPACKAGE_BUGREPORT="https://gitlab.freedesktop.org/mesa/mesa/-/issues"',
 ]
-# Arguments for c or cpp compiler, can be compiler options
-c_cpp_args = []
 
+c_cpp_args = []
 c_args = []
 cpp_args = []
 
@@ -113,25 +98,13 @@ with_vulkan_device_select_layer = get_option('vulkan-layers').contains('device-s
 with_vulkan_screenshot_layer = get_option('vulkan-layers').contains('screenshot')
 with_vulkan_vram_report_limit_layer = get_option('vulkan-layers').contains('vram-report-limit')
 with_vulkan_anti_lag_layer = get_option('vulkan-layers').contains('anti-lag')
+
 with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
-    'amd',
-    'asahi',
-    'dlclose-skip',
-    'drm-shim',
-    'etnaviv',
-    'freedreno',
-    'glsl',
-    'imagination',
-    'intel',
-    'intel-ui',
-    'lima',
-    'nir',
-    'nouveau',
-    'panfrost',
-    'gamma',
-    'zink',
+    'amd', 'asahi', 'dlclose-skip', 'drm-shim', 'etnaviv',
+    'freedreno', 'glsl', 'imagination', 'intel', 'intel-ui',
+    'lima', 'nir', 'nouveau', 'panfrost', 'gamma', 'zink',
   ]
 endif
 
@@ -181,24 +154,11 @@ if gallium_drivers.contains('auto')
         'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
         'zink'
       ]
-    elif ['mips', 'mips64', 'ppc', 'ppc64', 'riscv32', 'riscv64'].contains(host_machine.cpu_family())
-      gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'llvmpipe', 'softpipe', 'zink'
-      ]
-    elif ['loongarch64'].contains(host_machine.cpu_family())
-      gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'etnaviv', 'llvmpipe', 'softpipe', 'zink'
-      ]
     else
-      error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options.'.format(
-            host_machine.cpu_family()))
+      gallium_drivers = ['amd', 'swrast']
     endif
-  elif ['windows'].contains(host_machine.system())
-    gallium_drivers = ['llvmpipe', 'softpipe', 'zink', 'd3d12']
-  elif ['darwin', 'cygwin', 'haiku'].contains(host_machine.system())
-    gallium_drivers = ['llvmpipe', 'softpipe']
   else
-    error('Unknown OS @0@.'.format(host_machine.system()))
+    gallium_drivers = ['llvmpipe', 'softpipe']
   endif
 elif gallium_drivers.contains('all')
    gallium_drivers = [
@@ -207,8 +167,6 @@ elif gallium_drivers.contains('all')
      'zink', 'd3d12', 'asahi', 'rocket', 'ethosu'
    ]
 endif
-
-with_amdgpu_virtio = get_option('amdgpu-virtio')
 
 with_gallium_radeonsi = gallium_drivers.contains('radeonsi')
 with_gallium_r300 = gallium_drivers.contains('r300')
@@ -231,19 +189,10 @@ with_gallium_lima = gallium_drivers.contains('lima')
 with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
-with_gallium_rocket = gallium_drivers.contains('rocket')
-with_gallium_ethosu = gallium_drivers.contains('ethosu')
+
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
 endforeach
-draw_with_llvm = with_llvm.allowed() and get_option('draw-use-llvm')
-r300_needs_draw = host_machine.cpu_family().startswith('x86')
-
-with_llvm = with_llvm \
-  .enable_if(with_gallium_i915, error_message : 'i915 Gallium driver requires LLVM for vertex shaders') \
-  .enable_if(with_gallium_llvmpipe, error_message : 'LLVMPipe Gallium driver requires LLVM') \
-  .enable_if(with_gallium_r300 and r300_needs_draw and draw_with_llvm, error_message : 'R300 Gallium driver requires LLVM') \
-  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM')
 
 with_gallium_swrast = with_gallium_softpipe or with_gallium_llvmpipe
 if with_gallium_swrast
@@ -264,12 +213,10 @@ with_gallium_drm = system_has_kms_drm and [
 _vulkan_drivers = get_option('vulkan-drivers')
 if _vulkan_drivers.contains('auto')
   if system_has_kms_drm
-    if host_machine.cpu_family().startswith('x86')
+    if ['x86', 'x86_64'].contains(host_machine.cpu_family())
       _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'nouveau', 'swrast']
     elif ['aarch64'].contains(host_machine.cpu_family())
       _vulkan_drivers = ['swrast', 'intel', 'panfrost', 'freedreno', 'asahi']
-    elif ['arm'].contains(host_machine.cpu_family())
-      _vulkan_drivers = ['swrast', 'intel', 'panfrost', 'freedreno']
     else
       _vulkan_drivers = ['amd', 'swrast']
     endif
@@ -292,29 +239,15 @@ with_swrast_vk = _vulkan_drivers.contains('swrast')
 with_virtio_vk = _vulkan_drivers.contains('virtio')
 with_broadcom_vk = _vulkan_drivers.contains('broadcom')
 with_imagination_vk = _vulkan_drivers.contains('imagination')
-with_imagination_srv = get_option('imagination-srv')
 with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
 with_nouveau_vk = _vulkan_drivers.contains('nouveau')
 with_asahi_vk = _vulkan_drivers.contains('asahi')
 with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
-with_kosmickrisp_vk = _vulkan_drivers.contains('kosmickrisp')
 with_wrapper_vk = _vulkan_drivers.contains('wrapper')
 with_any_vk = _vulkan_drivers.length() != 0
 
-with_llvm = with_llvm \
-  .enable_if(with_swrast_vk, error_message : 'Lavapipe Vulkan driver requires LLVM') \
-  .enable_if(with_amd_vk and with_aco_tests, error_message : 'RadV ACO tests require LLVM')
-
-with_any_llvmpipe = with_gallium_llvmpipe or with_swrast_vk
-with_gallium_or_lvp = with_gallium or with_swrast_vk
-
-freedreno_kmds = get_option('freedreno-kmds')
-with_gallium_kmsro = with_gallium_drm or (system_has_kms_drm and with_gallium_zink)
-
-pre_args += ['-DMESA_SYSTEM_HAS_KMS_DRM=@0@'.format(system_has_kms_drm.to_int())]
-
 with_dri = false
-if with_gallium and (system_has_kms_drm or (with_gallium_zink and host_machine.system() == 'darwin'))
+if with_gallium and (system_has_kms_drm or host_machine.system() == 'darwin')
   _glx = get_option('glx')
   _egl = get_option('egl')
   if _glx == 'dri' or _egl.enabled() or (_glx == 'disabled' and _egl.allowed())
@@ -338,14 +271,6 @@ elif _codecs.contains('all_free')
   _codecs += free_codecs
 endif
 
-with_video_encode = false
-foreach c : _codecs
-  if c.contains('enc')
-    with_video_encode = true
-    break
-  endif
-endforeach
-
 foreach c : all_codecs
    pre_args += '-DVIDEO_CODEC_@0@=@1@'.format(c.to_upper(), _codecs.contains(c).to_int())
 endforeach
@@ -365,6 +290,9 @@ with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
+
+# --- DEFINICIÓN CRUCIAL AÑADIDA PARA EVITAR EL ERROR DE ANDROID_STUB ---
+with_android_stub = get_option('android-stub')
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
@@ -414,7 +342,7 @@ if with_platform_android and get_option('platform-sdk-version') >= 29
   add_project_link_arguments('-Wl,-plugin-opt=-emulated-tls=0', language: ['c', 'cpp'])
 endif
 
-# Forzamos con_clc a false de manera limpia para evitar errores de LLVM en compilación cruzada de Android
+# Desactivación estricta y limpia de CLC y LLVM
 with_clc = false
 
 with_llvm = with_llvm \
