@@ -218,6 +218,9 @@ with_gallium_drm = system_has_kms_drm and [
   with_gallium_vc4,
 ].contains(true)
 
+# Variable combinada requerida por src/meson.build
+with_gallium_or_lvp = with_gallium or with_gallium_swrast
+
 _vulkan_drivers = get_option('vulkan-drivers')
 if _vulkan_drivers.contains('auto')
   if system_has_kms_drm
