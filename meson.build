@@ -103,6 +103,7 @@ pre_args = [
   '-DHAVE_STRUCT_TIMESPEC=1',
   '-D_ISOC11_SOURCE=1',
   '-DHAVE_THRD_CREATE=1',
+  '-D_POSIX_C_SOURCE=200809L',
   '-DPACKAGE_VERSION="@0@"'.format(project_version),
   '-DPACKAGE_BUGREPORT="https://gitlab.freedesktop.org/mesa/mesa/-/issues"',
 ]
