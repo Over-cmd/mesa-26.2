@@ -337,6 +337,7 @@ dep_x11_xcb = null_dep
 dep_xcb_randr = null_dep
 dep_xcb_present = null_dep
 dep_xcb_sync = null_dep
+dep_xshmfence = null_dep
 dep_x11 = null_dep
 
 with_c11_threads = false
