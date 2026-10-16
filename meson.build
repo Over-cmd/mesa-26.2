@@ -34,6 +34,7 @@ endif
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 fs = import('fs')
+pkg = import('pkgconfig')
 
 sizeof_pointer = cc.sizeof('void*').to_string()
 
