@@ -326,6 +326,7 @@ dep_valgrind = null_dep
 dep_unwind = null_dep
 dep_futex = null_dep
 dep_regex = null_dep
+dep_llvm = null_dep
 
 with_c11_threads = false
 if cc.has_function('thrd_create', prefix: '#include <threads.h>')
