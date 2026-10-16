@@ -57,6 +57,7 @@ main_dispatch_h = []
 inc_st_dri = []
 ld_args_gc_sections = []
 gbm_priv_libs = []
+gl_priv_libs = []
 with_symbols_check = false
 
 if get_option('layout') != 'mirror'
