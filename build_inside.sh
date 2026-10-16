@@ -12,6 +12,13 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
+# 🗡️ PARCHE CIRÚRGICO DE BITSCAN.C: Eliminamos las definiciones duplicadas de ffs/ffsll que choca con Bionic
+if [ -f "src/util/bitscan.c" ]; then
+    echo "-> Aplicando parche anti-redefinición en src/util/bitscan.c..."
+    sed -i '/int\s\+ffs\s*(/,/^\}/d' src/util/bitscan.c
+    sed -i '/ffsll\s*(/,/^\}/d' src/util/bitscan.c
+fi
+
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (LIMPIEZA AUTOMÁTICA SI ES NECESARIO)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
