@@ -332,12 +332,13 @@ dep_futex = null_dep
 dep_regex = null_dep
 dep_llvm = null_dep
 
-# Dependencias XCB/X11 requeridas por src/x11/meson.build
+# Dependencias XCB/X11 requeridas por src/x11/meson.build y src/loader/meson.build
 dep_xcb = null_dep
 dep_xcb_dri3 = null_dep
 dep_xcb_glx = null_dep
 dep_x11_xcb = null_dep
 dep_xcb_randr = null_dep
+dep_xcb_xrandr = null_dep
 dep_xcb_present = null_dep
 dep_xcb_sync = null_dep
 dep_xcb_xfixes = null_dep
