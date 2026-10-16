@@ -9,7 +9,7 @@ BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON PARA TERMUX-X11 EMULADO (v51)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON PARA TERMUX-X11 (SOLO WRAPPER)
 if [ ! -d "${BUILD_DIR}" ]; then
 meson setup "${BUILD_DIR}" --cross-file /root/build-config/cross_file.txt \
 -Db_sanitize=none \
@@ -21,33 +21,36 @@ meson setup "${BUILD_DIR}" --cross-file /root/build-config/cross_file.txt \
 -Dshared-llvm=disabled \
 -Dplatforms=x11 \
 -Degl-native-platform=x11 \
--Dgallium-drivers=panfrost \
+-Dgallium-drivers="" \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
--Dvulkan-drivers=panfrost,wrapper \
+-Dvulkan-drivers=wrapper \
 -Degl=enabled \
 -Dglx=disabled
 fi
 
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN ELÁSTICA DEL BINARIO DE 9.3 MB REALES
+# 🟢 2. EXTRACCIÓN DEL BINARIO DEL WRAPPER VULKAN
 python3 -c '
 import os, shutil
-src = "'"${BUILD_DIR}"'/src/panfrost/vulkan/libvulkan_panfrost.so"
+# Ajusta esta ruta si el binario del wrapper se ubica en otro subdirectorio de src/vulkan o similar
+src = "'"${BUILD_DIR}"'/src/vulkan/wrapper/libvulkan_wrapper.so"
 dst = "'"${BUILD_DIR}"'/libvulkan_wrapper.so.unstripped"
+
+if not os.path.exists(src):
+    # Búsqueda elástica alternativa en caso de variar la ruta exacta
+    for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
+        if "libvulkan_wrapper.so" in fs:
+            src = os.path.join(r, "libvulkan_wrapper.so")
+            break
 
 if os.path.exists(src):
     size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Silicio de Mesa 25 de {size_mb:.2f} MB extraído con éxito!")
+    print(f"-> [Forja Real] ¡Binario del wrapper Vulkan de {size_mb:.2f} MB extraído con éxito!")
 else:
-    for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
-        if "libvulkan_panfrost.so" in fs:
-            shutil.copy2(os.path.join(r, "libvulkan_panfrost.so"), dst)
-            print("-> [Forja Real - Rescate] Binario de 9.3 MB localizado de forma elástica.")
-            exit(0)
-    print("-> [❌ ERROR CRÍTICO] El compilador cruzado no logró forjar el driver real.")
+    print("-> [❌ ERROR CRÍTICO] El compilador cruzado no logró forjar el driver wrapper.")
     exit(1)
 '
 
@@ -59,16 +62,15 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RIGIDO (usr/lib y usr/share/vulkan/icd.d)
+# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (usr/lib y usr/share/vulkan/icd.d)
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
 mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
-# 🟢 5. COPIAR BINARIO Y GENERAR MANIFIESTO ACTIVADOR JSON CON NOMBRE DE WRAPPER
+# 🟢 5. COPIAR BINARIO Y GENERAR MANIFIESTO ACTIVADOR JSON
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-# 🛠️ CORRECCIÓN DIRECTA: Cambiamos el nombre del manifiesto a wrapper_icd.aarch64.json
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
     "file_format_version": "1.0.0",
@@ -89,5 +91,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA v44: ¡MANIFIESTO WRAPPER JSON Y TAR.ZST LISTOS! "
+echo " 🟢 FORJA EXITOSA: ¡WRAPPER VULKAN Y TAR.ZST LISTOS! "
 echo "=========================================================="
