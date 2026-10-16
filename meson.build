@@ -245,6 +245,7 @@ with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
 with_nouveau_vk = _vulkan_drivers.contains('nouveau')
 with_asahi_vk = _vulkan_drivers.contains('asahi')
 with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
+with_kosmickrisp_vk = false
 with_wrapper_vk = true
 with_any_vk = _vulkan_drivers.length() != 0
 
