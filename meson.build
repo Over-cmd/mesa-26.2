@@ -38,6 +38,7 @@ fs = import('fs')
 sizeof_pointer = cc.sizeof('void*').to_string()
 
 null_dep = dependency('', required : false)
+prog_bison = find_program('bison', required : false)
 
 if get_option('layout') != 'mirror'
   error('`mirror` is the only build directory layout supported')
