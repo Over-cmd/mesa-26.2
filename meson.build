@@ -54,7 +54,7 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
+with_mesa_ndebug = get_option('b_ndebug'] == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug'] == 'if-release')
 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
@@ -88,6 +88,9 @@ cpp_args = []
 c_msvc_compat_args = []
 cpp_msvc_compat_args = []
 soong_compat_c_args = []
+sse41_args = []
+avx_args = []
+avx2_args = []
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
