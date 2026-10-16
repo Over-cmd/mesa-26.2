@@ -53,6 +53,7 @@ inc_compiler = include_directories('src/compiler/nir')
 ld_args_build_id = []
 glapi_xml_py_deps = []
 main_dispatch_h = []
+inc_st_dri = []
 ld_args_gc_sections = []
 gbm_priv_libs = []
 with_symbols_check = false
