@@ -47,6 +47,8 @@ prog_glslang = find_program('glslangValidator', required : false)
 glslang_quiet = prog_glslang.found() ? ['-s'] : []
 glslang_depfile = []
 
+inc_compiler = include_directories('src/compiler/nir')
+
 if get_option('layout') != 'mirror'
   error('`mirror` is the only build directory layout supported')
 endif
