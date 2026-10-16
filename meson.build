@@ -108,6 +108,7 @@ with_ld_version_script = false
 with_xcb_keysyms = false
 with_xlib_lease = false
 with_bvh = false
+with_vdrm = false
 
 with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
