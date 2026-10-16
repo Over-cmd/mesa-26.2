@@ -353,6 +353,7 @@ dep_xcb_xrandr = null_dep
 dep_xcb_present = null_dep
 dep_xcb_sync = null_dep
 dep_xcb_xfixes = null_dep
+dep_xcb_shm = null_dep
 dep_xshmfence = null_dep
 dep_x11 = null_dep
 dep_spirv_tools = null_dep
