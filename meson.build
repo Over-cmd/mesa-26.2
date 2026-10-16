@@ -51,6 +51,7 @@ glslang_depfile = []
 dir_compiler_nir = 'src/compiler/nir'
 inc_compiler = include_directories('src/compiler/nir')
 ld_args_build_id = []
+ld_args_bsymbolic = []
 glapi_xml_py_deps = []
 main_dispatch_h = []
 inc_st_dri = []
