@@ -20,19 +20,12 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: 📥 2. Sincronizar libadrenotools
-        run: |
-          if [ ! -d "subprojects/libadrenotools" ]; then
-              mkdir -p subprojects
-              git clone --depth 1 https://github.com/bylaws/libadrenotools subprojects/libadrenotools || true
-          fi
-
-      - name: 🐳 3. Construir contenedor Docker y compilar
+      - name: 🐳 2. Construir contenedor Docker y compilar
         run: |
           docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
           docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
 
-      - name: 📦 4. Empaquetar artefacto
+      - name: 📦 3. Empaquetar artefacto
         run: |
           WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
           if [ -f "$WRAPPER_SO" ]; then
@@ -46,7 +39,7 @@ jobs:
             exit 1
           fi
 
-      - name: 🚀 5. Subir artefacto
+      - name: 🚀 4. Subir artefacto
         uses: actions/upload-artifact@v4
         with:
           name: Bannerlator-Mesa26-Mali-Wrapper
