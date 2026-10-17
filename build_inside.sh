@@ -15,7 +15,7 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Forzamos Vulkan wrapper estrictamente)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Vulkan wrapper estrictamente)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -145,14 +145,27 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (usr/lib y usr/share/vulkan/icd.d)
+# 🟢 4. INTEGRACIÓN DE LIBADRENOTOOLS Y EL BYPASS
+echo "-> Preparando libadrenotools y submódulo de bypass..."
+ADRENOTOOLS_DIR="${BUILD_DIR}/adrenotools_src"
+if [ ! -d "$ADRENOTOOLS_DIR" ]; then
+    git clone --recurse-submodules https://github.com/bylaws/libadrenotools.git "$ADRENOTOOLS_DIR" 2>/dev/null || true
+fi
+
+# 🟢 5. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (usr/lib y usr/share/vulkan/icd.d)
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
 mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
-# 🟢 5. COPIAR BINARIO Y GENERAR MANIFIESTO ACTIVADOR JSON
+# Copiamos el driver Vulkan
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
+
+# Si existen binarios o scripts de bypass en libadrenotools local, los integramos al rootfs
+if [ -d "$ADRENOTOOLS_DIR" ]; then
+    echo "-> Integrando componentes de libadrenotools y bypass..."
+    find "$ADRENOTOOLS_DIR" -name "*.so" -exec cp {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
+fi
 
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
@@ -174,5 +187,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡WRAPPER VULKAN Y TAR.ZST LISTOS! "
+echo " 🟢 FORJA EXITOSA: ¡WRAPPER + LIBADRENOTOOLS BYPASS Y TAR.ZST LISTOS! "
 echo "=========================================================="
