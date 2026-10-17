@@ -15,7 +15,7 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (GBM deshabilitado para evitar dependencias DRI huérfanas)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -36,7 +36,6 @@ fi
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Purgamos ffs/ffsll redundantes
 if [ -f "src/util/bitscan.c" ]; then
-    echo "-> Purgando ffs y ffsll redundantes en src/util/bitscan.c..."
     python3 -c '
 path = "src/util/bitscan.c"
 with open(path, "r") as f:
@@ -51,8 +50,7 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada
-echo "-> Neutralizando validaciones estrictas de plataforma en src/util/..."
+# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO
 python3 -c '
 import glob
 for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
@@ -64,9 +62,8 @@ for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
             f.write(content)
 '
 
-# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C: Envolvemos todo el contenido en #if 0 limpiamente
+# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C
 if [ -f "src/util/u_sync_provider.c" ]; then
-    echo "-> Desactivando contenido duplicado en u_sync_provider.c..."
     python3 -c '
 path = "src/util/u_sync_provider.c"
 with open(path, "r") as f:
@@ -76,9 +73,8 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN LOADER.C: Aseguramos macros major y minor compatibles con Bionic
+# 🗡️ PARCHE CIRÚRGICO EN LOADER.C
 if [ -f "src/loader/loader.c" ]; then
-    echo "-> Asegurando compatibilidad de major() y minor() en loader.c..."
     python3 -c '
 path = "src/loader/loader.c"
 with open(path, "r") as f:
@@ -102,38 +98,41 @@ fi
 echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN INTELIGENTE DEL BINARIO VULKAN WRAPPER
+# 🟢 2. EXTRACCIÓN UNIVERSAL DE CUALQUIER BINARIO .SO GENERADO EN LA COMPILACIÓN
 python3 -c '
 import os, shutil
 
 build_dir = "'"${BUILD_DIR}"'"
 dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
+# Buscamos absolutamente cualquier archivo .so en el directorio de build que no sea una dependencia externa (como expat)
 candidates = []
 for root, dirs, files in os.walk(build_dir):
     for file in files:
-        if file.endswith(".so") and ("wrapper" in file or "vulkan" in file):
+        if file.endswith(".so") and "expat" not in file and "glapi" not in file:
             candidates.append(os.path.join(root, file))
+
+print("Librerías .so encontradas en el build:", candidates)
 
 src = None
 for c in candidates:
-    if "libvulkan_wrapper.so" in c or "wrapper" in c:
+    if "vulkan" in c or "wrapper" in c:
         src = c
         break
 
+# Si no hay match exacto, cogemos el primer .so principal generado en src/
 if not src and candidates:
     for c in candidates:
-        if "test" not in c:
+        if "/src/" in c and "test" not in c:
             src = c
             break
 
 if src and os.path.exists(src):
     size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Binario Vulkan Wrapper encontrado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
+    print(f"-> [Forja Real] ¡Binario seleccionado desde {src} ({size_mb:.2f} MB) y extraído con éxito!")
 else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró libvulkan_wrapper.so en {build_dir}.")
-    print("Candidatos encontrados:", candidates)
+    print(f"-> [❌ ERROR CRÍTICO] No se encontró un binario .so válido en {build_dir}.")
     exit(1)
 '
 
@@ -158,12 +157,9 @@ rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
 mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
-# Copiamos el driver Vulkan
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-# Integrar librerías o submódulos de bypass si existen en libadrenotools local
 if [ -d "$ADRENOTOOLS_DIR" ]; then
-    echo "-> Integrando componentes de libadrenotools y bypass..."
     find "$ADRENOTOOLS_DIR" -name "*.so" -exec cp {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
 fi
 
@@ -177,15 +173,14 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 6. EMPAQUETADO COMPRIMIDO TAR.ZST MANTENIENDO LA ESTRUCTURA DE RAÍZ
+# 🟢 6. EMPAQUETADO COMPRIMIDO TAR.ZST
 echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
 cd "${ROOTFS_DIR}"
 tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
 cd - > /dev/null
 
-# Copiamos el paquete al directorio raíz para que lo capture la Action
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡WRAPPER + LIBADRENOTOOLS BYPASS Y TAR.ZST LISTOS! "
+echo " 🟢 FORJA EXITOSA: ¡PAQUETE ROOTFS GENERADO CORRECTAMENTE! "
 echo "=========================================================="
