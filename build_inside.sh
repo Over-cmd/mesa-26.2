@@ -10,7 +10,7 @@ if [ -z "$NDK_DIR" ]; then
 fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-# Exportaciones generales por compatibilidad y enlace de XCB/Audio
+# Exportaciones generales por compatibilidad
 export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include"
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
@@ -95,7 +95,7 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt con headers, LDFLAGS y plataforma Android
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt con headers y plataforma Android
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
@@ -119,9 +119,9 @@ if "c_args =" in content:
     content = content.replace("c_args =", f"c_args = [{args_str}] +")
 else:
     if "[properties]" in content:
-        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\nlink_args = ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb']")
+        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n")
     else:
-        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\nlink_args = ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb']\n"
+        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n"
 
 with open(cross_path, "w") as f:
     f.write(content)
@@ -215,7 +215,7 @@ if "#ifndef major" not in content:
 '
 fi
 
-# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY (EVITAR CONFLICTOS DE EXTENSIONES)
+# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY
 if [ -f "src/vulkan/wrapper/vk_wrapper_features_gen.py" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
@@ -226,7 +226,6 @@ if "assert len(diagnostics) == 0" in content:
     content = content.replace("assert len(diagnostics) == 0", "# assert len(diagnostics) == 0")
     with open(path, "w") as f:
         f.write(content)
-        print("-> [Parche Aplicado] Aserción de duplicados desactivada con éxito en vk_wrapper_features_gen.py")
 '
 fi
 
@@ -247,13 +246,14 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN CON --ICD-LIB-PATH Y --ICD-FILENAME)
+# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN Y FORZAR LIBRARIES DE XCB EN EL LINKER)
 if [ -f "src/vulkan/wrapper/meson.build" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/meson.build"
 with open(path, "r") as f:
     content = f.read()
 
+# 1. Corregir generador ICD
 target_block = """wrapper_icd = custom_target(
   '\''wrapper_icd'\'',
   input: [vk_icd_gen, vk_api_xml],
@@ -283,9 +283,17 @@ replacement_block = """wrapper_icd = custom_target(
 
 if "--lib-path" in content:
     content = content.replace(target_block, replacement_block)
-    with open(path, "w") as f:
-        f.write(content)
-        print("-> [Parche Aplicado] Argumentos del generador de ICD actualizados en meson.build")
+
+# 2. Inyectar dependencias XCB directamente en shared_library para evitar undefined symbols
+lib_inject = "dependencies: [wrapper_deps, vulkan_wsi_deps],"
+lib_replacement = "dependencies: [wrapper_deps, vulkan_wsi_deps],\n  link_args: ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb'],"
+
+if "link_args:" not in content and lib_inject in content:
+    content = content.replace(lib_inject, lib_replacement)
+
+with open(path, "w") as f:
+    f.write(content)
+    print("-> [Parche Aplicado] Meson.build actualizado con éxito para ICD y XCB link_args")
 '
 fi
 
