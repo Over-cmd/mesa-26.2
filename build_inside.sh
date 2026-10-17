@@ -52,10 +52,31 @@ if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
 EOF
 fi
 
-rm -rf "${BUILD_DIR}"
+rm -rf "${BUILD_DIR}" build-host
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
+# 🟢 FASE 1: COMPILAR HERRAMIENTAS DE HOST PARA SATISFACER MESA-CLC Y PRECOMP-COMPILER
+echo "-> [Host] Configurando Meson para el host (herramientas nativas)..."
+meson setup build-host \
+    -Dplatforms=[] \
+    -Dgallium-drivers=[] \
+    -Dvulkan-drivers=[] \
+    -Dtools=panfrost \
+    -Dprecomp-compiler=enabled \
+    -Dinstall-precomp-compiler=true \
+    -Dllvm=enabled \
+    -Dmesa-clc=enabled \
+    -Dinstall-mesa-clc=true
+
+echo "-> [Host] Compilando herramientas auxiliares..."
+ninja -C build-host src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile || true
+
+# Crear enlaces simbólicos necesarios para el cross-compiler
+ln -sf "$(pwd)/build-host/src/compiler/clc/mesa_clc" "$(pwd)/build-host/src/compiler/clc/mesa-clc" 2>/dev/null || true
+ln -sf "$(pwd)/build-host/src/compiler/spirv/vtn_bindgen2" "$(pwd)/build-host/src/compiler/spirv/vtn-bindgen2" 2>/dev/null || true
+
+# 🟢 FASE 2: CONFIGURAR CROSS-FILE PARA ANDROID
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -76,7 +97,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN MESON LIMPIO (SIN OPCIONES OBSOLETAS)
+# 🟢 FASE 3: CONFIGURAR MESON PARA ANDROID CON PANFROST + WRAPPER
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -95,6 +116,8 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dvulkan-drivers=panfrost,wrapper \
 -Degl=enabled \
 -Dglx=disabled \
+-Dmesa-clc=system \
+-Dprecomp-compiler=system \
 -Dzlib=disabled \
 -Dzstd=disabled
 
@@ -148,10 +171,10 @@ with open(path, "w") as f: f.write(content)
 '
 fi
 
-echo "-> Ejecutando compilación completa con Ninja..."
+echo "-> Ejecutando compilación cruzada con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN ELÁSTICA DEL BINARIO DE PANFROST
+# 🟢 4. EXTRACCIÓN ELÁSTICA DEL BINARIO
 python3 -c '
 import os, shutil
 src = "'"${BUILD_DIR}"'/src/panfrost/vulkan/libvulkan_panfrost.so"
@@ -171,14 +194,14 @@ else:
     exit(1)
 '
 
-# 🟢 3. LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
+# 🟢 5. LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
 STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 if [ ! -f "$STRIP" ]; then
     STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
+# 🟢 6. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO CON MANIFIESTO ICD RELATIVO
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
@@ -196,7 +219,6 @@ for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
             shutil.copy2(os.path.join(root, file), os.path.join(rootfs_lib, file))
 ' 2>/dev/null || true
 
-# 🟢 5. MANIFIESTO ICD CON RUTA RELATIVA
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
     "file_format_version": "1.0.0",
@@ -207,7 +229,7 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 6. EMPAQUETADO COMPRIMIDO TAR.ZST
+# 🟢 7. EMPAQUETADO COMPRIMIDO TAR.ZST
 echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
 cd "${ROOTFS_DIR}"
 tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
@@ -216,5 +238,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA MESA 26 UNIFICADA: ¡PANFROST + WRAPPER LISTO! "
+echo " 🟢 FORJA MESA 26 CON HOST COMPILER + WRAPPER: ¡LISTO! "
 echo "=========================================================="
