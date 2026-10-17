@@ -28,7 +28,7 @@ RUN mkdir -p /tmp/sysroot && \
     for f in *.deb; do dpkg-deb -x "$f" /; done && \
     rm -rf /tmp/sysroot
 
-# 🟢 REPARACIÓN INDUSTRIAL TOTAL GLOBAL V16: Conservamos el desvío elástico plano de AHardwareBuffer. Limpiamos y removemos de raíz las macros de remapeo de logs que causaban el conflicto jerárquico 'follows non-static declaration'. Esto permite que Mesa use las firmas de log nativas reales de tu wrapper sin baches.
+# 🟢 REPARACIÓN INDUSTRIAL TOTAL GLOBAL V17: Conservamos las macros de AHardwareBuffer y eliminamos -U__ANDROID__
 RUN NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1) && \
     NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin" && \
     mkdir -p /root/build-config && \
@@ -47,8 +47,8 @@ RUN NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/nul
     "pkg_config_libdir = termux_dir + '/lib/pkgconfig:' + termux_dir + '/share/pkgconfig'" \
     "" \
     "[built-in options]" \
-    "c_args = ['-D__TERMUX__', '-D__USE_GNU', '-U__ANDROID__', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
-    "cpp_args = ['-D__TERMUX__', '-D__USE_GNU', '-U__ANDROID__', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
+    "c_args = ['-D__TERMUX__', '-D__USE_GNU', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
+    "cpp_args = ['-D__TERMUX__', '-D__USE_GNU', '-I' + termux_dir + '/include', '-include', 'fcntl.h', '-include', 'unistd.h', '-DAHardwareBuffer_allocate=MALI_AHardwareBuffer_allocate', '-DAHardwareBuffer_release=MALI_AHardwareBuffer_release', '-DAHardwareBuffer_sendHandleToUnixSocket=MALI_AHardwareBuffer_sendHandleToUnixSocket']" \
     "c_link_args = ['-L' + termux_dir + '/lib', '-landroid-shmem']" \
     "cpp_link_args = ['-L' + termux_dir + '/lib', '-landroid-shmem']" \
     "" \
