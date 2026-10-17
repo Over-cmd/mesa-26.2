@@ -34,7 +34,7 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dglx=disabled
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Purgamos ffs/ffsll redundantes
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
 if [ -f "src/util/bitscan.c" ]; then
     python3 -c '
 path = "src/util/bitscan.c"
@@ -95,22 +95,29 @@ if "#ifndef major" not in content:
 '
 fi
 
-echo "-> Ejecutando compilación con Ninja..."
+echo "-> Ejecutando compilación completa con Ninja (incluyendo submódulos)..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN INTELIGENTE DEL BINARIO WRAPPER VULKAN
+# 🟢 2. EXTRACCIÓN INTELIGENTE DEL WRAPPER Y LOS MÓDULOS DE BYPASS DE ADRENOTOOLS
 python3 -c '
 import os, shutil
 
 build_dir = "'"${BUILD_DIR}"'"
 dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
-# Buscamos en todo el árbol de compilación librerías compartidas de Vulkan o wrapper
 candidates = []
+subproject_sos = []
+
 for root, dirs, files in os.walk(build_dir):
     for file in files:
         if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
-            candidates.append(os.path.join(root, file))
+            full_path = os.path.join(root, file)
+            candidates.append(full_path)
+            if "subprojects" in root:
+                subproject_sos.append(full_path)
+
+print("Librerías .so encontradas:", candidates)
+print("Librerías de subproyectos (adrenotools / bypass):", subproject_sos)
 
 src = None
 for c in candidates:
@@ -124,9 +131,9 @@ if not src and candidates:
 if src and os.path.exists(src):
     size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Binario del wrapper localizado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
+    print(f"-> [Forja Real] ¡Driver principal localizado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
 else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró ningún binario .so válido en {build_dir}.")
+    print(f"-> [❌ ERROR CRÍTICO] No se encontró el binario principal en {build_dir}.")
     exit(1)
 '
 
@@ -138,24 +145,29 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. INTEGRACIÓN DE LIBADRENOTOOLS Y EL BYPASS
-echo "-> Preparando libadrenotools y submódulo de bypass..."
-ADRENOTOOLS_DIR="${BUILD_DIR}/adrenotools_src"
-if [ ! -d "$ADRENOTOOLS_DIR" ]; then
-    git clone --recurse-submodules https://github.com/bylaws/libadrenotools.git "$ADRENOTOOLS_DIR" 2>/dev/null || true
-fi
-
-# 🟢 5. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (usr/lib y usr/share/vulkan/icd.d)
+# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO PARA EL ROOTFS
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
 mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
+# Copiamos el binario principal
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-if [ -d "$ADRENOTOOLS_DIR" ]; then
-    find "$ADRENOTOOLS_DIR" -name "*.so" -exec cp {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
-fi
+# Copiamos automáticamente todas las librerías secundarias/bypass generadas por el subproyecto adrenotools
+python3 -c '
+import os, shutil
+build_dir = "'"${BUILD_DIR}"'"
+rootfs_lib = "'"${ROOTFS_DIR}"'/usr/lib"
+
+for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
+    for file in files:
+        if file.endswith(".so"):
+            src_so = os.path.join(root, file)
+            dst_so = os.path.join(rootfs_lib, file)
+            shutil.copy2(src_so, dst_so)
+            print(f"-> [Subproyecto] Bypass/Librería integrada: {file}")
+'
 
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
@@ -167,7 +179,7 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 6. EMPAQUETADO COMPRIMIDO TAR.ZST
+# 🟢 5. EMPAQUETADO COMPRIMIDO TAR.ZST
 echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
 cd "${ROOTFS_DIR}"
 tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
@@ -176,5 +188,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON WRAPPER Y LIBADRENOTOOLS LISTOS! "
+echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON ADRENOTOOLS INTEGRADO Y LISTO! "
 echo "=========================================================="
