@@ -133,26 +133,26 @@ if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/mes
     rm -rf "subprojects/libadrenotools"
 fi
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
-if [ ! -d "${BUILD_DIR}" ]; then
-  meson subprojects download || true
+# 🟢 1. LIMPIEZA FORZOSA SI EXISTE UN ESTADO DE BUILD CORRUPTO Y CONFIGURACIÓN DE MESON
+rm -rf "${BUILD_DIR}" "${LOCAL_CROSS_FILE}"
 
-  meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
-  -Db_sanitize=none \
-  -Db_lundef=true \
-  -Dcpp_rtti=false \
-  -Dgbm=disabled \
-  -Dopengl=true \
-  -Dllvm=disabled \
-  -Dshared-llvm=disabled \
-  -Dplatforms=x11 \
-  -Dgallium-drivers="" \
-  -Ddraw-use-llvm=false \
-  -Dxmlconfig=disabled \
-  -Dwrapper-vk=true \
-  -Degl=disabled \
-  -Dglx=disabled
-fi
+meson subprojects download || true
+
+meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
+-Db_sanitize=none \
+-Db_lundef=true \
+-Dcpp_rtti=false \
+-Dgbm=disabled \
+-Dopengl=true \
+-Dllvm=disabled \
+-Dshared-llvm=disabled \
+-Dplatforms=x11 \
+-Dgallium-drivers="" \
+-Ddraw-use-llvm=false \
+-Dxmlconfig=disabled \
+-Dwrapper-vk=true \
+-Degl=disabled \
+-Dglx=disabled
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
 if [ -f "src/util/bitscan.c" ]; then
