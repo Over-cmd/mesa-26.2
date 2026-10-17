@@ -105,7 +105,7 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ GENERACIÓN DE CROSS_FILE CON -ldrm INCLUIDO EN link_args
+# 🛡️ GENERACIÓN DE CROSS_FILE CON -D_GNU_SOURCE Y RUTAS DE LIBDRM DE TERMUX
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -126,7 +126,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (CON X11 y WAYLAND WSI HABILITADOS)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -137,7 +137,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
--Dplatforms=x11 \
+-Dplatforms=x11,wayland \
 -Dgallium-drivers="" \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
