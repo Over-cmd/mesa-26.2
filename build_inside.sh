@@ -77,15 +77,25 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN LOADER.C: Incluimos <sys/sysmacros.h> para major() y minor()
+# 🗡️ PARCHE CIRÚRGICO EN LOADER.C: Aseguramos macros major y minor compatibles con Bionic
 if [ -f "src/loader/loader.c" ]; then
-    echo "-> Añadiendo <sys/sysmacros.h> en loader.c para soporte de major/minor..."
+    echo "-> Asegurando compatibilidad de major() y minor() en loader.c..."
     python3 -c '
 path = "src/loader/loader.c"
 with open(path, "r") as f:
     content = f.read()
-if "#include <sys/sysmacros.h>" not in content:
-    content = "#include <sys/sysmacros.h>\n" + content
+# Añadimos sys/sysmacros.h y definición de seguridad para major/minor si faltan
+patch = """
+#include <sys/sysmacros.h>
+#ifndef major
+#define major(x) (((x) >> 8) & 0xfff)
+#endif
+#ifndef minor
+#define minor(x) ((x) & 0xff)
+#endif
+"""
+if "#ifndef major" not in content:
+    content = patch + "\n" + content
     with open(path, "w") as f:
         f.write(content)
 '
