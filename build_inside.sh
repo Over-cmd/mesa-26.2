@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/dat
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC, VNDK Y LIBDRM
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -235,6 +235,21 @@ content = content.replace("pdevice->wsi_device.engine_name = engine_name;", "/* 
 
 with open(path, "w") as f:
     f.write(content)
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_LOG.C (INCLUIR FCNTL.H Y UNISTD.H PARA OPEN Y O_RDONLY)
+if [ -f "src/vulkan/wrapper/wrapper_log.c" ]; then
+    python3 -c '
+path = "src/vulkan/wrapper/wrapper_log.c"
+with open(path, "r") as f:
+    content = f.read()
+
+if "#include <fcntl.h>" not in content:
+    content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
+    with open(path, "w") as f:
+        f.write(content)
+        print("-> [Parche Aplicado] Cabeceras fcntl.h y unistd.h añadidas a wrapper_log.c")
 '
 fi
 
