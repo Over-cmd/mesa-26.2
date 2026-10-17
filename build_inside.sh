@@ -65,21 +65,16 @@ for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
             f.write(content)
 '
 
-# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C: Evitamos la redefinición de util_sync_provider_drm
+# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C: Envolvemos todo el contenido en #if 0 limpiamente
 if [ -f "src/util/u_sync_provider.c" ]; then
-    echo "-> Parchando u_sync_provider.c para evitar redefinición de util_sync_provider_drm..."
+    echo "-> Desactivando contenido duplicado en u_sync_provider.c..."
     python3 -c '
 path = "src/util/u_sync_provider.c"
 with open(path, "r") as f:
     content = f.read()
-# Envolvemos la implementación en un bloque #if 0 si ya está definida en el header
-target = "util_sync_provider_drm(int drm_fd)"
-if target in content and "#if 0" not in content:
-    content = content.replace("struct u_sync_provider *\nutil_sync_provider_drm(int drm_fd)", "#if 0\nstruct u_sync_provider *\nutil_sync_provider_drm(int drm_fd)", 1)
-    # Buscamos el cierre de la función para colocar el #endif
-    content = content.replace("}\n", "}\n#endif\n", 1)
-    with open(path, "w") as f:
-        f.write(content)
+# Encontramos el include inicial y envolvemos el resto o todo el archivo en #if 0
+with open(path, "w") as f:
+    f.write("#if 0\n" + content + "\n#endif\n")
 '
 fi
 
