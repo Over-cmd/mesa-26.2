@@ -15,23 +15,22 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (EGL y GBM deshabilitados para evitar dependencias DRI huérfanas)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
   -Db_lundef=true \
   -Dcpp_rtti=false \
-  -Dgbm=enabled \
-  -Dopengl=true \
+  -Dgbm=disabled \
+  -Dopengl=false \
   -Dllvm=disabled \
   -Dshared-llvm=disabled \
   -Dplatforms=x11 \
-  -Degl-native-platform=x11 \
   -Dgallium-drivers="" \
   -Ddraw-use-llvm=false \
   -Dxmlconfig=disabled \
   -Dvulkan-drivers=wrapper \
-  -Degl=enabled \
+  -Degl=disabled \
   -Dglx=disabled
 fi
 
@@ -84,7 +83,6 @@ if [ -f "src/loader/loader.c" ]; then
 path = "src/loader/loader.c"
 with open(path, "r") as f:
     content = f.read()
-# Añadimos sys/sysmacros.h y definición de seguridad para major/minor si faltan
 patch = """
 #include <sys/sysmacros.h>
 #ifndef major
