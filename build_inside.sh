@@ -76,7 +76,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN MESON (RESTAURANDO PANFROST Y GBM COMO EN LA V25)
+# 🟢 1. MOTOR DE CONFIGURACIÓN MESON LIMPIO (SIN OPCIONES OBSOLETAS)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -151,7 +151,7 @@ fi
 echo "-> Ejecutando compilación completa con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN ELÁSTICA DEL BINARIO DE PANFROST (COMO EN LA V25)
+# 🟢 2. EXTRACCIÓN ELÁSTICA DEL BINARIO DE PANFROST
 python3 -c '
 import os, shutil
 src = "'"${BUILD_DIR}"'/src/panfrost/vulkan/libvulkan_panfrost.so"
@@ -186,7 +186,6 @@ mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-# Copiar subproyectos auxiliares si existen
 python3 -c '
 import os, shutil
 build_dir = "'"${BUILD_DIR}"'"
@@ -197,7 +196,7 @@ for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
             shutil.copy2(os.path.join(root, file), os.path.join(rootfs_lib, file))
 ' 2>/dev/null || true
 
-# 🟢 5. MANIFIESTO ICD CON RUTA RELATIVA TAL COMO LO TIENES CONFIGURADO
+# 🟢 5. MANIFIESTO ICD CON RUTA RELATIVA
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
     "file_format_version": "1.0.0",
