@@ -7,13 +7,33 @@ BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
-# 🛡️ RESTAURAR BITSCAN.C POR SI QUEDÓ MODIFICADO
+# 🛡️ RESTAURAR BITSCAN.C POR SI QUEDÓ MODIFICADO DE INTENTOS PREVIOS
 git checkout src/util/bitscan.c 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
+
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Protegemos ffsll para que no choque con Bionic
+if [ -f "src/util/bitscan.c" ]; then
+    echo "-> Parchando src/util/bitscan.c para evitar redefinición de ffsll en Android..."
+    python3 -c '
+path = "src/util/bitscan.c"
+with open(path, "r") as f:
+    content = f.read()
+
+# Envolvemos la definición de ffsll con un check para que no colisione con Bionic
+target = "int\nffsll(long long int val)"
+if target in content and "#ifndef HAVE_FFSLL" not in content:
+    content = content.replace(target, "#ifndef __ANDROID__\nint\nffsll(long long int val)", 1)
+    # Buscamos el cierre de la función ffsll para poner el #endif
+    # Como ffsll suele retornar __builtin_ffsll, buscamos su bloque
+    content = content.replace("}\n\n#if", "}\n#endif\n\n#if", 1)
+    with open(path, "w") as f:
+        f.write(content)
+'
+fi
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
@@ -33,13 +53,6 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dvulkan-drivers=wrapper \
   -Degl=enabled \
   -Dglx=disabled
-fi
-
-# 🗡️ PARCHE CIRÚRGICO DE CONFIG.H: Forzamos que Mesa reconozca ffs y ffsll como nativos
-if [ -f "${BUILD_DIR}/config.h" ]; then
-    echo "-> Actualizando config.h para habilitar ffs/ffsll nativos de Bionic..."
-    sed -i 's/#define HAVE_FFS 0/#define HAVE_FFS 1/g' "${BUILD_DIR}/config.h"
-    sed -i 's/#define HAVE_FFSLL 0/#define HAVE_FFSLL 1/g' "${BUILD_DIR}/config.h"
 fi
 
 ninja -C "${BUILD_DIR}"
