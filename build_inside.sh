@@ -17,8 +17,8 @@ export LDFLAGS="$LDFLAGS -laaudio"
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py meson_options.txt 2>/dev/null || true
 
-# 🛠️ CREAR UN PUENTE DE HEADERS PARA CUTILS Y SYNC SI FALTAN
-mkdir -p workspace_headers/cutils workspace_headers/sync
+# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK SI FALTAN
+mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
 
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
     REAL_CUTILS=$(find "${NDK_SYSROOT}" -name "native_handle.h" | head -n 1)
@@ -72,6 +72,17 @@ inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
 #endif
 
 #endif /* ANDROID_SYNC_SYNC_H */
+EOF
+fi
+
+if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
+    cat << 'EOF' > workspace_headers/vndk/hardware_buffer.h
+#ifndef VNDK_HARDWARE_BUFFER_H
+#define VNDK_HARDWARE_BUFFER_H
+
+#include <android/hardware_buffer.h>
+
+#endif /* VNDK_HARDWARE_BUFFER_H */
 EOF
 fi
 
