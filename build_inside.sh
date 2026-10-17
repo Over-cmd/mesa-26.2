@@ -95,16 +95,17 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🟢 0. LIMPIEZA DE DIRECTORIO RESIDUAL DE ADRENOTOOLS Y BUILD
+# 🟢 0. LIMPIEZA TOTAL Y FORZOSA DE DIRECTORIOS DE BUILD
 if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/meson.build" ]; then
     echo "-> Limpiando directorio huérfano de libadrenotools para forzar su descarga limpia..."
     rm -rf "subprojects/libadrenotools"
 fi
 
 rm -rf "${BUILD_DIR}"
+LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
+rm -f "${LOCAL_CROSS_FILE}"
 
 # 🛡️ PARCHE DE CROSS-FILE: Generamos el cross_file.txt ANTES de invocar a meson setup
-LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
 python3 -c '
@@ -135,7 +136,7 @@ with open(cross_path, "w") as f:
     f.write(content)
 '
 
-# 🟢 1. CONFIGURACIÓN DE MESON
+# 🟢 1. CONFIGURACIÓN DE MESON DESDE CERO
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
