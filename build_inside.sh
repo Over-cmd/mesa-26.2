@@ -11,13 +11,13 @@ fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 # Exportaciones generales por compatibilidad y enlace de XCB/Audio
-export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include"
+export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/data/data/com.termux/files/usr/include/libdrm"
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
 
-# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC (STATIC INLINE) Y VNDK
+# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC, VNDK Y LIBDRM
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
 
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
@@ -105,7 +105,7 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ GENERACIÓN DE CROSS_FILE CON -D_GNU_SOURCE PARA SCHED_GETCPU
+# 🛡️ GENERACIÓN DE CROSS_FILE CON -D_GNU_SOURCE Y RUTAS DE LIBDRM DE TERMUX
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -121,8 +121,8 @@ cpu = 'armv8-a'
 endian = 'little'
 
 [properties]
-c_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
-cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
+c_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
+cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
 link_args = ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb']
 EOF
 
