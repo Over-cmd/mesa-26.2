@@ -15,14 +15,14 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (EGL y GBM deshabilitados para evitar dependencias DRI huérfanas)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (OpenGL habilitado, EGL/GBM desactivados)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
   -Db_lundef=true \
   -Dcpp_rtti=false \
   -Dgbm=disabled \
-  -Dopengl=false \
+  -Dopengl=true \
   -Dllvm=disabled \
   -Dshared-llvm=disabled \
   -Dplatforms=x11 \
@@ -99,16 +99,19 @@ if "#ifndef major" not in content:
 '
 fi
 
+echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
 # 🟢 2. EXTRACCIÓN DEL BINARIO DEL WRAPPER VULKAN
 python3 -c '
 import os, shutil
-src = "'"${BUILD_DIR}"'/src/vulkan/wrapper/libvulkan_wrapper.so"
-dst = "'"${BUILD_DIR}"'/libvulkan_wrapper.so.unstripped"
+build_dir = "'"${BUILD_DIR}"'"
+src = os.path.join(build_dir, "src/vulkan/wrapper/libvulkan_wrapper.so")
+dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
 if not os.path.exists(src):
-    for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
+    print("-> Buscando libvulkan_wrapper.so en la estructura de compilación...")
+    for r, d, fs in os.walk(build_dir):
         if "libvulkan_wrapper.so" in fs:
             src = os.path.join(r, "libvulkan_wrapper.so")
             break
@@ -118,7 +121,7 @@ if os.path.exists(src):
     shutil.copy2(src, dst)
     print(f"-> [Forja Real] ¡Binario del wrapper Vulkan de {size_mb:.2f} MB extraído con éxito!")
 else:
-    print("-> [❌ ERROR CRÍTICO] El compilador cruzado no logró forjar el driver wrapper.")
+    print(f"-> [❌ ERROR CRÍTICO] No se encontró libvulkan_wrapper.so en {build_dir}.")
     exit(1)
 '
 
