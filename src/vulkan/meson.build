@@ -101,3 +101,6 @@ endif
 if with_vulkan_anti_lag_layer
   subdir('anti-lag-layer')
 endif
+if with_wrapper_vk
+  subdir('wrapper')
+endif
