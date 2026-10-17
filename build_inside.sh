@@ -14,7 +14,7 @@ git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/uti
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON Y SUBPROYECTOS
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Rama Fusion nativa)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -28,7 +28,6 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dgallium-drivers="" \
   -Ddraw-use-llvm=false \
   -Dxmlconfig=disabled \
-  -Dvulkan-drivers=wrapper \
   -Degl=disabled \
   -Dglx=disabled
 
@@ -139,49 +138,4 @@ STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 if [ ! -f "$STRIP" ]; then
     STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
 fi
-$STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
-
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
-ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
-rm -rf "${ROOTFS_DIR}"
-mkdir -p "${ROOTFS_DIR}/usr/lib"
-mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
-
-cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
-
-# Copiamos las librerías del subproyecto (adrenotools / bypass)
-python3 -c '
-import os, shutil
-build_dir = "'"${BUILD_DIR}"'"
-rootfs_lib = "'"${ROOTFS_DIR}"'/usr/lib"
-
-for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
-    for file in files:
-        if file.endswith(".so"):
-            src_so = os.path.join(root, file)
-            dst_so = os.path.join(rootfs_lib, file)
-            shutil.copy2(src_so, dst_so)
-            print(f"-> [Subproyecto] Bypass/Librería integrada: {file}")
-'
-
-cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
-{
-    "file_format_version": "1.0.0",
-    "ICD": {
-        "library_path": "/usr/lib/libvulkan_wrapper.so",
-        "api_version": "1.3.255"
-    }
-}
-EOF
-
-# 🟢 5. EMPAQUETADO COMPRIMIDO TAR.ZST
-echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
-cd "${ROOTFS_DIR}"
-tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
-cd - > /dev/null
-
-cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
-
-echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON SUBPROYECTOS Y WRAPPER LISTO! "
-echo "=========================================================="
+$STRIP --strip
