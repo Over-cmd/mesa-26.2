@@ -10,14 +10,14 @@ if [ -z "$NDK_DIR" ]; then
 fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-# Exportaciones generales por compatibilidad y enlace de XCB/Audio/DRM
+# Exportaciones generales de AAudio y enlaces
 export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/data/data/com.termux/files/usr/include/libdrm"
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c 2>/dev/null || true
 
-# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC, VNDK Y LIBDRM
+# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
 
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
@@ -28,27 +28,8 @@ if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
         cat << 'EOF' > workspace_headers/cutils/native_handle.h
 #ifndef ANDROID_CUTILS_NATIVE_HANDLE_H
 #define ANDROID_CUTILS_NATIVE_HANDLE_H
-
-typedef struct native_handle
-{
-    int version;
-    int numFds;
-    int numInts;
-    int data[0];
-} native_handle_t;
-
-#ifdef __cplusplus
-extern "C" {
+typedef struct native_handle { int version; int numFds; int numInts; int data[0]; } native_handle_t;
 #endif
-
-inline int native_handle_close(const native_handle_t* h) { return 0; }
-inline int native_handle_delete(native_handle_t* h) { return 0; }
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* ANDROID_CUTILS_NATIVE_HANDLE_H */
 EOF
     fi
 fi
@@ -56,56 +37,25 @@ fi
 cat << 'EOF' > workspace_headers/sync/sync.h
 #ifndef ANDROID_SYNC_SYNC_H
 #define ANDROID_SYNC_SYNC_H
-
-#include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 static inline int sync_wait(int fd, int timeout) { return 0; }
 static inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
-
-#ifdef __cplusplus
-}
 #endif
-
-#endif /* ANDROID_SYNC_SYNC_H */
 EOF
 
 if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
     cat << 'EOF' > workspace_headers/vndk/hardware_buffer.h
 #ifndef VNDK_HARDWARE_BUFFER_H
 #define VNDK_HARDWARE_BUFFER_H
-
 #include <android/hardware_buffer.h>
 #include <cutils/native_handle.h>
-
-#ifdef __cplusplus
-extern "C" {
 #endif
-
-const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* hardwareBuffer);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* VNDK_HARDWARE_BUFFER_H */
 EOF
-fi
-
-# 🟢 0. LIMPIEZA DE DIRECTORIO RESIDUAL DE ADRENOTOOLS Y BUILD
-if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/meson.build" ]; then
-    echo "-> Limpiando directorio huérfano de libadrenotools para forzar su descarga limpia..."
-    rm -rf "subprojects/libadrenotools"
 fi
 
 rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ GENERACIÓN DE CROSS_FILE CON -D_GNU_SOURCE Y RUTAS DE LIBDRM DE TERMUX
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -126,162 +76,98 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
+# 🟢 1. MOTOR DE CONFIGURACIÓN MESON (RESTAURANDO PANFROST Y GBM COMO EN LA V25)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Db_sanitize=none \
 -Db_lundef=true \
 -Dcpp_rtti=false \
--Dgbm=disabled \
+-Dgbm=enabled \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
 -Dplatforms=x11 \
--Dgallium-drivers="" \
+-Degl-native-platform=x11 \
+-Dgallium-drivers=panfrost \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
--Dwrapper-vk=true \
--Degl=disabled \
+-Dvulkan-drivers=panfrost,wrapper \
+-Degl=enabled \
 -Dglx=disabled \
 -Dzlib=disabled \
 -Dzstd=disabled
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
+# 🗡️ APLICAR PARCHES CIRÚRGICOS DE MESA 26
 if [ -f "src/util/bitscan.c" ]; then
     python3 -c '
 path = "src/util/bitscan.c"
-with open(path, "r") as f:
-    text = f.read()
+with open(path, "r") as f: text = f.read()
 import re
 text = re.sub(r"#ifndef HAVE_FFS\s*int\s*ffs\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
 text = re.sub(r"int\s*ffs\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
-text = re.sub(r"#ifndef HAVE_FFSLL\s*int\s*ffsll\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
-text = re.sub(r"int\s*ffsll\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
-with open(path, "w") as f:
-    f.write(text)
+with open(path, "w") as f: f.write(text)
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO
 python3 -c '
 import glob
 for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
-    with open(path, "r") as f:
-        content = f.read()
+    with open(path, "r") as f: content = f.read()
     if "#error unexpected platform" in content:
         content = content.replace("#error unexpected platform", "// #error unexpected platform\n#ifndef DETECT_OS_LINUX\n#define DETECT_OS_LINUX 1\n#endif")
-        with open(path, "w") as f:
-            f.write(content)
+        with open(path, "w") as f: f.write(content)
 '
 
-# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C
 if [ -f "src/util/u_sync_provider.c" ]; then
     python3 -c '
 path = "src/util/u_sync_provider.c"
-with open(path, "r") as f:
-    content = f.read()
-with open(path, "w") as f:
-    f.write("#if 0\n" + content + "\n#endif\n")
+with open(path, "r") as f: content = f.read()
+with open(path, "w") as f: f.write("#if 0\n" + content + "\n#endif\n")
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN LOADER.C
 if [ -f "src/loader/loader.c" ]; then
     python3 -c '
 path = "src/loader/loader.c"
-with open(path, "r") as f:
-    content = f.read()
-patch = """
-#include <sys/sysmacros.h>
-#ifndef major
-#define major(x) (((x) >> 8) & 0xfff)
-#endif
-#ifndef minor
-#define minor(x) ((x) & 0xff)
-#endif
-"""
+with open(path, "r") as f: content = f.read()
+patch = "#include <sys/sysmacros.h>\n#ifndef major\n#define major(x) (((x) >> 8) & 0xfff)\n#endif\n#ifndef minor\n#define minor(x) ((x) & 0xff)\n#endif\n"
 if "#ifndef major" not in content:
-    content = patch + "\n" + content
-    with open(path, "w") as f:
-        f.write(content)
+    with open(path, "w") as f: f.write(patch + "\n" + content)
 '
 fi
 
-# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY
-if [ -f "src/vulkan/wrapper/vk_wrapper_features_gen.py" ]; then
-    python3 -c '
-path = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
-with open(path, "r") as f:
-    content = f.read()
-
-if "assert len(diagnostics) == 0" in content:
-    content = content.replace("assert len(diagnostics) == 0", "# assert len(diagnostics) == 0")
-    with open(path, "w") as f:
-        f.write(content)
-'
-fi
-
-# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_PHYSICAL_DEVICE.C
 if [ -f "src/vulkan/wrapper/wrapper_physical_device.c" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/wrapper_physical_device.c"
-with open(path, "r") as f:
-    content = f.read()
-
+with open(path, "r") as f: content = f.read()
 if "#define VK_QUEUE_PRESENT_BIT" not in content:
     content = "#define VK_QUEUE_PRESENT_BIT 0\n" + content
-
 content = content.replace("pdevice->wsi_device.engine_name = engine_name;", "/* pdevice->wsi_device.engine_name = engine_name; */")
-
-with open(path, "w") as f:
-    f.write(content)
-'
-fi
-
-# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_LOG.C
-if [ -f "src/vulkan/wrapper/wrapper_log.c" ]; then
-    python3 -c '
-path = "src/vulkan/wrapper/wrapper_log.c"
-with open(path, "r") as f:
-    content = f.read()
-
-if "#include <fcntl.h>" not in content:
-    content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
-    with open(path, "w") as f:
-        f.write(content)
+with open(path, "w") as f: f.write(content)
 '
 fi
 
 echo "-> Ejecutando compilación completa con Ninja..."
-ninja -C "${BUILD_DIR}" all
+ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN DEL WRAPPER
+# 🟢 2. EXTRACCIÓN ELÁSTICA DEL BINARIO DE PANFROST (COMO EN LA V25)
 python3 -c '
 import os, shutil
+src = "'"${BUILD_DIR}"'/src/panfrost/vulkan/libvulkan_panfrost.so"
+dst = "'"${BUILD_DIR}"'/libvulkan_wrapper.so.unstripped"
 
-build_dir = "'"${BUILD_DIR}"'"
-dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
-
-candidates = []
-for root, dirs, files in os.walk(build_dir):
-    for file in files:
-        if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
-            candidates.append(os.path.join(root, file))
-
-src = None
-for c in candidates:
-    if "wrapper" in c or "vulkan" in c:
-        src = c
-        break
-
-if not src and candidates:
-    src = candidates[0]
-
-if src and os.path.exists(src):
+if os.path.exists(src):
+    size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] Driver principal localizado en {src}")
+    print(f"-> [Forja Real] ¡Silicio de Mesa 26 de {size_mb:.2f} MB extraído con éxito!")
 else:
+    for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
+        if "libvulkan_panfrost.so" in fs:
+            shutil.copy2(os.path.join(r, "libvulkan_panfrost.so"), dst)
+            print("-> [Forja Real - Rescate] Binario localizado de forma elástica.")
+            exit(0)
+    print("-> [❌ ERROR CRÍTICO] El compilador cruzado no logró forjar el driver real.")
     exit(1)
 '
 
@@ -292,7 +178,7 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (CON RUTA RELATIVA EXACTA EN EL ICD)
+# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
@@ -300,21 +186,18 @@ mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
+# Copiar subproyectos auxiliares si existen
 python3 -c '
 import os, shutil
 build_dir = "'"${BUILD_DIR}"'"
 rootfs_lib = "'"${ROOTFS_DIR}"'/usr/lib"
-
 for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
     for file in files:
         if file.endswith(".so"):
-            src_so = os.path.join(root, file)
-            dst_so = os.path.join(rootfs_lib, file)
-            shutil.copy2(src_so, dst_so)
-            print(f"-> [Subproyecto] Librería integrada: {file}")
-'
+            shutil.copy2(os.path.join(root, file), os.path.join(rootfs_lib, file))
+' 2>/dev/null || true
 
-# 🟢 ICD CON RUTA RELATIVA TAL COMO LO REQUIERE TU ENTORNO
+# 🟢 5. MANIFIESTO ICD CON RUTA RELATIVA TAL COMO LO TIENES CONFIGURADO
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
     "file_format_version": "1.0.0",
@@ -325,7 +208,7 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 5. EMPAQUETADO COMPRIMIDO TAR.ZST
+# 🟢 6. EMPAQUETADO COMPRIMIDO TAR.ZST
 echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
 cd "${ROOTFS_DIR}"
 tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
@@ -334,5 +217,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA MESA 26 EXITOSA: ¡ICD RELATIVO Y SUBPROYECTOS LISTOS! "
+echo " 🟢 FORJA MESA 26 UNIFICADA: ¡PANFROST + WRAPPER LISTO! "
 echo "=========================================================="
