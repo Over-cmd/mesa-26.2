@@ -15,42 +15,6 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Desactivamos las implementaciones de ffs/ffsll mediante un bloque #if 0 seguro
-if [ -f "src/util/bitscan.c" ]; then
-    echo "-> Desactivando ffs/ffsll redundantes en src/util/bitscan.c para Android..."
-    python3 -c '
-path = "src/util/bitscan.c"
-with open(path, "r") as f:
-    content = f.read()
-
-# Encontramos dónde empiezan las definiciones de ffs o ffsll y las envolvemos en #if 0 ... #endif
-# Buscamos la sección que define ffs o ffsll para Mesa
-target_markers = ["int ffs(", "int ffsll("]
-for marker in target_markers:
-    pos = content.find(marker)
-    if pos != -1:
-        # Retrocedemos para capturar cualquier #if condicional previo de Mesa
-        if_pos = content.rfind("#if", 0, pos)
-        if if_pos != -1 and if_pos > pos - 100:
-            start_pos = if_pos
-        else:
-            start_pos = pos
-        
-        # Buscamos el cierre de la función o bloque correspondiente
-        # Como son funciones simples, buscamos un par de llaves de cierre o el siguiente bloque
-        end_pos = content.find("\n#endif", pos)
-        if end_pos != -1:
-            end_pos += len("\n#endif")
-            # Reemplazamos ese rango protegiéndolo con #if 0
-            block = content[start_pos:end_pos]
-            wrapped = f"#if 0 /* Desactivado para Bionic/Android */\n{block}\n#endif\n"
-            content = content.replace(block, wrapped, 1)
-
-with open(path, "w") as f:
-    f.write(content)
-'
-fi
-
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -69,6 +33,28 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dvulkan-drivers=wrapper \
   -Degl=enabled \
   -Dglx=disabled
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Eliminamos las funciones ffs y ffsll duplicadas de forma segura
+if [ -f "src/util/bitscan.c" ]; then
+    echo "-> Purgando ffs y ffsll redundantes en src/util/bitscan.c..."
+    python3 -c '
+path = "src/util/bitscan.c"
+with open(path, "r") as f:
+    text = f.read()
+
+# Eliminamos la función ffs si está presente
+import re
+text = re.sub(r"#ifndef HAVE_FFS\s*int\s*ffs\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
+text = re.sub(r"int\s*ffs\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
+
+# Eliminamos la función ffsll si está presente
+text = re.sub(r"#ifndef HAVE_FFSLL\s*int\s*ffsll\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
+text = re.sub(r"int\s*ffsll\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
+
+with open(path, "w") as f:
+    f.write(text)
+'
 fi
 
 ninja -C "${BUILD_DIR}"
