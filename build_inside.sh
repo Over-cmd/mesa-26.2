@@ -126,7 +126,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (CON X11 y WAYLAND WSI HABILITADOS)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (SOLO PLATAFORMA X11 PARA EVITAR ERRORES DE WAYLAND)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -137,7 +137,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
--Dplatforms=x11,wayland \
+-Dplatforms=x11 \
 -Dgallium-drivers="" \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
