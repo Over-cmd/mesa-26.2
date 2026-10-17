@@ -15,13 +15,13 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Vulkan wrapper estrictamente)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (GBM deshabilitado para evitar dependencias DRI huérfanas)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
   -Db_lundef=true \
   -Dcpp_rtti=false \
-  -Dgbm=enabled \
+  -Dgbm=disabled \
   -Dopengl=true \
   -Dllvm=disabled \
   -Dshared-llvm=disabled \
@@ -161,7 +161,7 @@ mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 # Copiamos el driver Vulkan
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-# Si existen binarios o scripts de bypass en libadrenotools local, los integramos al rootfs
+# Integrar librerías o submódulos de bypass si existen en libadrenotools local
 if [ -d "$ADRENOTOOLS_DIR" ]; then
     echo "-> Integrando componentes de libadrenotools y bypass..."
     find "$ADRENOTOOLS_DIR" -name "*.so" -exec cp {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
