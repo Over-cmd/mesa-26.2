@@ -87,7 +87,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN MESON
+# 🟢 CONFIGURACIÓN MESON (ACTIVANDO WRAPPER Y PLATAFORMAS NECESARIAS)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -98,7 +98,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
--Dplatforms=x11 \
+-Dplatforms=x11,android \
 -Degl-native-platform=x11 \
 -Dgallium-drivers="" \
 -Ddraw-use-llvm=false \
@@ -130,7 +130,7 @@ with open(path, "w") as f: f.write(content)
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_DEVICE_MEMORY.C (INCLUIR HARDWARE_BUFFER.H)
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_DEVICE_MEMORY.C
 if [ -f "src/vulkan/wrapper/wrapper_device_memory.c" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/wrapper_device_memory.c"
@@ -138,7 +138,17 @@ with open(path, "r") as f: content = f.read()
 if "#include <vndk/hardware_buffer.h>" not in content:
     content = "#include <vndk/hardware_buffer.h>\n" + content
     with open(path, "w") as f: f.write(content)
-    print("-> [Parche Aplicado] hardware_buffer.h incluido en wrapper_device_memory.c")
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_LOG.C
+if [ -f "src/vulkan/wrapper/wrapper_log.c" ]; then
+    python3 -c '
+path = "src/vulkan/wrapper/wrapper_log.c"
+with open(path, "r") as f: content = f.read()
+if "#include <fcntl.h>" not in content:
+    content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
+    with open(path, "w") as f: f.write(content)
 '
 fi
 
@@ -180,10 +190,10 @@ with open(path, "w") as f: f.write(content)
 '
 fi
 
-echo "-> Ejecutando compilación con Ninja..."
+echo "-> Ejecutando compilación completa con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 EXTRACCIÓN DEL BINARIO
+# 🟢 EXTRACCIÓN DEL BINARIO DEL WRAPPER
 python3 -c '
 import os, shutil
 
@@ -207,8 +217,9 @@ if not src and candidates:
 
 if src and os.path.exists(src):
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] Driver principal localizado en {src}")
+    print(f"-> [Forja Real] Driver wrapper localizado en {src}")
 else:
+    print("-> [❌ ERROR CRÍTICO] No se encontró el binario del wrapper.")
     exit(1)
 '
 
