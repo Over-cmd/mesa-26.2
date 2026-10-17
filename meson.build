@@ -329,6 +329,7 @@ endif
 dep_clock = null_dep
 dep_atomic = null_dep
 dep_m = cc.find_library('m', required : false)
+dep_android = cc.find_library('android', required : false)
 dep_valgrind = null_dep
 dep_unwind = null_dep
 dep_futex = null_dep
