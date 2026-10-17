@@ -15,7 +15,7 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON Y SUBPROYECTOS
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -32,6 +32,9 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dvulkan-drivers=wrapper \
   -Degl=disabled \
   -Dglx=disabled
+
+  # Descarga obligatoria del submódulo .wrap de adrenotools
+  meson subprojects download "${BUILD_DIR}" || true
 fi
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
@@ -95,10 +98,10 @@ if "#ifndef major" not in content:
 '
 fi
 
-echo "-> Ejecutando compilación completa con Ninja (incluyendo submódulos)..."
+echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN INTELIGENTE DEL WRAPPER Y LOS MÓDULOS DE BYPASS DE ADRENOTOOLS
+# 🟢 2. EXTRACCIÓN INTELIGENTE DEL WRAPPER
 python3 -c '
 import os, shutil
 
@@ -106,18 +109,12 @@ build_dir = "'"${BUILD_DIR}"'"
 dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
 candidates = []
-subproject_sos = []
-
 for root, dirs, files in os.walk(build_dir):
     for file in files:
         if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
-            full_path = os.path.join(root, file)
-            candidates.append(full_path)
-            if "subprojects" in root:
-                subproject_sos.append(full_path)
+            candidates.append(os.path.join(root, file))
 
 print("Librerías .so encontradas:", candidates)
-print("Librerías de subproyectos (adrenotools / bypass):", subproject_sos)
 
 src = None
 for c in candidates:
@@ -145,16 +142,15 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO PARA EL ROOTFS
+# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
 mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 
-# Copiamos el binario principal
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
 
-# Copiamos automáticamente todas las librerías secundarias/bypass generadas por el subproyecto adrenotools
+# Copiamos las librerías del subproyecto (adrenotools / bypass)
 python3 -c '
 import os, shutil
 build_dir = "'"${BUILD_DIR}"'"
@@ -188,5 +184,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON ADRENOTOOLS INTEGRADO Y LISTO! "
+echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON SUBPROYECTOS Y WRAPPER LISTO! "
 echo "=========================================================="
