@@ -10,10 +10,9 @@ export LDFLAGS="$LDFLAGS -laaudio"
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c 2>/dev/null || true
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
-sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON Y SUBPROYECTOS
 if [ ! -d "${BUILD_DIR}" ]; then
