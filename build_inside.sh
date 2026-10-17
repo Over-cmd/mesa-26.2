@@ -105,41 +105,45 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ PARCHE DE CROSS-FILE: Inyectamos explícitamente workspace_headers en c_args, cpp_args y link_args
-cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
+# 🛡️ GENERACIÓN TOTALMENTE AUTÓNOMA Y ROBUSTA DEL CROSS_FILE.TXT
+cat << EOF > "${LOCAL_CROSS_FILE}"
+[binaries]
+c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
+cpp = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang++'
+ar = '${NDK_SYSROOT}/../bin/llvm-ar'
+strip = '${NDK_SYSROOT}/../bin/llvm-strip'
+pkgconfig = 'pkg-config'
 
-python3 -c '
-cross_path = "'"${LOCAL_CROSS_FILE}"'"
-sysroot = "'"${NDK_SYSROOT}"'"
-inc_paths = [
-    f"{sysroot}/usr/include",
-    f"{sysroot}/usr/include/aarch64-linux-android",
-    "/workspace/workspace_headers",
-    "/data/data/com.termux/files/usr/include"
-]
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'armv8-a'
+endian = 'little'
 
-extra_args = [f"-I{p}" for p in inc_paths] + ["-DVK_USE_PLATFORM_ANDROID_KHR=1"]
-args_str = ", ".join([f"\x27{arg}\x27" for arg in extra_args])
-link_args_str = "\x27-L/data/data/com.termux/files/usr/lib\x27, \x27-lxcb\x27, \x27-lxcb-randr\x27, \x27-lxcb-xfixes\x27, \x27-lX11\x27, \x27-lX11-xcb\x27"
-
-with open(cross_path, "r") as f:
-    content = f.read()
-
-properties_block = f"""
 [properties]
-c_args = [{args_str}]
-cpp_args = [{args_str}]
-link_args = [{link_args_str}]
-"""
-
-if "[properties]" in content:
-    content = content.replace("[properties]", properties_block)
-else:
-    content += properties_block
-
-with open(cross_path, "w") as f:
-    f.write(content)
-'
+c_args = [
+  '-I/workspace/workspace_headers',
+  '-I${NDK_SYSROOT}/usr/include',
+  '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android',
+  '-I/data/data/com.termux/files/usr/include',
+  '-DVK_USE_PLATFORM_ANDROID_KHR=1'
+]
+cpp_args = [
+  '-I/workspace/workspace_headers',
+  '-I${NDK_SYSROOT}/usr/include',
+  '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android',
+  '-I/data/data/com.termux/files/usr/include',
+  '-DVK_USE_PLATFORM_ANDROID_KHR=1'
+]
+link_args = [
+  '-L/data/data/com.termux/files/usr/lib',
+  '-lxcb',
+  '-lxcb-randr',
+  '-lxcb-xfixes',
+  '-lX11',
+  '-lX11-xcb'
+]
+EOF
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 meson subprojects download || true
