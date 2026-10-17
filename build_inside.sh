@@ -248,20 +248,45 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN SRC/VULKAN/WRAPPER/MESON.BUILD (CORREGIR ARGUMENTOS DE VK_ICD_GEN.PY)
+# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN CON --ICD-LIB-PATH Y --ICD-FILENAME)
 if [ -f "src/vulkan/wrapper/meson.build" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/meson.build"
 with open(path, "r") as f:
     content = f.read()
 
+target_block = """wrapper_icd = custom_target(
+  '\''wrapper_icd'\'',
+  input: [vk_icd_gen, vk_api_xml],
+  output: '\''wrapper_icd.@0@.json'\''.format(host_machine.cpu()),
+  command: [
+    prog_python,
+    '\''@INPUT0@'\'',
+    '\''--api-version'\'', '\''1.3'\'',
+    '\''--xml'\'', '\''@INPUT1@'\'',
+    '\''--lib-path'\'', join_paths(get_option('\''prefix'\''), get_option('\''libdir'\''), '\''libvulkan_wrapper.so'\''),
+    '\''--out'\'', '\''@OUTPUT@'\'',
+  ],"""
+
+replacement_block = """wrapper_icd = custom_target(
+  '\''wrapper_icd'\'',
+  input: [vk_icd_gen, vk_api_xml],
+  output: '\''wrapper_icd.@0@.json'\''.format(host_machine.cpu()),
+  command: [
+    prog_python,
+    '\''@INPUT0@'\'',
+    '\''--api-version'\'', '\''1.3'\'',
+    '\''--xml'\'', '\''@INPUT1@'\'',
+    '\''--icd-lib-path'\'', join_paths(get_option('\''prefix'\''), get_option('\''libdir'\''), '\''libvulkan_wrapper.so'\''),
+    '\''--icd-filename'\'', '\''@OUTPUT@'\'',
+    '\''--out'\'', '\''@OUTPUT@'\'',
+  ],"""
+
 if "--lib-path" in content:
-    content = content.replace("--lib-path", "--icd-lib-path")
-    # Añadimos --icd-filename junto con el nombre base del archivo de salida
-    content = content.replace("@OUTPUT@.json", "@OUTPUT@.json --icd-filename @BASENAME@.json")
+    content = content.replace(target_block, replacement_block)
     with open(path, "w") as f:
         f.write(content)
-        print("-> [Parche Aplicado] Argumentos --icd-lib-path y --icd-filename corregidos en meson.build")
+        print("-> [Parche Aplicado] Argumentos del generador de ICD actualizados en meson.build")
 '
 fi
 
