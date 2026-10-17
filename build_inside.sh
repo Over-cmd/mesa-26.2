@@ -8,7 +8,7 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
@@ -72,9 +72,22 @@ if [ -f "src/util/u_sync_provider.c" ]; then
 path = "src/util/u_sync_provider.c"
 with open(path, "r") as f:
     content = f.read()
-# Encontramos el include inicial y envolvemos el resto o todo el archivo en #if 0
 with open(path, "w") as f:
     f.write("#if 0\n" + content + "\n#endif\n")
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN LOADER.C: Incluimos <sys/sysmacros.h> para major() y minor()
+if [ -f "src/loader/loader.c" ]; then
+    echo "-> Añadiendo <sys/sysmacros.h> en loader.c para soporte de major/minor..."
+    python3 -c '
+path = "src/loader/loader.c"
+with open(path, "r") as f:
+    content = f.read()
+if "#include <sys/sysmacros.h>" not in content:
+    content = "#include <sys/sysmacros.h>\n" + content
+    with open(path, "w") as f:
+        f.write(content)
 '
 fi
 
