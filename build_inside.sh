@@ -10,7 +10,7 @@ if [ -z "$NDK_DIR" ]; then
 fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-# Exportaciones generales por compatibilidad
+# Exportaciones generales por compatibilidad y enlace de XCB/Audio
 export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include"
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
@@ -105,7 +105,7 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ PARCHE DE CROSS-FILE: Inyectamos c_args, cpp_args y link_args explícitamente para el NDK y XCB
+# 🛡️ PARCHE DE CROSS-FILE: Inyectamos explícitamente workspace_headers en c_args, cpp_args y link_args
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
 python3 -c '
