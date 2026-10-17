@@ -1,47 +1,99 @@
-name: Bannerlator Mesa 26 Mali Wrapper CI (Rama Fusion)
+name: Bannerlator Mali Wrapper CI (Mesa 26)
 
 on:
   push:
     branches:
-      - fusion
+      - wrapper-26
   workflow_dispatch:
 
 jobs:
-  build-mesa26-fusion:
+  build-aarch64-wrapper:
     runs-on: ubuntu-latest
     env:
       BUILD_DIR: build
 
     steps:
-      - name: 📥 1. Checkout del código
+      - name: 📥 1. Checkout Code con Adrenotools Completo (Mesa 26)
         uses: actions/checkout@v4
         with:
-          ref: fusion
-          submodules: false
+          submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 🐳 2. Construir contenedor Docker y compilar
+      - name: ⚙️ 2. Instalar Herramientas de Compresión y patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd patchelf python3 bc
+
+      - name: 🛠️ 3. Aplicar Parches Quirúrgicos de Compatibilidad (Mesa 26)
+        run: |
+          echo "=========================================================="
+          echo " 🧬 APLICANDO PARCHES DE MESA 26 PARA CONTENEDOR           "
+          echo "=========================================================="
+          
+          # Parche de inodo temporal en wrapper_device.c
+          TARGET_C="src/vulkan/wrapper/wrapper_device.c"
+          if [ -f "$TARGET_C" ]; then
+              sed -i 's|/data/data/app.gamenative/files/imagefs/usr/tmp/|/tmp/|g' "$TARGET_C"
+              echo "-> Parche de inodo temporal aplicado en wrapper_device.c."
+          fi
+          
+          # Vaciado del runtime de android para evitar colisiones con libadrenotools
+          ANDROID_MESA_C="src/vulkan/runtime/vk_android.c"
+          if [ -f "$ANDROID_MESA_C" ]; then
+              echo "/* Vaciado por el Workflow para evitar redefiniciones con adrenotools */" > "$ANDROID_MESA_C"
+          fi
+          
+          # Cabeceras y shims de sincronización (compatibilidad estricta)
+          LIBSYNC_H="src/util/libsync.h"
+          if [ -f "$LIBSYNC_H" ]; then
+              echo -e "#ifndef MESA_LIBSYNC_H_WRAPPER\n#define MESA_LIBSYNC_H_WRAPPER\n#include <sync/sync.h>\nint sync_accumulate(const char *name, int *fd1, int fd2);\nvoid validate_fence_fd(int fd);\nint sync_valid_fd(int fd);\nint sync_wait(int fd, int timeout);\nint sync_merge(const char *name, int fd1, int fd2);\n#endif" > "$LIBSYNC_H"
+          fi
+
+      - name: ⚙️ 4. Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 5. Construir Contenedor Gráfico Local con Mesa 26
         run: |
           docker build -f Dockerfile.build -t local-wrapper-compiler:latest .
+
+      - name: 🛠️ 6. Ejecutar Compilador Local Unificado
+        run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" local-wrapper-compiler:latest ${{ env.BUILD_DIR }}
 
-      - name: 📦 3. Empaquetar artefacto
+      - name: 📦 7. Forjar Paquete Esencial con Rutas Absolutas (Mesa 26)
         run: |
           WRAPPER_SO="build/src/vulkan/wrapper/libvulkan_wrapper.so"
+          
           if [ -f "$WRAPPER_SO" ]; then
+            echo "-> [Host] ¡Éxito! Estructurando tu paquete de Mesa 26 de producción..."
             rm -rf final_pkg
             mkdir -p final_pkg/usr/lib final_pkg/usr/share/vulkan/icd.d
+            
             cp -fv "$WRAPPER_SO" final_pkg/usr/lib/libvulkan_wrapper.so
+            
+            # Copiar comodines de libadrenotools
+            cp -fv ./build/subprojects/libadrenotools/*.so ./build/subprojects/libadrenotools/src/hook/*.so final_pkg/usr/lib/ 2>/dev/null || true
+            chmod -R 755 final_pkg/usr/lib/
+            
             patchelf --set-soname libvulkan_wrapper.so final_pkg/usr/lib/libvulkan_wrapper.so || true
-            echo '{"ICD": {"api_version": "1.3.289", "library_path": "libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            find final_pkg/usr/lib/ -name "*.so" -exec patchelf --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
+            
+            # 🛠️ MANIFIESTO CON RUTA ABSOLUTA CRÍTICA PARA EVITAR CONGELAMIENTO
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "/usr/lib/libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json
+            echo '{"ICD": {"api_version": "1.3.289", "library_path": "/usr/lib/libvulkan_wrapper.so"}, "file_format_version": "1.0.0"}' > final_pkg/usr/share/vulkan/icd.d/wrapper_icd.arm.json
+            
+            sync && sleep 3
+            
             cd final_pkg && tar -I 'zstd -19 -T0' -cf ../wrapper.tzst usr/ && cd ..
+            echo "-> ¡Paquete Mesa 26 forjado y listo con éxito!"
           else
+            echo "-> [❌ ERROR GRAVE] El binario libvulkan_wrapper.so no se encuentra en build/."
             exit 1
           fi
 
-      - name: 🚀 4. Subir artefacto
+      - name: 🚀 8. Subir Artefacto Completo a GitHub
         uses: actions/upload-artifact@v4
         with:
-          name: Bannerlator-Mesa26-Mali-Wrapper
+          name: Bannerlator-Mali-Wrapper-Mesa26
           path: wrapper.tzst
           retention-days: 7
