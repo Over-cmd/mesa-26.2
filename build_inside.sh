@@ -8,13 +8,29 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c meson_options.txt 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Habilitando el wrapper explícitamente)
+# 🗡️ PARCHE CIRÚRGICO EN MESON_OPTIONS.TXT PARA ASEGURAR WRAPPER-VK
+if [ -f "meson_options.txt" ]; then
+    python3 -c '
+path = "meson_options.txt"
+with open(path, "r") as f:
+    content = f.read()
+if "wrapper-vk" not in content:
+    content += "\noption(\x27wrapper-vk\x27, type : \x27boolean\x27, value : true, description : \x27Enable Vulkan wrapper\x27)\n"
+    with open(path, "w") as f:
+        f.write(content)
+'
+fi
+
+# 🟢 0. ASEGURAR SUBMÓDULOS DE GIT Y ADRENOTOOLS
+git submodule update --init --recursive || true
+
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -32,7 +48,7 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Degl=disabled \
   -Dglx=disabled
 
-  # Descarga obligatoria del submódulo .wrap de adrenotools
+  # Descarga obligatoria de submóviles/wraps faltantes
   meson subprojects download "${BUILD_DIR}" || true
 fi
 
