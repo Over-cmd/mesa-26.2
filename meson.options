@@ -218,12 +218,19 @@ option(
                 'will be built'
 )
 
-# Opción formal para habilitar el wrapper de la rama Fusion
+# Opciones necesarias para la rama Fusion y el Wrapper
 option(
   'wrapper-vk',
   type : 'boolean',
   value : true,
   description : 'Enable Vulkan wrapper for Fusion'
+)
+
+option(
+  'vulkan-loader-rpath',
+  type : 'string',
+  value : '/usr/local/lib',
+  description : 'The path where the vulkan loader exists at runtime.'
 )
 
 option(
