@@ -15,7 +15,7 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (OpenGL habilitado, EGL/GBM desactivados)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -102,26 +102,42 @@ fi
 echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN DEL BINARIO DEL WRAPPER VULKAN
+# 🟢 2. EXTRACCIÓN INTELIGENTE DEL BINARIO VULKAN WRAPPER
 python3 -c '
-import os, shutil
+import os, shutil, glob
+
 build_dir = "'"${BUILD_DIR}"'"
-src = os.path.join(build_dir, "src/vulkan/wrapper/libvulkan_wrapper.so")
 dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
-if not os.path.exists(src):
-    print("-> Buscando libvulkan_wrapper.so en la estructura de compilación...")
-    for r, d, fs in os.walk(build_dir):
-        if "libvulkan_wrapper.so" in fs:
-            src = os.path.join(r, "libvulkan_wrapper.so")
+# Buscamos de manera flexible cualquier librería compartida construida para vulkan o wrapper
+candidates = []
+for root, dirs, files in os.walk(build_dir):
+    for file in files:
+        if "vulkan" in file and file.endswith(".so"):
+            candidates.path = os.path.join(root, file)
+            candidates.append(os.path.join(root, file))
+
+src = None
+for c in candidates:
+    # Preferimos la que tenga wrapper en el nombre o ruta
+    if "wrapper" in c or "vulkan_wrapper" in c:
+        src = c
+        break
+
+if not src and candidates:
+    # Si hay alguna de vulkan, cogemos la primera relevante que no sea un test
+    for c in candidates:
+        if "test" not in c:
+            src = c
             break
 
-if os.path.exists(src):
+if src and os.path.exists(src):
     size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Binario del wrapper Vulkan de {size_mb:.2f} MB extraído con éxito!")
+    print(f"-> [Forja Real] ¡Binario Vulkan encontrado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
 else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró libvulkan_wrapper.so en {build_dir}.")
+    print(f"-> [❌ ERROR CRÍTICO] No se encontró ningún binario .so de Vulkan válido en {build_dir}.")
+    print("Candidatos encontrados:", candidates)
     exit(1)
 '
 
