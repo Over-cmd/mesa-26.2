@@ -17,7 +17,7 @@ export LDFLAGS="$LDFLAGS -laaudio"
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
 
-# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK (CON DECLARACIÓN AHARDWAREBUFFER)
+# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC (STATIC INLINE) Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
 
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
@@ -53,8 +53,8 @@ EOF
     fi
 fi
 
-if [ ! -f "workspace_headers/sync/sync.h" ]; then
-    cat << 'EOF' > workspace_headers/sync/sync.h
+# 🛡️ SOLUCIÓN SÍMBOLOS DUPLICADOS: static inline para evitar choques en el linker
+cat << 'EOF' > workspace_headers/sync/sync.h
 #ifndef ANDROID_SYNC_SYNC_H
 #define ANDROID_SYNC_SYNC_H
 
@@ -64,8 +64,8 @@ if [ ! -f "workspace_headers/sync/sync.h" ]; then
 extern "C" {
 #endif
 
-inline int sync_wait(int fd, int timeout) { return 0; }
-inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
+static inline int sync_wait(int fd, int timeout) { return 0; }
+static inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
 
 #ifdef __cplusplus
 }
@@ -73,7 +73,6 @@ inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
 
 #endif /* ANDROID_SYNC_SYNC_H */
 EOF
-fi
 
 if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
     cat << 'EOF' > workspace_headers/vndk/hardware_buffer.h
