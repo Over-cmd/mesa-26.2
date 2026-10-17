@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/dat
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/wrapper_device_memory.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/wrapper_device_memory.c src/util/u_gralloc/meson.build 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -87,25 +87,27 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN MESON (ACTIVANDO WRAPPER Y PLATAFORMAS NECESARIAS)
+# 🟢 CONFIGURACIÓN MESON CON TODO LO QUE EL WRAPPER EXIGE
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Db_sanitize=none \
 -Db_lundef=true \
 -Dcpp_rtti=false \
--Dgbm=disabled \
+-Dgbm=enabled \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
 -Dplatforms=x11,android \
--Degl-native-platform=x11 \
--Dgallium-drivers="" \
+-Degl-native-platform=android \
+-Dgallium-drivers=panfrost \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
--Dvulkan-drivers=wrapper \
+-Dvulkan-drivers=panfrost,wrapper \
 -Degl=enabled \
 -Dglx=disabled \
+-Dandroid-stub=true \
+-Dplatform-sdk-version=30 \
 -Dzlib=disabled \
 -Dzstd=disabled
 
@@ -148,6 +150,18 @@ path = "src/vulkan/wrapper/wrapper_log.c"
 with open(path, "r") as f: content = f.read()
 if "#include <fcntl.h>" not in content:
     content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
+    with open(path, "w") as f: f.write(content)
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN U_GRALLOC/MESON.BUILD
+if [ -f "src/util/u_gralloc/meson.build" ]; then
+    python3 -c '
+path = "src/util/u_gralloc/meson.build"
+with open(path, "r") as f: content = f.read()
+if "dep_android_ui" not in content.split("\n")[0]:
+    header = "dep_android_ui = dependency(\x27\x27, required : false)\ndep_android_mapper4 = dependency(\x27\x27, required : false)\n"
+    content = header + content
     with open(path, "w") as f: f.write(content)
 '
 fi
