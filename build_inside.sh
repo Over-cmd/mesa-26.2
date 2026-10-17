@@ -8,7 +8,7 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
@@ -52,7 +52,7 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada de forma limpia
+# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada
 echo "-> Neutralizando validaciones estrictas de plataforma en src/util/..."
 python3 -c '
 import glob
@@ -63,8 +63,25 @@ for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
         content = content.replace("#error unexpected platform", "// #error unexpected platform\n#ifndef DETECT_OS_LINUX\n#define DETECT_OS_LINUX 1\n#endif")
         with open(path, "w") as f:
             f.write(content)
-            print(f"-> Parcheado con éxito: {path}")
 '
+
+# 🗡️ PARCHE CIRÚRGICO EN U_SYNC_PROVIDER.C: Evitamos la redefinición de util_sync_provider_drm
+if [ -f "src/util/u_sync_provider.c" ]; then
+    echo "-> Parchando u_sync_provider.c para evitar redefinición de util_sync_provider_drm..."
+    python3 -c '
+path = "src/util/u_sync_provider.c"
+with open(path, "r") as f:
+    content = f.read()
+# Envolvemos la implementación en un bloque #if 0 si ya está definida en el header
+target = "util_sync_provider_drm(int drm_fd)"
+if target in content and "#if 0" not in content:
+    content = content.replace("struct u_sync_provider *\nutil_sync_provider_drm(int drm_fd)", "#if 0\nstruct u_sync_provider *\nutil_sync_provider_drm(int drm_fd)", 1)
+    # Buscamos el cierre de la función para colocar el #endif
+    content = content.replace("}\n", "}\n#endif\n", 1)
+    with open(path, "w") as f:
+        f.write(content)
+'
+fi
 
 ninja -C "${BUILD_DIR}"
 
