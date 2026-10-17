@@ -105,7 +105,7 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ GENERACIÓN DE CROSS_FILE CON -z,noexecstack y bloqueo explícito de rutas host x86_64
+# 🛡️ GENERACIÓN DE CROSS_FILE AISLANDO LAS LIBRERÍAS DEL HOST
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -123,10 +123,10 @@ endian = 'little'
 [properties]
 c_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
 cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
-link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
+link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (DESACTIVANDO ZLIB Y ZSTD)
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -143,7 +143,9 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dxmlconfig=disabled \
 -Dwrapper-vk=true \
 -Degl=disabled \
--Dglx=disabled
+-Dglx=disabled \
+-Dzlib=disabled \
+-Dzstd=disabled
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
 if [ -f "src/util/bitscan.c" ]; then
