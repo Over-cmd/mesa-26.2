@@ -3,8 +3,16 @@ set -e
 
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 
-# 🚀 INYECCIÓN MAESTRA DE ENLACE AAUDIO:
-export CFLAGS="$CFLAGS -laaudio"
+# 🚀 RUTAS Y CONFIGURACIÓN DEL NDK R30
+NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1)
+if [ -z "$NDK_DIR" ]; then
+    NDK_DIR="/home/builder/lib/android-ndk-r30"
+fi
+NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+# Inyección de headers y flags de Android para evitar errores con cutils/native_handle.h
+export CFLAGS="$CFLAGS -laaudio -I${NDK_SYSROOT}/usr/include -I${NDK_SYSROOT}/usr/include/aarch64-linux-android"
+export CPPFLAGS="$CPPFLAGS -I${NDK_SYSROOT}/usr/include -I${NDK_SYSROOT}/usr/include/aarch64-linux-android"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
@@ -145,7 +153,6 @@ else:
 '
 
 # 🟢 3. LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
-NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1)
 STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 if [ ! -f "$STRIP" ]; then
     STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
