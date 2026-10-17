@@ -8,7 +8,7 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
@@ -52,20 +52,19 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN OS_MISC.C: Forzamos compatibilidad con entorno Linux/Android en os_misc
-if [ -f "src/util/os_misc.c" ]; then
-    echo "-> Adaptando os_misc.c para evitar errores de plataforma inesperada..."
-    python3 -c '
-path = "src/util/os_misc.c"
-with open(path, "r") as f:
-    content = f.read()
-# Reemplazamos el error fatidico de plataforma por un comportamiento genérico de Linux
-content = content.replace("#error unexpected platform in os_misc.c", "#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1", 1)
-content = content.replace("#error unexpected platform in os_sysinfo.c", "#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1", 1)
-with open(path, "w") as f:
-    f.write(content)
+# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada
+echo "-> Neutralizando validaciones estrictas de plataforma en src/util/..."
+python3 -c '
+import glob
+for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
+    with open(path, "r") as f:
+        content = f.read()
+    if "#error unexpected platform" in content:
+        content = content.replace("#error unexpected platform", "// #error unexpected platform\n#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1")
+        with open(path, "w") as f:
+            f.write(content)
+            print(f"-> Parcheado con éxito: {path}")
 '
-fi
 
 ninja -C "${BUILD_DIR}"
 
