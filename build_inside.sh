@@ -10,9 +10,9 @@ if [ -z "$NDK_DIR" ]; then
 fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-# Exportaciones generales por compatibilidad
-export CFLAGS="$CFLAGS -laaudio"
-export LDFLAGS="$LDFLAGS -laaudio"
+# Exportaciones generales por compatibilidad y enlace de XCB/Audio
+export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include"
+export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
@@ -53,7 +53,6 @@ EOF
     fi
 fi
 
-# 🛡️ SOLUCIÓN SÍMBOLOS DUPLICADOS: static inline para evitar choques en el linker
 cat << 'EOF' > workspace_headers/sync/sync.h
 #ifndef ANDROID_SYNC_SYNC_H
 #define ANDROID_SYNC_SYNC_H
@@ -96,7 +95,7 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt con headers e include de plataforma Android
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt con headers, LDFLAGS y plataforma Android
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
@@ -106,7 +105,8 @@ sysroot = "'"${NDK_SYSROOT}"'"
 inc_paths = [
     f"{sysroot}/usr/include",
     f"{sysroot}/usr/include/aarch64-linux-android",
-    "/workspace/workspace_headers"
+    "/workspace/workspace_headers",
+    "/data/data/com.termux/files/usr/include"
 ]
 
 extra_args = [f"-I{p}" for p in inc_paths] + ["-DVK_USE_PLATFORM_ANDROID_KHR=1"]
@@ -119,9 +119,9 @@ if "c_args =" in content:
     content = content.replace("c_args =", f"c_args = [{args_str}] +")
 else:
     if "[properties]" in content:
-        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]")
+        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\nlink_args = ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb']")
     else:
-        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n"
+        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\nlink_args = ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb']\n"
 
 with open(cross_path, "w") as f:
     f.write(content)
