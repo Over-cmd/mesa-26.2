@@ -14,24 +14,17 @@ git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/uti
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
-# 🗡️ PARCHE CIRÚRGICO EN MESON_OPTIONS.TXT PARA ASEGURAR WRAPPER-VK
-if [ -f "meson_options.txt" ]; then
-    python3 -c '
-path = "meson_options.txt"
-with open(path, "r") as f:
-    content = f.read()
-if "wrapper-vk" not in content:
-    content += "\noption(\x27wrapper-vk\x27, type : \x27boolean\x27, value : true, description : \x27Enable Vulkan wrapper\x27)\n"
-    with open(path, "w") as f:
-        f.write(content)
-'
+# 🟢 0. LIMPIEZA DE DIRECTORIO RESIDUAL DE ADRENOTOOLS PARA EL WRAP (.wrap)
+if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/meson.build" ]; then
+    echo "-> Limpiando directorio huérfano de libadrenotools para forzar su descarga limpia..."
+    rm -rf "subprojects/libadrenotools"
 fi
-
-# 🟢 0. ASEGURAR SUBMÓDULOS DE GIT Y ADRENOTOOLS
-git submodule update --init --recursive || true
 
 # 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 if [ ! -d "${BUILD_DIR}" ]; then
+  # Forzar la descarga del subproyecto basado en el archivo .wrap
+  meson subprojects download || true
+
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
   -Db_lundef=true \
@@ -47,9 +40,6 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dwrapper-vk=true \
   -Degl=disabled \
   -Dglx=disabled
-
-  # Descarga obligatoria de submóviles/wraps faltantes
-  meson subprojects download "${BUILD_DIR}" || true
 fi
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
