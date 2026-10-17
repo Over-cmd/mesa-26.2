@@ -126,7 +126,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (SOLO PLATAFORMA X11 PARA EVITAR ERRORES DE WAYLAND)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -208,7 +208,7 @@ if "#ifndef major" not in content:
 '
 fi
 
-# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY (EVITAR CONFLICTOS DE EXTENSIONES)
+# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY
 if [ -f "src/vulkan/wrapper/vk_wrapper_features_gen.py" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
@@ -219,7 +219,6 @@ if "assert len(diagnostics) == 0" in content:
     content = content.replace("assert len(diagnostics) == 0", "# assert len(diagnostics) == 0")
     with open(path, "w") as f:
         f.write(content)
-        print("-> [Parche Aplicado] Aserción de duplicados desactivada con éxito en vk_wrapper_features_gen.py")
 '
 fi
 
@@ -240,7 +239,7 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_LOG.C (INCLUIR FCNTL.H Y UNISTD.H PARA OPEN Y O_RDONLY)
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_LOG.C
 if [ -f "src/vulkan/wrapper/wrapper_log.c" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/wrapper_log.c"
@@ -251,56 +250,13 @@ if "#include <fcntl.h>" not in content:
     content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
     with open(path, "w") as f:
         f.write(content)
-        print("-> [Parche Aplicado] Cabeceras fcntl.h y unistd.h añadidas a wrapper_log.c")
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN CON --ICD-LIB-PATH Y --ICD-FILENAME)
-if [ -f "src/vulkan/wrapper/meson.build" ]; then
-    python3 -c '
-path = "src/vulkan/wrapper/meson.build"
-with open(path, "r") as f:
-    content = f.read()
-
-target_block = """wrapper_icd = custom_target(
-  '\''wrapper_icd'\'',
-  input: [vk_icd_gen, vk_api_xml],
-  output: '\''wrapper_icd.@0@.json'\''.format(host_machine.cpu()),
-  command: [
-    prog_python,
-    '\''@INPUT0@'\'',
-    '\''--api-version'\'', '\''1.3'\'',
-    '\''--xml'\'', '\''@INPUT1@'\'',
-    '\''--lib-path'\'', join_paths(get_option('\''prefix'\''), get_option('\''libdir'\''), '\''libvulkan_wrapper.so'\''),
-    '\''--out'\'', '\''@OUTPUT@'\'',
-  ],"""
-
-replacement_block = """wrapper_icd = custom_target(
-  '\''wrapper_icd'\'',
-  input: [vk_icd_gen, vk_api_xml],
-  output: '\''wrapper_icd.@0@.json'\''.format(host_machine.cpu()),
-  command: [
-    prog_python,
-    '\''@INPUT0@'\'',
-    '\''--api-version'\'', '\''1.3'\'',
-    '\''--xml'\'', '\''@INPUT1@'\'',
-    '\''--icd-lib-path'\'', join_paths(get_option('\''prefix'\''), get_option('\''libdir'\''), '\''libvulkan_wrapper.so'\''),
-    '\''--icd-filename'\'', '\''@OUTPUT@'\'',
-    '\''--out'\'', '\''@OUTPUT@'\'',
-  ],"""
-
-if "--lib-path" in content:
-    content = content.replace(target_block, replacement_block)
-    with open(path, "w") as f:
-        f.write(content)
-        print("-> [Parche Aplicado] Argumentos del generador de ICD actualizados en meson.build")
-'
-fi
-
-echo "-> Ejecutando compilación completa de todos los objetivos con Ninja..."
+echo "-> Ejecutando compilación completa con Ninja..."
 ninja -C "${BUILD_DIR}" all
 
-# 🟢 2. EXTRACCIÓN INTELIGENTE DEL WRAPPER + DIAGNÓSTICO DE LOGS
+# 🟢 2. EXTRACCIÓN DEL WRAPPER
 python3 -c '
 import os, shutil
 
@@ -313,8 +269,6 @@ for root, dirs, files in os.walk(build_dir):
         if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
             candidates.append(os.path.join(root, file))
 
-print("Librerías .so encontradas:", candidates)
-
 src = None
 for c in candidates:
     if "wrapper" in c or "vulkan" in c:
@@ -325,16 +279,9 @@ if not src and candidates:
     src = candidates[0]
 
 if src and os.path.exists(src):
-    size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Driver principal localizado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
+    print(f"-> [Forja Real] Driver principal localizado en {src}")
 else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró el binario principal en {build_dir}.")
-    log_path = os.path.join(build_dir, "meson-logs", "meson-log.txt")
-    if os.path.exists(log_path):
-        print("--- CONTENIDO RECIENTE DE MESON-LOG.TXT ---")
-        with open(log_path, "r") as log_f:
-            print(log_f.read()[-3000:])
     exit(1)
 '
 
@@ -345,7 +292,7 @@ if [ ! -f "$STRIP" ]; then
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
+# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO (CON RUTA RELATIVA EXACTA EN EL ICD)
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
@@ -364,14 +311,15 @@ for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
             src_so = os.path.join(root, file)
             dst_so = os.path.join(rootfs_lib, file)
             shutil.copy2(src_so, dst_so)
-            print(f"-> [Subproyecto] Bypass/Librería integrada: {file}")
+            print(f"-> [Subproyecto] Librería integrada: {file}")
 '
 
+# 🟢 ICD CON RUTA RELATIVA TAL COMO LO REQUIERE TU ENTORNO
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
     "file_format_version": "1.0.0",
     "ICD": {
-        "library_path": "/usr/lib/libvulkan_wrapper.so",
+        "library_path": "libvulkan_wrapper.so",
         "api_version": "1.3.255"
     }
 }
@@ -386,5 +334,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON SUBPROYECTOS Y WRAPPER LISTO! "
+echo " 🟢 FORJA MESA 26 EXITOSA: ¡ICD RELATIVO Y SUBPROYECTOS LISTOS! "
 echo "=========================================================="
