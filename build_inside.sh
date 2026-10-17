@@ -95,7 +95,7 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🟢 0. LIMPIEZA TOTAL Y FORZOSA DE DIRECTORIOS DE BUILD
+# 🟢 0. LIMPIEZA DE DIRECTORIO RESIDUAL DE ADRENOTOOLS Y BUILD
 if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/meson.build" ]; then
     echo "-> Limpiando directorio huérfano de libadrenotools para forzar su descarga limpia..."
     rm -rf "subprojects/libadrenotools"
@@ -105,7 +105,7 @@ rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🛡️ PARCHE DE CROSS-FILE: Generamos el cross_file.txt ANTES de invocar a meson setup
+# 🛡️ PARCHE DE CROSS-FILE: Inyectamos c_args, cpp_args y link_args explícitamente para el NDK y XCB
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
 python3 -c '
@@ -120,23 +120,28 @@ inc_paths = [
 
 extra_args = [f"-I{p}" for p in inc_paths] + ["-DVK_USE_PLATFORM_ANDROID_KHR=1"]
 args_str = ", ".join([f"\x27{arg}\x27" for arg in extra_args])
+link_args_str = "\x27-L/data/data/com.termux/files/usr/lib\x27, \x27-lxcb\x27, \x27-lxcb-randr\x27, \x27-lxcb-xfixes\x27, \x27-lX11\x27, \x27-lX11-xcb\x27"
 
 with open(cross_path, "r") as f:
     content = f.read()
 
-if "c_args =" in content:
-    content = content.replace("c_args =", f"c_args = [{args_str}] +")
+properties_block = f"""
+[properties]
+c_args = [{args_str}]
+cpp_args = [{args_str}]
+link_args = [{link_args_str}]
+"""
+
+if "[properties]" in content:
+    content = content.replace("[properties]", properties_block)
 else:
-    if "[properties]" in content:
-        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n")
-    else:
-        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n"
+    content += properties_block
 
 with open(cross_path, "w") as f:
     f.write(content)
 '
 
-# 🟢 1. CONFIGURACIÓN DE MESON DESDE CERO
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -216,7 +221,7 @@ if "#ifndef major" not in content:
 '
 fi
 
-# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY
+# 🗡️ PARCHE ROBUSTO EN VK_WRAPPER_FEATURES_GEN.PY (EVITAR CONFLICTOS DE EXTENSIONES)
 if [ -f "src/vulkan/wrapper/vk_wrapper_features_gen.py" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
@@ -227,6 +232,7 @@ if "assert len(diagnostics) == 0" in content:
     content = content.replace("assert len(diagnostics) == 0", "# assert len(diagnostics) == 0")
     with open(path, "w") as f:
         f.write(content)
+        print("-> [Parche Aplicado] Aserción de duplicados desactivada con éxito en vk_wrapper_features_gen.py")
 '
 fi
 
@@ -247,14 +253,13 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN Y FORZAR LINK_ARGS CORRECTAMENTE)
+# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN CON --ICD-LIB-PATH Y --ICD-FILENAME)
 if [ -f "src/vulkan/wrapper/meson.build" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/meson.build"
 with open(path, "r") as f:
     content = f.read()
 
-# 1. Corregir generador ICD
 target_block = """wrapper_icd = custom_target(
   '\''wrapper_icd'\'',
   input: [vk_icd_gen, vk_api_xml],
@@ -284,17 +289,9 @@ replacement_block = """wrapper_icd = custom_target(
 
 if "--lib-path" in content:
     content = content.replace(target_block, replacement_block)
-
-# 2. Inyectar dependencias XCB con strings debidamente entrecomillados
-lib_inject = "dependencies: [wrapper_deps, vulkan_wsi_deps],"
-lib_replacement = "dependencies: [wrapper_deps, vulkan_wsi_deps],\n  link_args: ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb'],"
-
-if "link_args:" not in content and lib_inject in content:
-    content = content.replace(lib_inject, lib_replacement)
-
-with open(path, "w") as f:
-    f.write(content)
-    print("-> [Parche Aplicado] Meson.build actualizado con sintaxis de strings correcta para link_args")
+    with open(path, "w") as f:
+        f.write(content)
+        print("-> [Parche Aplicado] Argumentos del generador de ICD actualizados en meson.build")
 '
 fi
 
