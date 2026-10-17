@@ -10,17 +10,42 @@ if [ -z "$NDK_DIR" ]; then
 fi
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-# Inyección de headers y flags de Android para evitar errores con cutils/native_handle.h
-export CFLAGS="$CFLAGS -laaudio -I${NDK_SYSROOT}/usr/include -I${NDK_SYSROOT}/usr/include/aarch64-linux-android"
-export CPPFLAGS="$CPPFLAGS -I${NDK_SYSROOT}/usr/include -I${NDK_SYSROOT}/usr/include/aarch64-linux-android"
+# Exportaciones generales por compatibilidad
+export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c meson_options.txt 2>/dev/null || true
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt del sistema para incluir los headers del NDK
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
+
+python3 -c '
+cross_path = "'"${LOCAL_CROSS_FILE}"'"
+sysroot = "'"${NDK_SYSROOT}"'"
+inc_paths = [
+    f"{sysroot}/usr/include",
+    f"{sysroot}/usr/include/aarch64-linux-android"
+]
+
+with open(cross_path, "r") as f:
+    content = f.read()
+
+# Inyectar c_args y cpp_args en el cross_file si existen o añadirlos en [properties]
+args_str = ", ".join([f"\x27-I{p}\x27" for p in inc_paths])
+
+if "c_args =" in content:
+    content = content.replace("c_args =", f"c_args = [{args_str}] +")
+else:
+    if "[properties]" in content:
+        content = content.replace("[properties]", f"[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]")
+    else:
+        content += f"\n[properties]\nc_args = [{args_str}]\ncpp_args = [{args_str}]\n"
+
+with open(cross_path, "w") as f:
+    f.write(content)
+'
 
 # 🟢 0. LIMPIEZA DE DIRECTORIO RESIDUAL DE ADRENOTOOLS PARA EL WRAP (.wrap)
 if [ -d "subprojects/libadrenotools" ] && [ ! -f "subprojects/libadrenotools/meson.build" ]; then
