@@ -255,13 +255,13 @@ path = "src/vulkan/wrapper/meson.build"
 with open(path, "r") as f:
     content = f.read()
 
-# Reemplazamos el uso antiguo de --lib-path por los argumentos obligatorios modernos --icd-lib-path y --icd-filename
 if "--lib-path" in content:
     content = content.replace("--lib-path", "--icd-lib-path")
-    content = content.replace("@OUTPUT@.json", "@OUTPUT@.json --icd-filename @OUTPUT@.json")
+    # Añadimos --icd-filename junto con el nombre base del archivo de salida
+    content = content.replace("@OUTPUT@.json", "@OUTPUT@.json --icd-filename @BASENAME@.json")
     with open(path, "w") as f:
         f.write(content)
-        print("-> [Parche Aplicado] Argumentos de vk_icd_gen.py corregidos en meson.build")
+        print("-> [Parche Aplicado] Argumentos --icd-lib-path y --icd-filename corregidos en meson.build")
 '
 fi
 
@@ -292,67 +292,4 @@ for c in candidates:
 if not src and candidates:
     src = candidates[0]
 
-if src and os.path.exists(src):
-    size_mb = os.path.getsize(src) / (1024 * 1024)
-    shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Driver principal localizado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
-else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró el binario principal en {build_dir}.")
-    log_path = os.path.join(build_dir, "meson-logs", "meson-log.txt")
-    if os.path.exists(log_path):
-        print("--- CONTENIDO RECIENTE DE MESON-LOG.TXT ---")
-        with open(log_path, "r") as log_f:
-            print(log_f.read()[-3000:])
-    exit(1)
-'
-
-# 🟢 3. LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
-STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-if [ ! -f "$STRIP" ]; then
-    STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
-fi
-$STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
-
-# 🟢 4. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO
-ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
-rm -rf "${ROOTFS_DIR}"
-mkdir -p "${ROOTFS_DIR}/usr/lib"
-mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
-
-cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
-
-python3 -c '
-import os, shutil
-build_dir = "'"${BUILD_DIR}"'"
-rootfs_lib = "'"${ROOTFS_DIR}"'/usr/lib"
-
-for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
-    for file in files:
-        if file.endswith(".so"):
-            src_so = os.path.join(root, file)
-            dst_so = os.path.join(rootfs_lib, file)
-            shutil.copy2(src_so, dst_so)
-            print(f"-> [Subproyecto] Bypass/Librería integrada: {file}")
-'
-
-cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
-{
-    "file_format_version": "1.0.0",
-    "ICD": {
-        "library_path": "/usr/lib/libvulkan_wrapper.so",
-        "api_version": "1.3.255"
-    }
-}
-EOF
-
-# 🟢 5. EMPAQUETADO COMPRIMIDO TAR.ZST
-echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
-cd "${ROOTFS_DIR}"
-tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
-cd - > /dev/null
-
-cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
-
-echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON SUBPROYECTOS Y WRAPPER LISTO! "
-echo "=========================================================="
+if src and os.path.exists(
