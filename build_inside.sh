@@ -246,7 +246,7 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN Y FORZAR LIBRARIES DE XCB EN EL LINKER)
+# 🗡️ PARCHE CIRÚRGICO EN MESON.BUILD (CORREGIR VK_ICD_GEN Y FORZAR LINK_ARGS CORRECTAMENTE)
 if [ -f "src/vulkan/wrapper/meson.build" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/meson.build"
@@ -284,7 +284,7 @@ replacement_block = """wrapper_icd = custom_target(
 if "--lib-path" in content:
     content = content.replace(target_block, replacement_block)
 
-# 2. Inyectar dependencias XCB directamente en shared_library para evitar undefined symbols
+# 2. Inyectar dependencias XCB con strings debidamente entrecomillados
 lib_inject = "dependencies: [wrapper_deps, vulkan_wsi_deps],"
 lib_replacement = "dependencies: [wrapper_deps, vulkan_wsi_deps],\n  link_args: ['-L/data/data/com.termux/files/usr/lib', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb'],"
 
@@ -293,7 +293,7 @@ if "link_args:" not in content and lib_inject in content:
 
 with open(path, "w") as f:
     f.write(content)
-    print("-> [Parche Aplicado] Meson.build actualizado con éxito para ICD y XCB link_args")
+    print("-> [Parche Aplicado] Meson.build actualizado con sintaxis de strings correcta para link_args")
 '
 fi
 
