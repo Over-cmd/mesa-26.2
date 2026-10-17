@@ -87,14 +87,14 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN MESON CON TODO LO QUE EL WRAPPER EXIGE
+# 🟢 CONFIGURACIÓN MESON CON ANDROID Y LIBBACKTRACE DESACTIVADO
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Db_sanitize=none \
 -Db_lundef=true \
 -Dcpp_rtti=false \
--Dgbm=enabled \
+-Dgbm=disabled \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
@@ -108,6 +108,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dglx=disabled \
 -Dandroid-stub=true \
 -Dplatform-sdk-version=30 \
+-Dandroid-libbacktrace=disabled \
 -Dzlib=disabled \
 -Dzstd=disabled
 
@@ -150,18 +151,6 @@ path = "src/vulkan/wrapper/wrapper_log.c"
 with open(path, "r") as f: content = f.read()
 if "#include <fcntl.h>" not in content:
     content = "#include <fcntl.h>\n#include <unistd.h>\n" + content
-    with open(path, "w") as f: f.write(content)
-'
-fi
-
-# 🗡️ PARCHE CIRÚRGICO EN U_GRALLOC/MESON.BUILD
-if [ -f "src/util/u_gralloc/meson.build" ]; then
-    python3 -c '
-path = "src/util/u_gralloc/meson.build"
-with open(path, "r") as f: content = f.read()
-if "dep_android_ui" not in content.split("\n")[0]:
-    header = "dep_android_ui = dependency(\x27\x27, required : false)\ndep_android_mapper4 = dependency(\x27\x27, required : false)\n"
-    content = header + content
     with open(path, "w") as f: f.write(content)
 '
 fi
