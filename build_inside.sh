@@ -96,8 +96,8 @@ if "#ifndef major" not in content:
 '
 fi
 
-echo "-> Ejecutando compilación con Ninja..."
-ninja -C "${BUILD_DIR}"
+echo "-> Ejecutando compilación completa de todos los objetivos con Ninja..."
+ninja -C "${BUILD_DIR}" all
 
 # 🟢 2. EXTRACCIÓN INTELIGENTE DEL WRAPPER + DIAGNÓSTICO DE LOGS
 python3 -c '
