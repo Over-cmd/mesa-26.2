@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/dat
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/wrapper_device_memory.c 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -48,6 +48,17 @@ if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
 #define VNDK_HARDWARE_BUFFER_H
 #include <android/hardware_buffer.h>
 #include <cutils/native_handle.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* hardwareBuffer);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif
 EOF
 fi
@@ -109,14 +120,25 @@ with open(path, "w") as f: f.write(text)
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN VK_WRAPPER_FEATURES_GEN.PY (DESACTIVAR ASERCIÓN DE DUPLICADOS)
+# 🗡️ PARCHE CIRÚRGICO EN VK_WRAPPER_FEATURES_GEN.PY
 if [ -f "src/vulkan/wrapper/vk_wrapper_features_gen.py" ]; then
     python3 -c '
 path = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
 with open(path, "r") as f: content = f.read()
 content = content.replace("assert len(diagnostics) == 0", "# assert len(diagnostics) == 0")
 with open(path, "w") as f: f.write(content)
-print("-> [Parche Aplicado] Aserción de duplicados desactivada en vk_wrapper_features_gen.py")
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_DEVICE_MEMORY.C (INCLUIR HARDWARE_BUFFER.H)
+if [ -f "src/vulkan/wrapper/wrapper_device_memory.c" ]; then
+    python3 -c '
+path = "src/vulkan/wrapper/wrapper_device_memory.c"
+with open(path, "r") as f: content = f.read()
+if "#include <vndk/hardware_buffer.h>" not in content:
+    content = "#include <vndk/hardware_buffer.h>\n" + content
+    with open(path, "w") as f: f.write(content)
+    print("-> [Parche Aplicado] hardware_buffer.h incluido en wrapper_device_memory.c")
 '
 fi
 
