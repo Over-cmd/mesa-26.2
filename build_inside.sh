@@ -52,7 +52,7 @@ with open(path, "w") as f:
 '
 fi
 
-# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada
+# 🗡️ PARCHE CIRÚRGICO GLOBAL PARA OS_MISC Y OS_SYSINFO: Neutralizamos errores de plataforma inesperada de forma limpia
 echo "-> Neutralizando validaciones estrictas de plataforma en src/util/..."
 python3 -c '
 import glob
@@ -60,7 +60,7 @@ for path in glob.glob("src/util/os_*.c") + glob.glob("src/util/os_*.h"):
     with open(path, "r") as f:
         content = f.read()
     if "#error unexpected platform" in content:
-        content = content.replace("#error unexpected platform", "// #error unexpected platform\n#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1")
+        content = content.replace("#error unexpected platform", "// #error unexpected platform\n#ifndef DETECT_OS_LINUX\n#define DETECT_OS_LINUX 1\n#endif")
         with open(path, "w") as f:
             f.write(content)
             print(f"-> Parcheado con éxito: {path}")
