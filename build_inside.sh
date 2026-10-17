@@ -14,7 +14,7 @@ git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/uti
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Habilitando explícitamente el wrapper)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Habilitando el wrapper explícitamente)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -28,7 +28,7 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dgallium-drivers="" \
   -Ddraw-use-llvm=false \
   -Dxmlconfig=disabled \
-  -Dvulkan-drivers=wrapper \
+  -Dwrapper-vk=true \
   -Degl=disabled \
   -Dglx=disabled
 
