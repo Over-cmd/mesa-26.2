@@ -7,8 +7,8 @@ BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
-# 🛡️ RESTAURAR BITSCAN.C POR SI QUEDÓ MODIFICADO DE INTENTOS PREVIOS
-git checkout src/util/bitscan.c 2>/dev/null || true
+# 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
+git checkout src/util/bitscan.c src/util/os_misc.c 2>/dev/null || true
 
 # 🛡️ PARCHE DE CROSS-FILE: Copiamos el cross_file.txt del sistema y eliminamos -U__ANDROID__
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
@@ -35,25 +35,35 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dglx=disabled
 fi
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Eliminamos las funciones ffs y ffsll duplicadas de forma segura
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Purgamos ffs/ffsll redundantes
 if [ -f "src/util/bitscan.c" ]; then
     echo "-> Purgando ffs y ffsll redundantes en src/util/bitscan.c..."
     python3 -c '
 path = "src/util/bitscan.c"
 with open(path, "r") as f:
     text = f.read()
-
-# Eliminamos la función ffs si está presente
 import re
 text = re.sub(r"#ifndef HAVE_FFS\s*int\s*ffs\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
 text = re.sub(r"int\s*ffs\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
-
-# Eliminamos la función ffsll si está presente
 text = re.sub(r"#ifndef HAVE_FFSLL\s*int\s*ffsll\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
 text = re.sub(r"int\s*ffsll\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
-
 with open(path, "w") as f:
     f.write(text)
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN OS_MISC.C: Forzamos compatibilidad con entorno Linux/Android en os_misc
+if [ -f "src/util/os_misc.c" ]; then
+    echo "-> Adaptando os_misc.c para evitar errores de plataforma inesperada..."
+    python3 -c '
+path = "src/util/os_misc.c"
+with open(path, "r") as f:
+    content = f.read()
+# Reemplazamos el error fatidico de plataforma por un comportamiento genérico de Linux
+content = content.replace("#error unexpected platform in os_misc.c", "#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1", 1)
+content = content.replace("#error unexpected platform in os_sysinfo.c", "#define DETECT_OS_UNIX 1\n#define DETECT_OS_LINUX 1", 1)
+with open(path, "w") as f:
+    f.write(content)
 '
 fi
 
