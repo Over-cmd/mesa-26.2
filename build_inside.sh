@@ -15,29 +15,39 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Eliminamos ffs/ffsll si estamos en Android
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Desactivamos las implementaciones de ffs/ffsll mediante un bloque #if 0 seguro
 if [ -f "src/util/bitscan.c" ]; then
-    echo "-> Limpiando ffs y ffsll en src/util/bitscan.c para evitar colisión con Bionic..."
+    echo "-> Desactivando ffs/ffsll redundantes en src/util/bitscan.c para Android..."
     python3 -c '
 path = "src/util/bitscan.c"
 with open(path, "r") as f:
-    lines = f.readlines()
+    content = f.read()
 
-new_lines = []
-skip = False
-for line in lines:
-    # Si detectamos el inicio de ffs o ffsll provisto por Mesa, lo omitimos
-    if "int ffs(int i)" in line or "int ffsll(long long int val)" in line or "ffsll(long long int val)" in line:
-        skip = True
-        continue
-    if skip:
-        if "}" in line:
-            skip = False
-        continue
-    new_lines.append(line)
+# Encontramos dónde empiezan las definiciones de ffs o ffsll y las envolvemos en #if 0 ... #endif
+# Buscamos la sección que define ffs o ffsll para Mesa
+target_markers = ["int ffs(", "int ffsll("]
+for marker in target_markers:
+    pos = content.find(marker)
+    if pos != -1:
+        # Retrocedemos para capturar cualquier #if condicional previo de Mesa
+        if_pos = content.rfind("#if", 0, pos)
+        if if_pos != -1 and if_pos > pos - 100:
+            start_pos = if_pos
+        else:
+            start_pos = pos
+        
+        # Buscamos el cierre de la función o bloque correspondiente
+        # Como son funciones simples, buscamos un par de llaves de cierre o el siguiente bloque
+        end_pos = content.find("\n#endif", pos)
+        if end_pos != -1:
+            end_pos += len("\n#endif")
+            # Reemplazamos ese rango protegiéndolo con #if 0
+            block = content[start_pos:end_pos]
+            wrapped = f"#if 0 /* Desactivado para Bionic/Android */\n{block}\n#endif\n"
+            content = content.replace(block, wrapped, 1)
 
 with open(path, "w") as f:
-    f.writelines(new_lines)
+    f.write(content)
 '
 fi
 
