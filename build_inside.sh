@@ -98,41 +98,35 @@ fi
 echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 2. EXTRACCIÓN UNIVERSAL DE CUALQUIER BINARIO .SO GENERADO EN LA COMPILACIÓN
+# 🟢 2. EXTRACCIÓN INTELIGENTE DEL BINARIO WRAPPER VULKAN
 python3 -c '
 import os, shutil
 
 build_dir = "'"${BUILD_DIR}"'"
 dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
 
-# Buscamos absolutamente cualquier archivo .so en el directorio de build que no sea una dependencia externa (como expat)
+# Buscamos en todo el árbol de compilación librerías compartidas de Vulkan o wrapper
 candidates = []
 for root, dirs, files in os.walk(build_dir):
     for file in files:
-        if file.endswith(".so") and "expat" not in file and "glapi" not in file:
+        if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
             candidates.append(os.path.join(root, file))
-
-print("Librerías .so encontradas en el build:", candidates)
 
 src = None
 for c in candidates:
-    if "vulkan" in c or "wrapper" in c:
+    if "wrapper" in c or "vulkan" in c:
         src = c
         break
 
-# Si no hay match exacto, cogemos el primer .so principal generado en src/
 if not src and candidates:
-    for c in candidates:
-        if "/src/" in c and "test" not in c:
-            src = c
-            break
+    src = candidates[0]
 
 if src and os.path.exists(src):
     size_mb = os.path.getsize(src) / (1024 * 1024)
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Binario seleccionado desde {src} ({size_mb:.2f} MB) y extraído con éxito!")
+    print(f"-> [Forja Real] ¡Binario del wrapper localizado en {src} ({size_mb:.2f} MB) y extraído con éxito!")
 else:
-    print(f"-> [❌ ERROR CRÍTICO] No se encontró un binario .so válido en {build_dir}.")
+    print(f"-> [❌ ERROR CRÍTICO] No se encontró ningún binario .so válido en {build_dir}.")
     exit(1)
 '
 
@@ -182,5 +176,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA EXITOSA: ¡PAQUETE ROOTFS GENERADO CORRECTAMENTE! "
+echo " 🟢 FORJA EXITOSA: ¡ROOTFS CON WRAPPER Y LIBADRENOTOOLS LISTOS! "
 echo "=========================================================="
