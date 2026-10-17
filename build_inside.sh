@@ -17,8 +17,9 @@ export LDFLAGS="$LDFLAGS -laaudio"
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c meson_options.txt 2>/dev/null || true
 
-# 🛠️ CREAR UN PUENTE DE HEADERS PARA CUTILS/NATIVE_HANDLE.H SI FALTA
-mkdir -p workspace_headers/cutils
+# 🛠️ CREAR UN PUENTE DE HEADERS PARA CUTILS Y SYNC SI FALTAN
+mkdir -p workspace_headers/cutils workspace_headers/sync
+
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
     REAL_CUTILS=$(find "${NDK_SYSROOT}" -name "native_handle.h" | head -n 1)
     if [ -n "$REAL_CUTILS" ]; then
@@ -52,7 +53,29 @@ EOF
     fi
 fi
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt para incluir los headers del NDK y nuestro puente
+if [ ! -f "workspace_headers/sync/sync.h" ]; then
+    cat << 'EOF' > workspace_headers/sync/sync.h
+#ifndef ANDROID_SYNC_SYNC_H
+#define ANDROID_SYNC_SYNC_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+inline int sync_wait(int fd, int timeout) { return 0; }
+inline int sync_merge(const char *name, int fd1, int fd2) { return -1; }
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ANDROID_SYNC_SYNC_H */
+EOF
+fi
+
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt para incluir los headers del NDK y nuestros puentes
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
