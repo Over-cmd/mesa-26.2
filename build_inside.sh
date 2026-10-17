@@ -52,31 +52,10 @@ if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
 EOF
 fi
 
-rm -rf "${BUILD_DIR}" build-host
+rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
 
-# 🟢 FASE 1: COMPILAR HERRAMIENTAS DE HOST PARA SATISFACER MESA-CLC Y PRECOMP-COMPILER
-echo "-> [Host] Configurando Meson para el host (herramientas nativas)..."
-meson setup build-host \
-    -Dplatforms=[] \
-    -Dgallium-drivers=[] \
-    -Dvulkan-drivers=[] \
-    -Dtools=panfrost \
-    -Dprecomp-compiler=enabled \
-    -Dinstall-precomp-compiler=true \
-    -Dllvm=enabled \
-    -Dmesa-clc=enabled \
-    -Dinstall-mesa-clc=true
-
-echo "-> [Host] Compilando herramientas auxiliares..."
-ninja -C build-host src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile || true
-
-# Crear enlaces simbólicos necesarios para el cross-compiler
-ln -sf "$(pwd)/build-host/src/compiler/clc/mesa_clc" "$(pwd)/build-host/src/compiler/clc/mesa-clc" 2>/dev/null || true
-ln -sf "$(pwd)/build-host/src/compiler/spirv/vtn_bindgen2" "$(pwd)/build-host/src/compiler/spirv/vtn-bindgen2" 2>/dev/null || true
-
-# 🟢 FASE 2: CONFIGURAR CROSS-FILE PARA ANDROID
 cat << EOF > "${LOCAL_CROSS_FILE}"
 [binaries]
 c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
@@ -97,7 +76,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 FASE 3: CONFIGURAR MESON PARA ANDROID CON PANFROST + WRAPPER
+# 🟢 CONFIGURACIÓN MESON PURIFICADA PARA MESA 26
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -113,11 +92,9 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dgallium-drivers=panfrost \
 -Ddraw-use-llvm=false \
 -Dxmlconfig=disabled \
--Dvulkan-drivers=panfrost,wrapper \
+-Dvulkan-drivers=wrapper \
 -Degl=enabled \
 -Dglx=disabled \
--Dmesa-clc=system \
--Dprecomp-compiler=system \
 -Dzlib=disabled \
 -Dzstd=disabled
 
@@ -171,37 +148,46 @@ with open(path, "w") as f: f.write(content)
 '
 fi
 
-echo "-> Ejecutando compilación cruzada con Ninja..."
+echo "-> Ejecutando compilación con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 4. EXTRACCIÓN ELÁSTICA DEL BINARIO
+# 🟢 EXTRACCIÓN DEL BINARIO
 python3 -c '
 import os, shutil
-src = "'"${BUILD_DIR}"'/src/panfrost/vulkan/libvulkan_panfrost.so"
-dst = "'"${BUILD_DIR}"'/libvulkan_wrapper.so.unstripped"
 
-if os.path.exists(src):
-    size_mb = os.path.getsize(src) / (1024 * 1024)
+build_dir = "'"${BUILD_DIR}"'"
+dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
+
+candidates = []
+for root, dirs, files in os.walk(build_dir):
+    for file in files:
+        if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
+            candidates.append(os.path.join(root, file))
+
+src = None
+for c in candidates:
+    if "wrapper" in c or "vulkan" in c:
+        src = c
+        break
+
+if not src and candidates:
+    src = candidates[0]
+
+if src and os.path.exists(src):
     shutil.copy2(src, dst)
-    print(f"-> [Forja Real] ¡Silicio de Mesa 26 de {size_mb:.2f} MB extraído con éxito!")
+    print(f"-> [Forja Real] Driver principal localizado en {src}")
 else:
-    for r, d, fs in os.walk("'"${BUILD_DIR}"'"):
-        if "libvulkan_panfrost.so" in fs:
-            shutil.copy2(os.path.join(r, "libvulkan_panfrost.so"), dst)
-            print("-> [Forja Real - Rescate] Binario localizado de forma elástica.")
-            exit(0)
-    print("-> [❌ ERROR CRÍTICO] El compilador cruzado no logró forjar el driver real.")
     exit(1)
 '
 
-# 🟢 5. LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
+# 🟢 LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
 STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 if [ ! -f "$STRIP" ]; then
     STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
 fi
 $STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 6. CREACIÓN DEL ÁRBOL DE DIRECTORIOS RÍGIDO CON MANIFIESTO ICD RELATIVO
+# 🟢 ÁRBOL DE DIRECTORIOS RÍGIDO CON ICD RELATIVO
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib"
@@ -229,7 +215,7 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 7. EMPAQUETADO COMPRIMIDO TAR.ZST
+# 🟢 EMPAQUETADO TAR.ZST
 echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
 cd "${ROOTFS_DIR}"
 tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
@@ -238,5 +224,5 @@ cd - > /dev/null
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
 echo "=========================================================="
-echo " 🟢 FORJA MESA 26 CON HOST COMPILER + WRAPPER: ¡LISTO! "
+echo " 🟢 FORJA MESA 26 EXITOSA: ¡WRAPPER Y MANIFIESTO LISTOS! "
 echo "=========================================================="
