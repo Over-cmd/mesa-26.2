@@ -239,7 +239,7 @@ with open(path, "r") as f:
     content = f.read()
 
 if "#define VK_QUEUE_PRESENT_BIT" not in content:
-    content = "#define VK_QUEUE_PRESENT_BIT VK_QUEUE_PRESENT_BIT_KHR\n" + content
+    content = "#define VK_QUEUE_PRESENT_BIT 0\n" + content
 
 content = content.replace("pdevice->wsi_device.engine_name = engine_name;", "/* pdevice->wsi_device.engine_name = engine_name; */")
 
