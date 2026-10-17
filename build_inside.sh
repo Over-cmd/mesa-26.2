@@ -17,7 +17,7 @@ export LDFLAGS="$LDFLAGS -laaudio"
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
 git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py meson_options.txt 2>/dev/null || true
 
-# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK SI FALTAN
+# 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK (CON DECLARACIÓN AHARDWAREBUFFER)
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
 
 if [ ! -f "workspace_headers/cutils/native_handle.h" ]; then
@@ -81,12 +81,24 @@ if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
 #define VNDK_HARDWARE_BUFFER_H
 
 #include <android/hardware_buffer.h>
+#include <cutils/native_handle.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Declaración faltante en NDK r30 para AHARDWAREBUFFER_GETNATIVEHANDLE
+const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* hardwareBuffer);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* VNDK_HARDWARE_BUFFER_H */
 EOF
 fi
 
-# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt para incluir los headers del NDK y nuestros puentes
+# 🛡️ PARCHE DE CROSS-FILE: Copiamos y parcheamos el cross_file.txt con headers e include de plataforma Android
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
@@ -99,10 +111,11 @@ inc_paths = [
     "/workspace/workspace_headers"
 ]
 
+extra_args = [f"-I{p}" for p in inc_paths] + ["-DVK_USE_PLATFORM_ANDROID_KHR=1"]
+args_str = ", ".join([f"\x27{arg}\x27" for arg in extra_args])
+
 with open(cross_path, "r") as f:
     content = f.read()
-
-args_str = ", ".join([f"\x27-I{p}\x27" for p in inc_paths])
 
 if "c_args =" in content:
     content = content.replace("c_args =", f"c_args = [{args_str}] +")
