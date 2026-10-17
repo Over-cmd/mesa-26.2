@@ -14,7 +14,7 @@ git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/uti
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 
-# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Rama Fusion nativa)
+# 🟢 1. MOTOR DE CONFIGURACIÓN DE MESON (Plataforma Android nativa)
 if [ ! -d "${BUILD_DIR}" ]; then
   meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
   -Db_sanitize=none \
@@ -24,7 +24,7 @@ if [ ! -d "${BUILD_DIR}" ]; then
   -Dopengl=true \
   -Dllvm=disabled \
   -Dshared-llvm=disabled \
-  -Dplatforms=x11 \
+  -Dplatforms=android \
   -Dgallium-drivers="" \
   -Ddraw-use-llvm=false \
   -Dxmlconfig=disabled \
