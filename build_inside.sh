@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/dat
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c meson_options.txt 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -76,7 +76,7 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN MESON CON GBM DESACTIVADO PARA EVITAR EL ERROR DE LIBGBM-EXTERNAL
+# 🟢 CONFIGURACIÓN MESON
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
@@ -98,15 +98,20 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dzlib=disabled \
 -Dzstd=disabled
 
-# 🗡️ APLICAR PARCHES CIRÚRGICOS DE MESA 26
+# 🗡️ PARCHE CIRÚRGICO CORREGIDO PARA BITSCAN.C (EVITA REDEFINICIÓN DE FFSLL)
 if [ -f "src/util/bitscan.c" ]; then
     python3 -c '
 path = "src/util/bitscan.c"
-with open(path, "r") as f: text = f.read()
-import re
-text = re.sub(r"#ifndef HAVE_FFS\s*int\s*ffs\(.*?\)\s*\{.*?\}?\s*#endif", "", text, flags=re.DOTALL)
-text = re.sub(r"int\s*ffs\(.*?\)\s*\{.*?\}", "", text, flags=re.DOTALL)
-with open(path, "w") as f: f.write(text)
+with open(path, "r") as f:
+    text = f.read()
+
+# Forzamos la desactivación o exclusión de ffs y ffsll si ya existen en el NDK
+text = text.replace("ffsll(long long int val)", "__attribute__((unused)) ffsll_ndk_disabled(long long int val)")
+text = text.replace("ffs(int val)", "__attribute__((unused)) ffs_ndk_disabled(int val)")
+
+with open(path, "w") as f:
+    f.write(text)
+print("-> [Parche Aplicado] Conflicto de ffsll neutralizado en bitscan.c")
 '
 fi
 
