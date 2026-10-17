@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py meson_options.txt 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c meson_options.txt 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK (CON DECLARACIÓN AHARDWAREBUFFER)
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -87,7 +87,6 @@ if [ ! -f "workspace_headers/vndk/hardware_buffer.h" ]; then
 extern "C" {
 #endif
 
-// Declaración faltante en NDK r30 para AHARDWAREBUFFER_GETNATIVEHANDLE
 const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* hardwareBuffer);
 
 #ifdef __cplusplus
@@ -229,6 +228,23 @@ if "assert len(diagnostics) == 0" in content:
     with open(path, "w") as f:
         f.write(content)
         print("-> [Parche Aplicado] Aserción de duplicados desactivada con éxito en vk_wrapper_features_gen.py")
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN WRAPPER_PHYSICAL_DEVICE.C
+if [ -f "src/vulkan/wrapper/wrapper_physical_device.c" ]; then
+    python3 -c '
+path = "src/vulkan/wrapper/wrapper_physical_device.c"
+with open(path, "r") as f:
+    content = f.read()
+
+if "#define VK_QUEUE_PRESENT_BIT" not in content:
+    content = "#define VK_QUEUE_PRESENT_BIT VK_QUEUE_PRESENT_BIT_KHR\n" + content
+
+content = content.replace("pdevice->wsi_device.engine_name = engine_name;", "/* pdevice->wsi_device.engine_name = engine_name; */")
+
+with open(path, "w") as f:
+    f.write(content)
 '
 fi
 
