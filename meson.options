@@ -234,6 +234,20 @@ option(
 )
 
 option(
+  'build-radv-tests',
+  type : 'boolean',
+  value : false,
+  description : 'Build RADV tests.'
+)
+
+option(
+  'build-aco-tests',
+  type : 'boolean',
+  value : false,
+  description : 'Build ACO tests.'
+)
+
+option(
   'freedreno-kmds',
   type : 'array',
   value : ['msm'],
@@ -472,14 +486,6 @@ option(
   type : 'boolean',
   value : true,
   description : 'Build glcpp unit tests. These are flaky on CI.'
-)
-
-option(
-  'build-aco-tests',
-  type : 'boolean',
-  value : false,
-  description : 'Build ACO tests. These require RADV and glslang but not ' +
-                'an AMD GPU.'
 )
 
 option(
