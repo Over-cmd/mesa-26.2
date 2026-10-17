@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio"
 export LDFLAGS="$LDFLAGS -laaudio"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c meson_options.txt 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/meson.build meson_options.txt 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK (CON DECLARACIÓN AHARDWAREBUFFER)
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -245,6 +245,23 @@ content = content.replace("pdevice->wsi_device.engine_name = engine_name;", "/* 
 
 with open(path, "w") as f:
     f.write(content)
+'
+fi
+
+# 🗡️ PARCHE CIRÚRGICO EN SRC/VULKAN/WRAPPER/MESON.BUILD (CORREGIR ARGUMENTOS DE VK_ICD_GEN.PY)
+if [ -f "src/vulkan/wrapper/meson.build" ]; then
+    python3 -c '
+path = "src/vulkan/wrapper/meson.build"
+with open(path, "r") as f:
+    content = f.read()
+
+# Reemplazamos el uso antiguo de --lib-path por los argumentos obligatorios modernos --icd-lib-path y --icd-filename
+if "--lib-path" in content:
+    content = content.replace("--lib-path", "--icd-lib-path")
+    content = content.replace("@OUTPUT@.json", "@OUTPUT@.json --icd-filename @OUTPUT@.json")
+    with open(path, "w") as f:
+        f.write(content)
+        print("-> [Parche Aplicado] Argumentos de vk_icd_gen.py corregidos en meson.build")
 '
 fi
 
