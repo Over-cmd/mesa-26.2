@@ -15,23 +15,29 @@ LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 cp /root/build-config/cross_file.txt "${LOCAL_CROSS_FILE}"
 sed -i 's/-U__ANDROID__//g' "${LOCAL_CROSS_FILE}"
 
-# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Protegemos ffsll para que no choque con Bionic
+# 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C: Eliminamos ffs/ffsll si estamos en Android
 if [ -f "src/util/bitscan.c" ]; then
-    echo "-> Parchando src/util/bitscan.c para evitar redefinición de ffsll en Android..."
+    echo "-> Limpiando ffs y ffsll en src/util/bitscan.c para evitar colisión con Bionic..."
     python3 -c '
 path = "src/util/bitscan.c"
 with open(path, "r") as f:
-    content = f.read()
+    lines = f.readlines()
 
-# Envolvemos la definición de ffsll con un check para que no colisione con Bionic
-target = "int\nffsll(long long int val)"
-if target in content and "#ifndef HAVE_FFSLL" not in content:
-    content = content.replace(target, "#ifndef __ANDROID__\nint\nffsll(long long int val)", 1)
-    # Buscamos el cierre de la función ffsll para poner el #endif
-    # Como ffsll suele retornar __builtin_ffsll, buscamos su bloque
-    content = content.replace("}\n\n#if", "}\n#endif\n\n#if", 1)
-    with open(path, "w") as f:
-        f.write(content)
+new_lines = []
+skip = False
+for line in lines:
+    # Si detectamos el inicio de ffs o ffsll provisto por Mesa, lo omitimos
+    if "int ffs(int i)" in line or "int ffsll(long long int val)" in line or "ffsll(long long int val)" in line:
+        skip = True
+        continue
+    if skip:
+        if "}" in line:
+            skip = False
+        continue
+    new_lines.append(line)
+
+with open(path, "w") as f:
+    f.writelines(new_lines)
 '
 fi
 
