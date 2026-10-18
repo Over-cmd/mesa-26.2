@@ -55,6 +55,11 @@ if not prog_vtn_bindgen2.found()
   prog_vtn_bindgen2 = find_program('true', native : true)
 endif
 
+prog_panfrost_compile = find_program('panfrost_compile', required : false)
+if not prog_panfrost_compile.found()
+  prog_panfrost_compile = find_program('true', native : true)
+endif
+
 glslang_quiet = prog_glslang.found() ? ['-s'] : []
 glslang_depfile = []
 
