@@ -782,3 +782,11 @@ option(
     'none', 'dri2'
   ],
 )
+
+option(
+  'precomp-compiler',
+  type : 'combo',
+  value : 'auto',
+  choices : ['enabled', 'system', 'auto', 'disabled'],
+  description : 'Build drivers internal shader precompiler',
+)
