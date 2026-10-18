@@ -45,6 +45,7 @@ with_gallium_omx = false
 with_gallium_xvmc = false
 with_gallium_nine = false
 with_gallium_opencl = false
+with_gallium_rusticl = false
 with_gallium_drisw_kms = false
 with_gallium_mediafoundation = false
 with_gallium_kmsro = false
