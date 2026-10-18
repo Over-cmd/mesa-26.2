@@ -138,6 +138,7 @@ c_cpp_args = []
 c_args = []
 asan_c_args = []
 cpp_args = []
+gcc_lto_quirk = []
 
 c_msvc_compat_args = []
 cpp_msvc_compat_args = []
