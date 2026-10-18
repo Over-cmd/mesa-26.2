@@ -312,7 +312,7 @@ with_platform_macos = _platforms.contains('macos')
 
 with_android_stub = get_option('android-stub')
 
-# 🟢 REQUERIDO POR WRAPPER Y ANDROID STUB (DECLARACIÓN GLOBAL DE VARIABLES)
+# 🟢 VARIABLES GLOBALES CRÍTICAS PARA EL WRAPPER Y STUBS
 with_libbacktrace = false
 
 with_glvnd = false
@@ -337,6 +337,12 @@ dep_clock = null_dep
 dep_atomic = null_dep
 dep_m = cc.find_library('m', required : false)
 dep_android = cc.find_library('android', required : false)
+
+# 🟢 SOLUCIÓN PARA U_GRALLOC (DEP_ANDROID_UI)
+dep_android_ui = declare_dependency(
+  dependencies : dep_android,
+)
+
 dep_valgrind = null_dep
 dep_unwind = null_dep
 dep_futex = null_dep
