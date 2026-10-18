@@ -63,18 +63,6 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🗡️ PARCHE EN MESON_OPTIONS.TXT PARA REGISTRAR LA OPCIÓN COMO COMBO
-if [ -f "meson_options.txt" ]; then
-    python3 -c '
-path = "meson_options.txt"
-with open(path, "r") as f: content = f.read()
-if "android-libbacktrace" not in content:
-    content += "\noption(\x27android-libbacktrace\x27, type : \x27combo\x27, choices : [\x27enabled\x27, \x27disabled\x27, \x27auto\x27], value : \x27disabled\x27, description : \x27Enable android libbacktrace stub\x27)\n"
-    with open(path, "w") as f: f.write(content)
-    print("-> [Parche Aplicado] android-libbacktrace registrado como combo en meson_options.txt")
-'
-fi
-
 rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
@@ -120,9 +108,20 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dglx=disabled \
 -Dandroid-stub=true \
 -Dplatform-sdk-version=30 \
--Dandroid-libbacktrace=disabled \
 -Dzlib=disabled \
 -Dzstd=disabled
+
+# 🗡️ PARCHE CIRÚRGICO DIRECTO EN SRC/ANDROID_STUB/MESON.BUILD
+if [ -f "src/android_stub/meson.build" ]; then
+    python3 -c '
+path = "src/android_stub/meson.build"
+with open(path, "r") as f: content = f.read()
+if "with_libbacktrace =" not in content:
+    content = "with_libbacktrace = false\n" + content
+    with open(path, "w") as f: f.write(content)
+    print("-> [Parche Aplicado] with_libbacktrace inyectado en android_stub/meson.build")
+'
+fi
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
 if [ -f "src/util/bitscan.c" ]; then
