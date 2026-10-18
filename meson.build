@@ -259,6 +259,7 @@ with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
 with_gallium_rocket = gallium_drivers.contains('rocket')
 with_gallium_ethosu = gallium_drivers.contains('ethosu')
+with_any_llvmpipe = with_gallium_llvmpipe
 
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
