@@ -32,6 +32,7 @@ else
 endif
 
 vulkan_manifest_suffix = 'json'
+vulkan_icd_lib_path = join_paths(get_option('prefix'), get_option('libdir'))
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
