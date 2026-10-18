@@ -34,6 +34,38 @@ EOF
     fi
 fi
 
+# Crear headers adicionales de cutils requeridos por el wrapper
+cat << 'EOF' > workspace_headers/cutils/properties.h
+#ifndef ANDROID_CUTILS_PROPERTIES_H
+#define ANDROID_CUTILS_PROPERTIES_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+int property_get(const char *key, char *value, const char *default_value);
+#ifdef __cplusplus
+}
+#endif
+#endif
+EOF
+
+cat << 'EOF' > workspace_headers/cutils/trace.h
+#ifndef ANDROID_CUTILS_TRACE_H
+#define ANDROID_CUTILS_TRACE_H
+#include <stdint.h>
+#define ATRACE_TAG_NOT_READY 0
+#ifdef __cplusplus
+extern "C" {
+#endif
+void atrace_begin_body(const char *name);
+void atrace_end_body(void);
+void atrace_init(void);
+uint64_t atrace_get_enabled_tags(void);
+#ifdef __cplusplus
+}
+#endif
+#endif
+EOF
+
 cat << 'EOF' > workspace_headers/sync/sync.h
 #ifndef ANDROID_SYNC_SYNC_H
 #define ANDROID_SYNC_SYNC_H
@@ -61,6 +93,75 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 
 #endif
 EOF
+fi
+
+# 🛠️ ASEGURAR CUTILS_STUB.CPP EN ANDROID_STUB SI FALTA
+if [ -d "src/android_stub" ]; then
+    if [ ! -f "src/android_stub/cutils_stub.cpp" ]; then
+        cat << 'EOF' > src/android_stub/cutils_stub.cpp
+#include <cstdlib>
+#include <cstdint>
+#include <cutils/native_handle.h>
+#include <cutils/properties.h>
+#include <cutils/trace.h>
+
+extern "C" {
+
+native_handle_t* native_handle_create(int numFds, int numInts) {
+    if (numFds < 0 || numInts < 0) return nullptr;
+    size_t size = sizeof(native_handle_t) + sizeof(int) * (numFds + numInts);
+    native_handle_t* h = static_cast<native_handle_t*>(malloc(size));
+    if (h) {
+        h->version = sizeof(native_handle_t);
+        h->numFds = numFds;
+        h->numInts = numInts;
+    }
+    return h;
+}
+
+int native_handle_delete(native_handle_t* h) {
+    if (!h) return -1;
+    free(h);
+    return 0;
+}
+
+int property_get(const char *key, char *value, const char *default_value) {
+   if (default_value && value) {
+      int i = 0;
+      while (default_value[i] != '\0' && i < 919) {
+         value[i] = default_value[i];
+         i++;
+      }
+      value[i] = '\0';
+      return i;
+   }
+   return 0;
+}
+
+void atrace_begin_body(const char * /*name*/) {}
+void atrace_end_body() {}
+void atrace_init() {}
+uint64_t atrace_get_enabled_tags() { return 0; }
+
+}
+EOF
+        echo "-> [Stub Creado] src/android_stub/cutils_stub.cpp generado correctamente."
+    fi
+
+    # Parchear src/android_stub/meson.build para asegurar que cutils y with_libbacktrace estén presentes
+    python3 -c '
+path = "src/android_stub/meson.build"
+with open(path, "r") as f: content = f.read()
+
+if "with_libbacktrace" not in content:
+    content = "with_libbacktrace = false\n" + content
+
+if "\x27cutils\x27" not in content and "lib_names = [" in content:
+    content = content.replace("lib_names = [", "lib_names = [\x27cutils\x27, ")
+
+with open(path, "w") as f: f.write(content)
+print("-> [Parche Aplicado] cutils y with_libbacktrace integrados en android_stub/meson.build")
+'
 fi
 
 rm -rf "${BUILD_DIR}"
@@ -110,23 +211,6 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dplatform-sdk-version=30 \
 -Dzlib=disabled \
 -Dzstd=disabled
-
-# 🗡️ PARCHE EN SRC/ANDROID_STUB/MESON.BUILD (WITH_LIBBACKTRACE + CUTILS)
-if [ -f "src/android_stub/meson.build" ]; then
-    python3 -c '
-path = "src/android_stub/meson.build"
-with open(path, "r") as f: content = f.read()
-
-if "with_libbacktrace =" not in content:
-    content = "with_libbacktrace = false\n" + content
-
-if "\x27cutils\x27" not in content and "lib_names = [" in content:
-    content = content.replace("lib_names = [", "lib_names = [\x27cutils\x27, ")
-
-with open(path, "w") as f: f.write(content)
-print("-> [Parche Aplicado] with_libbacktrace y cutils integrados en android_stub/meson.build")
-'
-fi
 
 # 🗡️ PARCHE CIRÚRGICO EN BITSCAN.C
 if [ -f "src/util/bitscan.c" ]; then
