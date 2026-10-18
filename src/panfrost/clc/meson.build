@@ -5,7 +5,7 @@
 # Si estamos haciendo compilación cruzada para Android, omitimos esta herramienta 
 # interna de shaders de OpenCL ya que no se ejecuta en el dispositivo final.
 if meson.is_cross_build()
-  subdirdone()
+  subdir_done()
 endif
 
 if get_option('precomp-compiler') == 'system'
