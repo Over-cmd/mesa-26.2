@@ -280,4 +280,216 @@ if with_gallium_swrast
 endif
 
 with_gallium = gallium_drivers.length() != 0
-with_gallium_drm = system_has_kms_drm
+with_gallium_drm = system_has_kms_drm and [
+  with_gallium_asahi,
+  with_gallium_etnaviv,
+  with_gallium_freedreno,
+  with_gallium_lima,
+  with_gallium_panfrost,
+  with_gallium_v3d,
+  with_gallium_vc4,
+].contains(true)
+
+with_gallium_or_lvp = with_gallium or with_gallium_swrast
+
+_vulkan_drivers = get_option('vulkan-drivers')
+if _vulkan_drivers.contains('auto')
+  _vulkan_drivers = ['wrapper']
+elif _vulkan_drivers.contains('all')
+   _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'swrast',
+                      'freedreno', 'virtio', 'broadcom',
+                      'imagination', 'microsoft-experimental',
+                      'nouveau', 'asahi', 'gfxstream', 'kosmickrisp', 'panfrost', 'wrapper']
+endif
+
+with_intel_vk = _vulkan_drivers.contains('intel')
+with_intel_hasvk = _vulkan_drivers.contains('intel_hasvk')
+with_amd_vk = _vulkan_drivers.contains('amd')
+with_freedreno_vk = _vulkan_drivers.contains('freedreno')
+with_panfrost_vk = _vulkan_drivers.contains('panfrost')
+with_swrast_vk = _vulkan_drivers.contains('swrast')
+with_virtio_vk = _vulkan_drivers.contains('virtio')
+with_broadcom_vk = _vulkan_drivers.contains('broadcom')
+with_imagination_vk = _vulkan_drivers.contains('imagination')
+with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
+with_nouveau_vk = _vulkan_drivers.contains('nouveau')
+with_asahi_vk = _vulkan_drivers.contains('asahi')
+with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
+with_kosmickrisp_vk = false
+with_wrapper_vk = _vulkan_drivers.contains('wrapper')
+with_any_vk = _vulkan_drivers.length() != 0
+
+with_dri = true
+with_dri2 = true
+with_egl = get_option('egl').allowed()
+
+with_vulkan_beta = get_option('vulkan-beta')
+if with_vulkan_beta
+  pre_args += '-DVK_ENABLE_BETA_EXTENSIONS'
+endif
+
+_codecs = get_option('video-codecs')
+patent_codecs = ['vc1dec', 'h264dec', 'h264enc', 'h265dec', 'h265enc']
+free_codecs = ['av1dec', 'av1enc', 'vp9dec', 'mpeg12dec', 'jpegdec']
+all_codecs = patent_codecs + free_codecs
+
+if _codecs.contains('all')
+  _codecs = all_codecs
+elif _codecs.contains('all_free')
+  _codecs += free_codecs
+endif
+
+foreach c : all_codecs
+   pre_args += '-DVIDEO_CODEC_@0@=@1@'.format(c.to_upper(), _codecs.contains(c).to_int())
+endforeach
+
+_platforms = get_option('platforms')
+if _platforms.contains('auto')
+  _platforms = ['x11', 'android']
+endif
+
+with_platform_android = _platforms.contains('android')
+with_platform_x11 = _platforms.contains('x11')
+with_platform_wayland = _platforms.contains('wayland')
+with_platform_haiku = _platforms.contains('haiku')
+with_platform_windows = _platforms.contains('windows')
+with_platform_macos = _platforms.contains('macos')
+
+with_android_stub = get_option('android-stub')
+
+# 🟢 VARIABLES GLOBALES CRÍTICAS PARA EL WRAPPER Y STUBS
+with_libbacktrace = false
+
+with_glvnd = false
+with_shared_glapi = false
+with_gbm = false
+with_perfetto = false
+with_gpuvis = false
+with_sysprof = false
+use_xmlconfig = false
+with_dri_platform = ''
+
+prog_python = import('python').find_installation('python3')
+devenv = environment()
+
+# 🟢 CONFIGURACIÓN AUTOMÁTICA DE PYTHONPATH PARA SCRIPTS INTERNOS DE NIR Y MESA
+python_path = meson.project_source_root() + '/src/compiler:' + meson.project_source_root() + '/src/compiler/nir'
+meson.add_devenv({'PYTHONPATH': python_path})
+
+if host_machine.system() == 'windows'
+  dep_thread = null_dep
+else
+  dep_thread = dependency('threads')
+endif
+
+dep_clock = null_dep
+dep_atomic = null_dep
+dep_m = cc.find_library('m', required : false)
+dep_android = cc.find_library('android', required : false)
+
+# 🟢 SOLUCIÓN PARA U_GRALLOC (DEP_ANDROID_UI)
+dep_android_ui = declare_dependency(
+  dependencies : dep_android,
+)
+
+dep_valgrind = null_dep
+dep_unwind = null_dep
+dep_futex = null_dep
+dep_regex = null_dep
+dep_llvm = null_dep
+dep_lmsensors = null_dep
+dep_ws2_32 = null_dep
+
+dep_xcb = null_dep
+dep_xcb_dri3 = null_dep
+dep_xcb_glx = null_dep
+dep_x11_xcb = null_dep
+dep_xcb_randr = null_dep
+dep_xcb_xrandr = null_dep
+dep_xcb_present = null_dep
+dep_xcb_sync = null_dep
+dep_xcb_xfixes = null_dep
+dep_xcb_shm = null_dep
+dep_display_info = null_dep
+dep_libudev = null_dep
+dep_xshmfence = null_dep
+dep_x11 = null_dep
+dep_spirv_tools = null_dep
+
+with_c11_threads = false
+if cc.has_function('thrd_create', prefix: '#include <threads.h>')
+  if with_platform_android
+    pre_args += '-DHAVE_THRD_CREATE'
+    with_c11_threads = true
+  endif
+endif
+
+with_glx = get_option('glx')
+if with_glx == 'auto'
+  with_glx = 'disabled'
+endif
+
+with_gbm = get_option('gbm') \
+  .require(system_has_kms_drm, error_message : 'GBM only supports DRM/KMS platforms') \
+  .disable_auto_if(not with_dri) \
+  .allowed()
+
+if with_gbm
+  pre_args += '-DHAVE_LIBGBM'
+endif
+
+if with_egl
+  _platforms += 'surfaceless'
+  egl_native_platform = get_option('egl-native-platform')
+  if egl_native_platform.contains('auto')
+    egl_native_platform = 'surfaceless'
+  endif
+endif
+
+if 'x11' in _platforms
+  _platforms += 'xcb'
+endif
+
+foreach platform : _platforms
+  pre_args += '-DHAVE_@0@_PLATFORM'.format(platform.to_upper())
+endforeach
+
+if with_platform_android and get_option('platform-sdk-version') >= 29
+  c_cpp_args += '-fno-emulated-tls'
+  add_project_link_arguments('-Wl,-plugin-opt=-emulated-tls=0', language: ['c', 'cpp'])
+endif
+
+with_clc = false
+with_microsoft_clc = false
+with_spirv_to_dxil = false
+with_llvm = with_llvm \
+  .enable_if(with_clc, error_message : 'CLC requires LLVM')
+
+dep_clc = null_dep
+dep_dl = null_dep
+if host_machine.system() != 'windows'
+  if not cc.has_function('dlopen')
+    dep_dl = cc.find_library('dl', required : false)
+  endif
+endif
+
+dep_zlib = dependency('zlib', required : get_option('zlib'), allow_fallback : true)
+dep_zstd = dependency('libzstd', required : get_option('zstd'))
+dep_libdrm = dependency('libdrm', required : false)
+dep_expat = dependency('expat', required : get_option('expat'), allow_fallback : true)
+
+dep_elf = cc.find_library('elf', required : false)
+if not dep_elf.found()
+  dep_elf = null_dep
+endif
+
+add_project_arguments(pre_args, language : ['c', 'cpp'])
+add_project_arguments(c_cpp_args, language : ['c', 'cpp'])
+add_project_arguments(c_args, language : ['c'])
+add_project_arguments(cpp_args, language : ['cpp'])
+
+subdir('include')
+subdir('bin')
+subdir('src')
+
+summary({'Prefix': get_option('prefix')}, section: 'Directories')
