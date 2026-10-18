@@ -35,6 +35,7 @@ vulkan_manifest_suffix = 'json'
 vulkan_icd_lib_path = join_paths(get_option('prefix'), get_option('libdir'))
 _shader_replacement = ''
 with_sse41 = false
+draw_with_llvm = false
 
 # 🟢 VARIABLES DE RASTREADORES DE ESTADO GALLIUM (STATE TRACKERS)
 with_gallium_va = false
