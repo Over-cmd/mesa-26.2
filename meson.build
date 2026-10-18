@@ -36,6 +36,15 @@ vulkan_icd_lib_path = join_paths(get_option('prefix'), get_option('libdir'))
 _shader_replacement = ''
 with_sse41 = false
 
+# 🟢 VARIABLES DE RASTREADORES DE ESTADO GALLIUM (STATE TRACKERS)
+with_gallium_va = false
+with_gallium_vdpau = false
+with_gallium_xa = false
+with_gallium_omx = false
+with_gallium_xvmc = false
+with_gallium_nine = false
+with_gallium_opencl = false
+
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 fs = import('fs')
