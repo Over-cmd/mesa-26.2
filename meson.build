@@ -381,6 +381,7 @@ dep_futex = null_dep
 dep_regex = null_dep
 dep_llvm = null_dep
 dep_lmsensors = null_dep
+dep_ws2_32 = null_dep
 
 dep_xcb = null_dep
 dep_xcb_dri3 = null_dep
