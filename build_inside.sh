@@ -15,7 +15,7 @@ export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/dat
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
 # 🛡️ RESTAURAR ARCHIVOS MODIFICADOS PREVIAMENTE
-git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/wrapper_device_memory.c src/util/u_gralloc/meson.build 2>/dev/null || true
+git checkout src/util/bitscan.c src/util/os_misc.c src/util/os_sysinfo.c src/util/u_sync_provider.c src/loader/loader.c src/vulkan/wrapper/vk_wrapper_features_gen.py src/vulkan/wrapper/wrapper_physical_device.c src/vulkan/wrapper/wrapper_log.c src/vulkan/wrapper/wrapper_device_memory.c src/util/u_gralloc/meson.build src/android_stub/meson.build meson_options.txt 2>/dev/null || true
 
 # 🛠️ CREAR PUENTES DE HEADERS PARA CUTILS, SYNC Y VNDK
 mkdir -p workspace_headers/cutils workspace_headers/sync workspace_headers/vndk
@@ -63,6 +63,18 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
+# 🗡️ PARCHE EN MESON_OPTIONS.TXT PARA REGISTRAR LA OPCIÓN FALTANTE
+if [ -f "meson_options.txt" ]; then
+    python3 -c '
+path = "meson_options.txt"
+with open(path, "r") as f: content = f.read()
+if "android-libbacktrace" not in content:
+    content += "\noption(\x27android-libbacktrace\x27, type : \x27boolean\x27, value : false, description : \x27Enable android libbacktrace stub\x27)\n"
+    with open(path, "w") as f: f.write(content)
+    print("-> [Parche Aplicado] android-libbacktrace registrado en meson_options.txt")
+'
+fi
+
 rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
 rm -f "${LOCAL_CROSS_FILE}"
@@ -87,14 +99,14 @@ cpp_args = ['-D_GNU_SOURCE', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}
 link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN MESON CON ANDROID Y LIBBACKTRACE DESACTIVADO
+# 🟢 CONFIGURACIÓN MESON
 meson subprojects download || true
 
 meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Db_sanitize=none \
 -Db_lundef=true \
 -Dcpp_rtti=false \
--Dgbm=disabled \
+-Dgbm=enabled \
 -Dopengl=true \
 -Dllvm=disabled \
 -Dshared-llvm=disabled \
@@ -108,7 +120,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dglx=disabled \
 -Dandroid-stub=true \
 -Dplatform-sdk-version=30 \
--Dandroid-libbacktrace=disabled \
+-Dandroid-libbacktrace=false \
 -Dzlib=disabled \
 -Dzstd=disabled
 
