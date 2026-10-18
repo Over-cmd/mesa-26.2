@@ -790,3 +790,10 @@ option(
   choices : ['enabled', 'system', 'auto', 'disabled'],
   description : 'Build drivers internal shader precompiler',
 )
+
+option(
+  'install-precomp-compiler',
+  type : 'boolean',
+  value : false,
+  description : 'Install the precomp-compiler',
+)
