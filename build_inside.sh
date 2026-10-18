@@ -3,6 +3,9 @@ set -e
 
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 
+# 🚀 EXPORTAR PYTHONPATH PARA QUE LOS SCRIPTS DE PYTHON ENCUENTREN LOS MÓDULOS DE NIR Y MESA
+export PYTHONPATH="/workspace/src/compiler:/workspace/src/compiler/nir:$PYTHONPATH"
+
 # 🚀 RUTAS Y CONFIGURACIÓN DEL NDK R30
 NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1)
 if [ -z "$NDK_DIR" ]; then
