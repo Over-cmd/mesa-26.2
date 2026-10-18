@@ -2,8 +2,6 @@ name: Bannerlator Mali Wrapper CI (Mesa 26)
 
 on:
   push:
-    branches:
-      - wrapper-26
   workflow_dispatch:
 
 jobs:
