@@ -111,15 +111,20 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dzlib=disabled \
 -Dzstd=disabled
 
-# 🗡️ PARCHE CIRÚRGICO DIRECTO EN SRC/ANDROID_STUB/MESON.BUILD
+# 🗡️ PARCHE EN SRC/ANDROID_STUB/MESON.BUILD (WITH_LIBBACKTRACE + CUTILS)
 if [ -f "src/android_stub/meson.build" ]; then
     python3 -c '
 path = "src/android_stub/meson.build"
 with open(path, "r") as f: content = f.read()
+
 if "with_libbacktrace =" not in content:
     content = "with_libbacktrace = false\n" + content
-    with open(path, "w") as f: f.write(content)
-    print("-> [Parche Aplicado] with_libbacktrace inyectado en android_stub/meson.build")
+
+if "\x27cutils\x27" not in content and "lib_names = [" in content:
+    content = content.replace("lib_names = [", "lib_names = [\x27cutils\x27, ")
+
+with open(path, "w") as f: f.write(content)
+print("-> [Parche Aplicado] with_libbacktrace y cutils integrados en android_stub/meson.build")
 '
 fi
 
