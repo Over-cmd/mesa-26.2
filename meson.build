@@ -112,7 +112,7 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
+with_mesa_ndebug = get_option('b_ndebug'] == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
@@ -170,6 +170,7 @@ with_panfrost_rust = false
 with_poly = false
 with_wayland_bind_display = false
 with_ld_version_script = false
+with_ld_dynamic_list = false
 with_xcb_keysyms = false
 with_xlib_lease = false
 with_bvh = false
