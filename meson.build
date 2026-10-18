@@ -111,6 +111,9 @@ pre_args = [
   '-DHAVE_FFSLL=1',
   '-DPACKAGE_VERSION="@0@"'.format(project_version),
   '-DPACKAGE_BUGREPORT="https://gitlab.freedesktop.org/mesa/mesa/-/issues"',
+  '-DVK_USE_PLATFORM_ANDROID_KHR=1',
+  '-DVK_USE_PLATFORM_XCB_KHR=1',
+  '-DVK_USE_PLATFORM_XLIB_KHR=1',
 ]
 
 c_cpp_args = []
@@ -196,7 +199,7 @@ elif gallium_drivers.contains('all')
    gallium_drivers = [
      'r300', 'r600', 'radeonsi', 'crocus', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'i915',
      'nouveau', 'svga', 'tegra', 'virgl', 'lima', 'llvmpipe', 'softpipe', 'iris',
-     'zink', 'd3d12', 'asahi', 'rocket', 'ethosu'
+     'zink', 'd3d12', 'asahi', 'rocket', 'ethosu', 'panfrost'
    ]
 endif
 
@@ -251,14 +254,14 @@ elif _vulkan_drivers.contains('all')
    _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'swrast',
                       'freedreno', 'virtio', 'broadcom',
                       'imagination', 'microsoft-experimental',
-                      'nouveau', 'asahi', 'gfxstream', 'kosmickrisp']
+                      'nouveau', 'asahi', 'gfxstream', 'kosmickrisp', 'panfrost', 'wrapper']
 endif
 
 with_intel_vk = _vulkan_drivers.contains('intel')
 with_intel_hasvk = _vulkan_drivers.contains('intel_hasvk')
 with_amd_vk = _vulkan_drivers.contains('amd')
 with_freedreno_vk = _vulkan_drivers.contains('freedreno')
-with_panfrost_vk = false
+with_panfrost_vk = _vulkan_drivers.contains('panfrost')
 with_swrast_vk = _vulkan_drivers.contains('swrast')
 with_virtio_vk = _vulkan_drivers.contains('virtio')
 with_broadcom_vk = _vulkan_drivers.contains('broadcom')
@@ -268,7 +271,7 @@ with_nouveau_vk = _vulkan_drivers.contains('nouveau')
 with_asahi_vk = _vulkan_drivers.contains('asahi')
 with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
 with_kosmickrisp_vk = false
-with_wrapper_vk = true
+with_wrapper_vk = _vulkan_drivers.contains('wrapper')
 with_any_vk = _vulkan_drivers.length() != 0
 
 with_dri = true
@@ -297,7 +300,7 @@ endforeach
 
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
-  _platforms = ['x11']
+  _platforms = ['x11', 'android']
 endif
 
 with_platform_android = _platforms.contains('android')
@@ -308,6 +311,10 @@ with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
 
 with_android_stub = get_option('android-stub')
+
+# 🟢 REQUERIDO POR WRAPPER Y ANDROID STUB (DECLARACIÓN GLOBAL DE VARIABLES)
+with_libbacktrace = false
+
 with_glvnd = false
 with_shared_glapi = false
 with_gbm = false
