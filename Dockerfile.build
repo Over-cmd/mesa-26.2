@@ -6,13 +6,22 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ninja-build bison && \
     pip3 install --break-system-packages --ignore-installed --no-cache-dir meson ninja mako pyyaml packaging
 
-# 🟢 WRAPPER DE BISON PARA CORREGIR EL CONFLICTO DE ARGUMENTOS CON MESON
+# 🟢 WRAPPER DE BISON ROBUSTO (Convierte -H <archivo> en --defines=<archivo>)
 RUN mv /usr/bin/bison /usr/bin/bison.real && \
     echo '#!/bin/bash' > /usr/bin/bison && \
     echo 'ARGS=()' >> /usr/bin/bison && \
-    echo 'for arg in "$@"; do' >> /usr/bin/bison && \
+    echo 'skip_next=0' >> /usr/bin/bison && \
+    echo 'for i in "${!@}"; do' >> /usr/bin/bison && \
+    echo '    if [ "$skip_next" -eq 1 ]; then' >> /usr/bin/bison && \
+    echo '        skip_next=0' >> /usr/bin/bison && \
+    echo '        continue' >> /usr/bin/bison && \
+    echo '    fi' >> /usr/bin/bison && \
+    echo '    arg="${!i}"' >> /usr/bin/bison && \
     echo '    if [ "$arg" = "-H" ]; then' >> /usr/bin/bison && \
-    echo '        ARGS+=("--defines")' >> /usr/bin/bison && \
+    echo '        next_idx=$((i + 1))' >> /usr/bin/bison && \
+    echo '        next_arg="${!next_idx}"' >> /usr/bin/bison && \
+    echo '        ARGS+=("--defines=$next_arg")' >> /usr/bin/bison && \
+    echo '        skip_next=1' >> /usr/bin/bison && \
     echo '    else' >> /usr/bin/bison && \
     echo '        ARGS+=("$arg")' >> /usr/bin/bison && \
     echo '    fi' >> /usr/bin/bison && \
