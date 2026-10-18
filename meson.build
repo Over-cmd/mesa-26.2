@@ -442,6 +442,11 @@ dep_zstd = dependency('libzstd', required : get_option('zstd'))
 dep_libdrm = dependency('libdrm', required : false)
 dep_expat = dependency('expat', required : get_option('expat'), allow_fallback : true)
 
+dep_elf = cc.find_library('elf', required : false)
+if not dep_elf.found()
+  dep_elf = null_dep
+endif
+
 add_project_arguments(pre_args, language : ['c', 'cpp'])
 add_project_arguments(c_cpp_args, language : ['c', 'cpp'])
 add_project_arguments(c_args, language : ['c'])
