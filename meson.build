@@ -258,6 +258,7 @@ with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
 with_gallium_rocket = gallium_drivers.contains('rocket')
+with_gallium_ethosu = gallium_drivers.contains('ethosu')
 
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
@@ -411,7 +412,7 @@ endif
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
-with_glx = 'disabled'
+  with_glx = 'disabled'
 endif
 
 with_gbm = get_option('gbm') \
