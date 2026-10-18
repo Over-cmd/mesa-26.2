@@ -50,6 +50,11 @@ if not prog_mesa_clc.found()
   prog_mesa_clc = find_program('true', native : true)
 endif
 
+prog_vtn_bindgen2 = find_program('vtn_bindgen2', required : false)
+if not prog_vtn_bindgen2.found()
+  prog_vtn_bindgen2 = find_program('true', native : true)
+endif
+
 glslang_quiet = prog_glslang.found() ? ['-s'] : []
 glslang_depfile = []
 
