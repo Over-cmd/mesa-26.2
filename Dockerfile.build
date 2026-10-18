@@ -8,18 +8,16 @@ RUN apt-get update && \
 
 # 🟢 WRAPPER DE BISON PARA CORREGIR EL CONFLICTO DE ARGUMENTOS CON MESON
 RUN mv /usr/bin/bison /usr/bin/bison.real && \
-    tee /usr/bin/bison << 'EOF' && \
-#!/bin/bash
-ARGS=()
-for arg in "$@"; do
-    if [ "$arg" = "-H" ]; then
-        ARGS+=("--defines")
-    else
-        ARGS+=("$arg")
-    fi
-done
-exec /usr/bin/bison.real "${ARGS[@]}"
-EOF
+    echo '#!/bin/bash' > /usr/bin/bison && \
+    echo 'ARGS=()' >> /usr/bin/bison && \
+    echo 'for arg in "$@"; do' >> /usr/bin/bison && \
+    echo '    if [ "$arg" = "-H" ]; then' >> /usr/bin/bison && \
+    echo '        ARGS+=("--defines")' >> /usr/bin/bison && \
+    echo '    else' >> /usr/bin/bison && \
+    echo '        ARGS+=("$arg")' >> /usr/bin/bison && \
+    echo '    fi' >> /usr/bin/bison && \
+    echo 'done' >> /usr/bin/bison && \
+    echo 'exec /usr/bin/bison.real "${ARGS[@]}"' >> /usr/bin/bison && \
     chmod +x /usr/bin/bison
 
 RUN mkdir -p /tmp/sysroot && \
