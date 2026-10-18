@@ -50,6 +50,7 @@ with_gallium_drisw_kms = false
 with_gallium_mediafoundation = false
 with_gallium_kmsro = false
 with_gallium_st_d3d10umd = false
+with_teflon = false
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
