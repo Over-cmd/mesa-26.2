@@ -49,6 +49,7 @@ with_gallium_rusticl = false
 with_gallium_drisw_kms = false
 with_gallium_mediafoundation = false
 with_gallium_kmsro = false
+with_gallium_st_d3d10umd = false
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
@@ -112,7 +113,7 @@ with_llvm = get_option('llvm')
 amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
-with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
+with_mesa_ndebug = (get_option('b_ndebug') == 'true') or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
 relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 dir_source_root = meson.project_source_root()
