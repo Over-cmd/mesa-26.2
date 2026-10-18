@@ -31,6 +31,8 @@ else
   libname_suffix = 'so'
 endif
 
+vulkan_manifest_suffix = 'json'
+
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 fs = import('fs')
