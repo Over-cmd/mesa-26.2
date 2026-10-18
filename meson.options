@@ -7,6 +7,14 @@ option(
   value : 'disabled',
   description : 'split debug information (-gsplit-dwarf compile flag) and debug information in the gdb index format (--gdb-index)',
 )
+
+option(
+  'libgbm-external',
+  type : 'boolean',
+  value : false,
+  description : 'Whether to use external libgbm (default: use in-tree copy)',
+)
+
 option(
   'platforms',
   type : 'array',
@@ -218,7 +226,6 @@ option(
                 'will be built'
 )
 
-# Opciones necesarias para la rama Fusion, el Wrapper y Clang/CLC
 option(
   'wrapper-vk',
   type : 'boolean',
