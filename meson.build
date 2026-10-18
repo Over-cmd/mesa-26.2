@@ -45,6 +45,11 @@ prog_flex = find_program('flex', required : false)
 prog_flex_cpp = find_program('flex', required : false)
 prog_glslang = find_program('glslangValidator', required : false)
 
+prog_mesa_clc = find_program('mesa-clc', required : false)
+if not prog_mesa_clc.found()
+  prog_mesa_clc = find_program('true', native : true)
+endif
+
 glslang_quiet = prog_glslang.found() ? ['-s'] : []
 glslang_depfile = []
 
