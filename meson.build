@@ -47,6 +47,7 @@ with_gallium_nine = false
 with_gallium_opencl = false
 with_gallium_drisw_kms = false
 with_gallium_mediafoundation = false
+with_gallium_kmsro = false
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
