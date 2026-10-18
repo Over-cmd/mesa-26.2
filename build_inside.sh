@@ -63,15 +63,15 @@ const native_handle_t* AHardwareBuffer_getNativeHandle(const AHardwareBuffer* ha
 EOF
 fi
 
-# 🗡️ PARCHE EN MESON_OPTIONS.TXT PARA REGISTRAR LA OPCIÓN FALTANTE
+# 🗡️ PARCHE EN MESON_OPTIONS.TXT PARA REGISTRAR LA OPCIÓN COMO COMBO
 if [ -f "meson_options.txt" ]; then
     python3 -c '
 path = "meson_options.txt"
 with open(path, "r") as f: content = f.read()
 if "android-libbacktrace" not in content:
-    content += "\noption(\x27android-libbacktrace\x27, type : \x27boolean\x27, value : false, description : \x27Enable android libbacktrace stub\x27)\n"
+    content += "\noption(\x27android-libbacktrace\x27, type : \x27combo\x27, choices : [\x27enabled\x27, \x27disabled\x27, \x27auto\x27], value : \x27disabled\x27, description : \x27Enable android libbacktrace stub\x27)\n"
     with open(path, "w") as f: f.write(content)
-    print("-> [Parche Aplicado] android-libbacktrace registrado en meson_options.txt")
+    print("-> [Parche Aplicado] android-libbacktrace registrado como combo en meson_options.txt")
 '
 fi
 
@@ -120,7 +120,7 @@ meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
 -Dglx=disabled \
 -Dandroid-stub=true \
 -Dplatform-sdk-version=30 \
--Dandroid-libbacktrace=false \
+-Dandroid-libbacktrace=disabled \
 -Dzlib=disabled \
 -Dzstd=disabled
 
