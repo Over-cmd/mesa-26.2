@@ -31,7 +31,7 @@ strip = '${NDK_SYSROOT}/../bin/llvm-strip'
 pkgconfig = 'pkg-config'
 
 [host_machine]
-system = 'linux'
+system = 'android'
 cpu_family = 'aarch64'
 cpu = 'armv8-a'
 endian = 'little'
