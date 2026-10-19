@@ -96,6 +96,15 @@ if s:
         print(f"-> Parcheado {f}")
 PY
 
+# ---------- LIBS X11/XCB/DRM (el meson.build las pone como null_dep, hay que enlazarlas a mano) ----------
+TERMUX_LIB="/data/data/com.termux/files/usr/lib"
+XLINK=""
+for f in "${TERMUX_LIB}"/libxcb*.so "${TERMUX_LIB}"/libX11.so "${TERMUX_LIB}"/libX11-xcb.so "${TERMUX_LIB}"/libxshmfence.so "${TERMUX_LIB}"/libdrm.so; do
+    [ -f "$f" ] || continue
+    b=$(basename "$f" .so); XLINK="${XLINK}, '-l${b#lib}'"
+done
+echo "-> Libs X11/XCB enlazadas: ${XLINK}"
+
 # ---------- CROSS FILE ----------
 rm -rf "${BUILD_DIR}"
 CROSS="${BUILD_DIR}_cross_file.txt"
@@ -114,8 +123,8 @@ pkg-config = 'pkg-config'
 [built-in options]
 c_args = [${COMMON_ARGS}]
 cpp_args = [${COMMON_ARGS}]
-c_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-ldl', '-lm', '-llog', '-landroid']
-cpp_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-ldl', '-lm', '-llog', '-landroid', '-static-libstdc++']
+c_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-Wl,--no-as-needed', '-ldl', '-lm', '-llog', '-landroid'${XLINK}]
+cpp_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-Wl,--no-as-needed', '-ldl', '-lm', '-llog', '-landroid'${XLINK}, '-static-libstdc++']
 
 [host_machine]
 system = 'android'
@@ -162,10 +171,11 @@ echo "=== NEEDED (deben existir en el rootfs/dispositivo) ==="
 "${NDK_BIN}/llvm-readelf" -d "$OUT" | grep NEEDED || true
 echo "=== Símbolos ICD exportados (deben aparecer los 3) ==="
 "${NDK_BIN}/llvm-nm" -D --defined-only "$OUT" | grep -E "vk_icd|vkGetInstanceProcAddr" || echo "!! NO exporta vk_icdGetInstanceProcAddr"
-echo "=== Símbolos SIN RESOLVER (b_lundef=false los deja pasar; si salen aquí, dlopen falla) ==="
-"${NDK_BIN}/llvm-nm" -D --undefined-only "$OUT" \
-  | grep -vE " (U) (__|_Z|_ZN|_ZS|_Unwind|a[a-z_]*|dl|pthread_|str|mem|mmap|munmap|ioctl|open|close|read|write|poll|sys|get|set|f[a-z]+|qsort|mtx_|cnd_|thrd_|tss_|call_once|abort|exit|free|malloc|calloc|realloc|snprintf|sscanf|printf|sem_|clock_|nanosleep|usleep|sched_|prctl|syscall|stat|fstat|access|unlink|rename|mkdir|socket|connect|send|recv|shm|futex|environ|errno|getenv|setenv|signal|raise|lib|sync_|AHardwareBuffer|ANativeWindow|android_|__android)" \
-  | head -50 || true
+echo "=== Símbolos sin resolver (sin @LIBC ni AAudio/AHardwareBuffer/ANativeWindow) ==="
+"${NDK_BIN}/llvm-nm" -D --undefined-only "$OUT" | awk '{print $2}' \
+  | grep -vE "@|^AAudio|^AHardwareBuffer|^ANativeWindow|^ASurface|^__android|^android_" | sort | head -300 || true
+echo "=== Resumen NEEDED final ==="
+"${NDK_BIN}/llvm-readelf" -d "$OUT" | grep -E "NEEDED|SONAME" || true
 
 # ---------- ROOTFS ----------
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
