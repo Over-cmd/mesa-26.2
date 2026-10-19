@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
+# Uso: build_inside.sh [BUILD_DIR]      ARCH=aarch64 (64 bits) | arm (32 bits)
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
+ARCH="${ARCH:-aarch64}"
 
 export PYTHONPATH="/workspace/src/compiler:/workspace/src/compiler/nir:$PYTHONPATH"
 
@@ -10,11 +12,22 @@ NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | 
 [ -z "$NDK_DIR" ] && NDK_DIR="/home/builder/lib/android-ndk-r30"
 NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-TRIPLE="aarch64-linux-android30"
-SYSLIB="aarch64-linux-android"
+
+if [ "$ARCH" = "arm" ]; then
+    TRIPLE="armv7a-linux-androideabi30"
+    SYSLIB="arm-linux-androideabi"
+    CPU_FAMILY="arm"; CPU="armv7"
+    LIBDIR_TAG="armhf"
+else
+    TRIPLE="aarch64-linux-android30"
+    SYSLIB="aarch64-linux-android"
+    CPU_FAMILY="aarch64"; CPU="armv8-a"
+    LIBDIR_TAG="aarch64"
+fi
 
 # ---------- PARCHES ----------
-# El #error de os_misc.c dice "os_sysinfo.c": se parchea por regex.
+# El #error dentro de os_misc.c dice "os_sysinfo.c" (por eso tu sed no coincidía).
+# Reemplazo por regex cualquier "#error unexpected platform..." por un fallback.
 python3 - <<'PY'
 import re
 for f in ("src/util/os_misc.c", "src/util/os_sysinfo.c"):
@@ -28,6 +41,22 @@ for f in ("src/util/os_misc.c", "src/util/os_sysinfo.c"):
     if n != s:
         open(f, "w").write(n)
         print(f"-> Parcheado {f}")
+PY
+
+# u_gralloc: los backends imapper4/5 necesitan cabeceras AIDL del AOSP que el NDK no trae.
+# Se vacían y se deja un stub que devuelve NULL (Mesa usa el gralloc fallback).
+python3 - <<'PY'
+import glob
+d = "src/util/u_gralloc/"
+for f in glob.glob(d + "*imapper*api*.cpp"):
+    open(f, "w").write("/* vaciado: sin cabeceras AIDL en NDK */\n")
+    print(f"-> Vaciado {f}")
+try:
+    open(d + "u_gralloc_imapper5_api.cpp", "w").write(
+        '#include "u_gralloc_internal.h"\n'
+        'extern "C" struct u_gralloc *u_gralloc_imapper_api_create(void) { return NULL; }\n')
+except FileNotFoundError:
+    pass
 PY
 
 # ---------- CROSS FILE ----------
@@ -53,8 +82,8 @@ cpp_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/
 
 [host_machine]
 system = 'android'
-cpu_family = 'aarch64'
-cpu = 'armv8-a'
+cpu_family = '${CPU_FAMILY}'
+cpu = '${CPU}'
 endian = 'little'
 EOF
 
@@ -97,7 +126,7 @@ mkdir -p "${ROOTFS_DIR}/usr/lib" "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/"
 find "${BUILD_DIR}/subprojects" -name "*.so" -exec cp -f {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
 
-cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
+cat << EOF > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.${LIBDIR_TAG}.json"
 {
     "file_format_version": "1.0.0",
     "ICD": {
@@ -108,7 +137,7 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 EOF
 
 echo "-> Empaquetando tar.zst..."
-( cd "${ROOTFS_DIR}" && tar -cf - usr | zstd -19 -o "../gamenative_driver_rootfs.tar.zst" )
-cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
+( cd "${ROOTFS_DIR}" && tar -cf - usr | zstd -19 -o "../gamenative_driver_rootfs_${ARCH}.tar.zst" )
+cp "${BUILD_DIR}/gamenative_driver_rootfs_${ARCH}.tar.zst" "./gamenative_driver_rootfs_${ARCH}.tar.zst"
 
-echo "=== FORJA MESA 26 EXITOSA ==="
+echo "=== LISTO (${ARCH}) ==="
