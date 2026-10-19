@@ -156,6 +156,17 @@ echo "-> Wrapper: $SRC"
 cp "$SRC" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 "${NDK_BIN}/llvm-strip" --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
+# ---------- DIAGNÓSTICO (por qué no carga en Bannerlator) ----------
+OUT="${BUILD_DIR}/libvulkan_wrapper.so"
+echo "=== NEEDED (deben existir en el rootfs/dispositivo) ==="
+"${NDK_BIN}/llvm-readelf" -d "$OUT" | grep NEEDED || true
+echo "=== Símbolos ICD exportados (deben aparecer los 3) ==="
+"${NDK_BIN}/llvm-nm" -D --defined-only "$OUT" | grep -E "vk_icd|vkGetInstanceProcAddr" || echo "!! NO exporta vk_icdGetInstanceProcAddr"
+echo "=== Símbolos SIN RESOLVER (b_lundef=false los deja pasar; si salen aquí, dlopen falla) ==="
+"${NDK_BIN}/llvm-nm" -D --undefined-only "$OUT" \
+  | grep -vE " (U) (__|_Z|_ZN|_ZS|_Unwind|a[a-z_]*|dl|pthread_|str|mem|mmap|munmap|ioctl|open|close|read|write|poll|sys|get|set|f[a-z]+|qsort|mtx_|cnd_|thrd_|tss_|call_once|abort|exit|free|malloc|calloc|realloc|snprintf|sscanf|printf|sem_|clock_|nanosleep|usleep|sched_|prctl|syscall|stat|fstat|access|unlink|rename|mkdir|socket|connect|send|recv|shm|futex|environ|errno|getenv|setenv|signal|raise|lib|sync_|AHardwareBuffer|ANativeWindow|android_|__android)" \
+  | head -50 || true
+
 # ---------- ROOTFS ----------
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
