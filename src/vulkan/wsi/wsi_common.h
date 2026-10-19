@@ -92,6 +92,8 @@ struct wsi_device {
     */
    bool supports_scanout;
    bool supports_modifiers;
+   bool supports_protected[VK_ICD_WSI_PLATFORM_MAX];
+
    uint32_t maxImageDimension2D;
    uint32_t optimalBufferCopyRowPitchAlignment;
    VkPresentModeKHR override_present_mode;
