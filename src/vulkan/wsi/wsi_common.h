@@ -47,6 +47,7 @@ extern const struct vk_device_entrypoint_table wsi_device_entrypoints;
 
 struct wsi_interface;
 struct vk_instance;
+struct vk_queue;
 
 struct driOptionCache;
 
@@ -107,6 +108,8 @@ struct wsi_device {
    bool force_headless_swapchain;
 
    bool force_swapchain_to_currentExtent;
+
+   bool disable_unordered_submits;
 
    struct {
       /* Override the minimum number of images on the swapchain.
@@ -203,7 +206,7 @@ struct wsi_device {
     * A driver can implement this callback to return a special queue to execute
     * buffer blits.
     */
-   VkQueue (*get_blit_queue)(VkDevice device);
+   struct vk_queue *(*get_blit_queue)(VkDevice device);
 
 #define WSI_CB(cb) PFN_vk##cb cb
    WSI_CB(AllocateMemory);
@@ -329,21 +332,13 @@ wsi_common_acquire_next_image2(const struct wsi_device *wsi,
 
 VkResult
 wsi_common_queue_present(const struct wsi_device *wsi,
-                         VkDevice device_h,
-                         VkQueue queue_h,
-                         int queue_family_index,
+                         struct vk_queue *queue,
                          const VkPresentInfoKHR *pPresentInfo);
 
 VkResult
 wsi_common_create_swapchain_image(const struct wsi_device *wsi,
                                   const VkImageCreateInfo *pCreateInfo,
-                                  VkSwapchainKHR _swapchain,
                                   VkImage *pImage);
-VkResult
-wsi_common_bind_swapchain_image(const struct wsi_device *wsi,
-                                VkImage vk_image,
-                                VkSwapchainKHR _swapchain,
-                                uint32_t image_idx);
 
 bool
 wsi_common_vk_instance_supports_present_wait(const struct vk_instance *instance);
@@ -353,6 +348,18 @@ wsi_caps_get_image_usage(void);
 
 bool
 wsi_device_supports_explicit_sync(struct wsi_device *device);
+
+static inline VkImageUsageFlags2KHR
+vk_swapchain_usage_flags(const VkSwapchainCreateInfoKHR *info)
+{
+   const VkImageUsageFlags2CreateInfoKHR *usage2 =
+      vk_find_struct_const(info->pNext,
+                           IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR);
+   if (usage2)
+      return usage2->usage;
+   else
+      return info->imageUsage;
+}
 
 #define wsi_common_vk_warn_once(warning) \
    do { \
