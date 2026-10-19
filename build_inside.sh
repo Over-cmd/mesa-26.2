@@ -3,131 +3,99 @@ set -e
 
 BUILD_DIR="${1:-${BUILD_DIR:-build}}"
 
-# 🚀 EXPORTAR PYTHONPATH PARA QUE LOS SCRIPTS DE PYTHON ENCUENTREN LOS MÓDULOS DE NIR Y MESA
 export PYTHONPATH="/workspace/src/compiler:/workspace/src/compiler/nir:$PYTHONPATH"
 
-# 🚀 RUTAS Y CONFIGURACIÓN DEL NDK R30
+# ---------- NDK ----------
 NDK_DIR=$(find /home/builder/lib -maxdepth 2 -name "android-ndk*" 2>/dev/null | head -n 1)
-if [ -z "$NDK_DIR" ]; then
-    NDK_DIR="/home/builder/lib/android-ndk-r30"
-fi
+[ -z "$NDK_DIR" ] && NDK_DIR="/home/builder/lib/android-ndk-r30"
+NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+TRIPLE="aarch64-linux-android30"
+SYSLIB="aarch64-linux-android"
 
-# Exportaciones generales de AAudio y enlaces
-export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/data/data/com.termux/files/usr/include/libdrm"
-export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
+# ---------- PARCHES ----------
+# El #error de os_misc.c dice "os_sysinfo.c": se parchea por regex.
+python3 - <<'PY'
+import re
+for f in ("src/util/os_misc.c", "src/util/os_sysinfo.c"):
+    try:
+        s = open(f).read()
+    except FileNotFoundError:
+        continue
+    n = re.sub(r'^[ \t]*#[ \t]*error[ \t]+unexpected platform.*$',
+               '   /* patched: unsupported platform fallback */\n   return false;',
+               s, flags=re.M)
+    if n != s:
+        open(f, "w").write(n)
+        print(f"-> Parcheado {f}")
+PY
 
-# 🛠️ PARCHE INDUSTRIAL PARA EVITAR EL BLOQUEO DE PLATAFORMA EN UTILS DE MESA
-sed -i 's/#error unexpected platform in os_misc.c/\/\/ #error unexpected platform in os_misc.c/g' src/util/os_misc.c 2>/dev/null || true
-sed -i 's/#error unexpected platform in os_sysinfo.c/\/\/ #error unexpected platform in os_sysinfo.c/g' src/util/os_sysinfo.c 2>/dev/null || true
-
-# 🛠️ CREAR ARCHIVO DE COMPILACIÓN CRUZADA (CROSS FILE)
+# ---------- CROSS FILE ----------
 rm -rf "${BUILD_DIR}"
-LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
-rm -f "${LOCAL_CROSS_FILE}"
+CROSS="${BUILD_DIR}_cross_file.txt"
+rm -f "${CROSS}"
 
-cat << EOF > "${LOCAL_CROSS_FILE}"
+COMMON_ARGS="'-D_GNU_SOURCE', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
+
+cat << EOF > "${CROSS}"
 [binaries]
-c = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang'
-cpp = '${NDK_SYSROOT}/../bin/aarch64-linux-android30-clang++'
-ar = '${NDK_SYSROOT}/../bin/llvm-ar'
-strip = '${NDK_SYSROOT}/../bin/llvm-strip'
-pkgconfig = 'pkg-config'
+c = '${NDK_BIN}/${TRIPLE}-clang'
+cpp = '${NDK_BIN}/${TRIPLE}-clang++'
+ar = '${NDK_BIN}/llvm-ar'
+strip = '${NDK_BIN}/llvm-strip'
+pkg-config = 'pkg-config'
+
+[built-in options]
+c_args = [${COMMON_ARGS}]
+cpp_args = [${COMMON_ARGS}]
+c_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-ldl', '-lm', '-llog', '-landroid']
+cpp_link_args = ['-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/${SYSLIB}/30', '-ldl', '-lm', '-llog', '-landroid', '-static-libstdc++']
 
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
 cpu = 'armv8-a'
 endian = 'little'
-
-[properties]
-c_args = ['-D_GNU_SOURCE', '-D__ANDROID__', '-DHAVE_FFSLL=0', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
-cpp_args = ['-D_GNU_SOURCE', '-D__ANDROID__', '-DHAVE_FFSLL=0', '-I/workspace/workspace_headers', '-I${NDK_SYSROOT}/usr/include', '-I${NDK_SYSROOT}/usr/include/aarch64-linux-android', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm', '-DVK_USE_PLATFORM_ANDROID_KHR=1']
-link_args = ['-nodefaultlibs', '-lc++', '-lc++abi', '-lm', '-ldl', '-lc', '-lgcc', '-L/data/data/com.termux/files/usr/lib', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/30', '-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android', '-Wl,--sysroot=${NDK_SYSROOT}', '-ldrm', '-lxcb', '-lxcb-randr', '-lxcb-xfixes', '-lX11', '-lX11-xcb', '-laaudio']
 EOF
 
-# 🟢 CONFIGURACIÓN CON MESON
+# ---------- MESON ----------
 meson subprojects download || true
 
-meson setup "${BUILD_DIR}" --cross-file "${LOCAL_CROSS_FILE}" \
--Db_sanitize=none \
--Db_lundef=true \
--Dcpp_rtti=false \
--Dgbm=enabled \
--Dopengl=true \
--Dllvm=disabled \
--Dshared-llvm=disabled \
--Dplatforms=x11,android \
--Degl-native-platform=android \
--Dgallium-drivers=panfrost \
--Ddraw-use-llvm=false \
--Dxmlconfig=disabled \
--Dvulkan-drivers=panfrost,wrapper \
--Degl=enabled \
--Dglx=disabled \
--Dandroid-stub=true \
--Dplatform-sdk-version=30 \
--Dzlib=disabled \
--Dzstd=disabled
+meson setup "${BUILD_DIR}" --cross-file "${CROSS}" \
+  -Db_sanitize=none \
+  -Db_lundef=false \
+  -Dcpp_rtti=false \
+  -Dllvm=disabled \
+  -Dshared-llvm=disabled \
+  -Dplatforms=x11,android \
+  -Dandroid-stub=true \
+  -Dplatform-sdk-version=30 \
+  -Dgallium-drivers= \
+  -Dvulkan-drivers=wrapper \
+  -Dopengl=false -Dgles1=disabled -Dgles2=disabled \
+  -Degl=disabled -Dgbm=disabled -Dglx=disabled \
+  -Dxmlconfig=disabled \
+  -Dzlib=disabled -Dzstd=disabled
 
-# ⚙️ COMPILACIÓN CON NINJA
-echo "-> Ejecutando compilación completa con Ninja..."
+echo "-> Compilando con Ninja..."
 ninja -C "${BUILD_DIR}"
 
-# 🟢 EXTRACCIÓN DEL BINARIO DEL WRAPPER
-python3 -c '
-import os, shutil
-
-build_dir = "'"${BUILD_DIR}"'"
-dst = os.path.join(build_dir, "libvulkan_wrapper.so.unstripped")
-
-candidates = []
-for root, dirs, files in os.walk(build_dir):
-    for file in files:
-        if file.endswith(".so") and not any(x in file for x in ["expat", "glapi", "test"]):
-            candidates.append(os.path.join(root, file))
-
-src = None
-for c in candidates:
-    if "wrapper" in c or "vulkan" in c:
-        src = c
-        break
-
-if not src and candidates:
-    src = candidates[0]
-
-if src and os.path.exists(src):
-    shutil.copy2(src, dst)
-    print(f"-> [Forja Real] Driver wrapper localizado en {src}")
-else:
-    print("-> [❌ ERROR CRÍTICO] No se encontró el binario del wrapper.")
-    exit(1)
-'
-
-# 🟢 LIMPIEZA DE SÍMBOLOS CON LLVM-STRIP
-STRIP="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-if [ ! -f "$STRIP" ]; then
-    STRIP=$(find "${NDK_DIR}" -name "llvm-strip" | head -n 1)
+# ---------- LOCALIZAR WRAPPER ----------
+SRC="${BUILD_DIR}/src/vulkan/wrapper/libvulkan_wrapper.so"
+if [ ! -f "$SRC" ]; then
+    SRC=$(find "${BUILD_DIR}" -name "libvulkan_wrapper*.so" | head -n 1)
 fi
-$STRIP --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
+[ -f "$SRC" ] || { echo "-> [ERROR] No se encontró libvulkan_wrapper.so"; exit 1; }
+echo "-> Wrapper: $SRC"
+cp "$SRC" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
+"${NDK_BIN}/llvm-strip" --strip-unneeded -o "${BUILD_DIR}/libvulkan_wrapper.so" "${BUILD_DIR}/libvulkan_wrapper.so.unstripped"
 
-# 🟢 ÁRBOL DE DIRECTORIOS RÍGIDO CON ICD RELATIVO
+# ---------- ROOTFS ----------
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
-mkdir -p "${ROOTFS_DIR}/usr/lib"
-mkdir -p "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
-
-cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/libvulkan_wrapper.so"
-
-python3 -c '
-import os, shutil
-build_dir = "'"${BUILD_DIR}"'"
-rootfs_lib = "'"${ROOTFS_DIR}"'/usr/lib"
-for root, dirs, files in os.walk(os.path.join(build_dir, "subprojects")):
-    for file in files:
-        if file.endswith(".so"):
-            shutil.copy2(os.path.join(root, file), os.path.join(rootfs_lib, file))
-' 2>/dev/null || true
+mkdir -p "${ROOTFS_DIR}/usr/lib" "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
+cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/"
+find "${BUILD_DIR}/subprojects" -name "*.so" -exec cp -f {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
 
 cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 {
@@ -139,14 +107,8 @@ cat << 'EOF' > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.aarch64.json"
 }
 EOF
 
-# 🟢 EMPAQUETADO TAR.ZST
-echo "-> Forjando el paquete comprimido gamenative_driver_rootfs.tar.zst..."
-cd "${ROOTFS_DIR}"
-tar -cvf - usr | zstd -o "../gamenative_driver_rootfs.tar.zst"
-cd - > /dev/null
-
+echo "-> Empaquetando tar.zst..."
+( cd "${ROOTFS_DIR}" && tar -cf - usr | zstd -19 -o "../gamenative_driver_rootfs.tar.zst" )
 cp "${BUILD_DIR}/gamenative_driver_rootfs.tar.zst" ./gamenative_driver_rootfs.tar.zst
 
-echo "=========================================================="
-echo " 🟢 FORJA MESA 26 EXITOSA: ¡WRAPPER Y MANIFIESTO LISTOS! "
-echo "=========================================================="
+echo "=== FORJA MESA 26 EXITOSA ==="
