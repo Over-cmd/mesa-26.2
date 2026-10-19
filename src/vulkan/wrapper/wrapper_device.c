@@ -207,19 +207,16 @@ static void process_pnext_chain(VkBaseInStructure *create_info, struct wrapper_p
           case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT:
              if (pdevice->base_supported_extensions.EXT_robustness2)
                 break;
-             WRAPPER_LOG(info, "Unlinking VkPhysicalDeviceRobustness2FeaturesEXT from pNext chain");
              unlink_vk_struct(create_info, &current, &prev);
              continue;
           case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT:
              if (pdevice->base_supported_extensions.EXT_dynamic_rendering_unused_attachments)
                 break;
-             WRAPPER_LOG(info, "Unlinking VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT from pNext chain");
              unlink_vk_struct(create_info, &current, &prev);
              continue;
           case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES:
              if (pdevice->base_supported_extensions.KHR_maintenance5)
                 break;
-             WRAPPER_LOG(info, "Unlinking VkPhysicalDeviceMaintenance5Features from pNext chain");
              unlink_vk_struct(create_info, &current, &prev);
              continue;
           case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT:
@@ -452,7 +449,7 @@ wrapper_UpdateDescriptorSets(VkDevice _device, uint32_t descriptorWriteCount,
 }
 
 /* =========================================================================
-   🚨 IMPLEMENTACIÓN DE LA SWAPCHAIN Y WSI (Para evitar ResetSwapChain crash)
+   🛡️ SWAPCHAIN SEGURA (Defensiva contra incompatibilidades Win32/Android)
    ========================================================================= */
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -464,10 +461,8 @@ wrapper_CreateSwapchainKHR(
 {
    VK_FROM_HANDLE(wrapper_device, device, _device);
 
-   WRAPPER_LOG(info, "Creating Swapchain: %dx%d, format: %d", 
-               pCreateInfo->imageExtent.width, 
-               pCreateInfo->imageExtent.height, 
-               pCreateInfo->imageFormat);
+   if (!device->dispatch_table.CreateSwapchainKHR)
+      return VK_ERROR_EXTENSION_NOT_PRESENT;
 
    return device->dispatch_table.CreateSwapchainKHR(
       device->dispatch_handle, pCreateInfo, pAllocator, pSwapchain);
@@ -481,7 +476,7 @@ wrapper_DestroySwapchainKHR(
 {
    VK_FROM_HANDLE(wrapper_device, device, _device);
 
-   if (swapchain == VK_NULL_HANDLE)
+   if (swapchain == VK_NULL_HANDLE || !device->dispatch_table.DestroySwapchainKHR)
       return;
 
    device->dispatch_table.DestroySwapchainKHR(
@@ -496,6 +491,9 @@ wrapper_GetSwapchainImagesKHR(
     VkImage*                                    pSwapchainImages)
 {
    VK_FROM_HANDLE(wrapper_device, device, _device);
+
+   if (!device->dispatch_table.GetSwapchainImagesKHR)
+      return VK_ERROR_INITIALIZATION_FAILED;
 
    return device->dispatch_table.GetSwapchainImagesKHR(
       device->dispatch_handle, swapchain, pSwapchainImageCount, pSwapchainImages);
@@ -512,6 +510,9 @@ wrapper_AcquireNextImageKHR(
 {
    VK_FROM_HANDLE(wrapper_device, device, _device);
 
+   if (!device->dispatch_table.AcquireNextImageKHR)
+      return VK_ERROR_OUT_OF_DATE_KHR;
+
    return device->dispatch_table.AcquireNextImageKHR(
       device->dispatch_handle, swapchain, timeout, semaphore, fence, pImageIndex);
 }
@@ -522,6 +523,9 @@ wrapper_QueuePresentKHR(
     const VkPresentInfoKHR*                     pPresentInfo)
 {
    VK_FROM_HANDLE(wrapper_queue, queue, _queue);
+
+   if (!queue || !queue->device->dispatch_table.QueuePresentKHR)
+      return VK_ERROR_OUT_OF_DATE_KHR;
 
    return queue->device->dispatch_table.QueuePresentKHR(
       queue->dispatch_handle, pPresentInfo);
