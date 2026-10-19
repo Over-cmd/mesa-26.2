@@ -210,6 +210,43 @@ patch("src/vulkan/wsi/wsi_common_x11.c", [
 ])
 PY
 
+# Superficie X11: trazas de por qué get_visualtype_for_window falla y no abortar la creación de la superficie.
+python3 - <<'PY'
+f = "src/vulkan/wsi/wsi_common_x11.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "[WSI] visual:" not in t:
+    o = t
+    t = t.replace(r'''   if (attrib == NULL || tree == NULL) {
+      free(attrib);''', r'''   fprintf(stderr, "[WSI] visual: conn=%p conn_err=%d window=%u tree=%p attrib=%p\n",
+           (void *)conn, xcb_connection_has_error(conn), (unsigned)window,
+           (void *)tree, (void *)attrib);
+   if (attrib == NULL || tree == NULL) {
+      free(attrib);''', 1)
+    t = t.replace(r'''   xcb_screen_t *screen = get_screen_for_root(conn, root);
+   if (screen == NULL)
+      return NULL;
+''', r'''   xcb_screen_t *screen = get_screen_for_root(conn, root);
+   fprintf(stderr, "[WSI] visual: root=%u screen=%p visual_id=%u\n",
+           (unsigned)root, (void *)screen, (unsigned)visual_id);
+   if (screen == NULL)
+      return NULL;
+''', 1)
+    # no abortar si no se encuentra el visual: crear la superficie igualmente (sin alpha)
+    t = t.replace(r'''   if (!visual)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+''', r'''   if (!visual)
+      fprintf(stderr, "[WSI] WARNING: visual no encontrado, se crea la superficie sin alpha\n");
+''')
+    t = t.replace("surface->has_alpha = visual_has_alpha(visual, visual_depth);",
+                  "surface->has_alpha = visual ? visual_has_alpha(visual, visual_depth) : false;")
+    if t != o:
+        open(f, "w").write(t)
+        print("-> wsi_common_x11.c: trazas de visual + superficie tolerante")
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
