@@ -62,6 +62,8 @@ struct wsi_device {
    
    uint32_t queue_family_count;
    uint64_t queue_supports_blit;
+   uint64_t queue_supports_timestamps;
+   float timestamp_period;
    uint32_t timestamp_bits;
 
    VkPhysicalDeviceDrmPropertiesEXT drm_info;
@@ -72,6 +74,16 @@ struct wsi_device {
 
    bool has_import_memory_host;
    bool has_timeline_semaphore;
+   bool has_present_wait;
+   bool has_host_query_reset;
+
+   /** Whether the device uses 32bpp formats for 24bpp
+    *
+    * If true, VkImages created with R8G8B8/B8G8R8 formats will be
+    * exported as 32bpp to the window system, as if they were B8G8R8A8
+    * or R8G8B8A8
+    */
+   bool emulate_24as32;
 
    /** Indicates if wsi_image_create_info::scanout is supported
     *
@@ -202,15 +214,20 @@ struct wsi_device {
    WSI_CB(CmdPipelineBarrier);
    WSI_CB(CmdCopyImage);
    WSI_CB(CmdCopyImageToBuffer);
+   WSI_CB(CmdResetQueryPool);
+   WSI_CB(ResetQueryPoolEXT);
+   WSI_CB(CmdWriteTimestamp);
    WSI_CB(CreateBuffer);
    WSI_CB(CreateCommandPool);
    WSI_CB(CreateFence);
    WSI_CB(CreateImage);
+   WSI_CB(CreateQueryPool);
    WSI_CB(CreateSemaphore);
    WSI_CB(DestroyBuffer);
    WSI_CB(DestroyCommandPool);
    WSI_CB(DestroyFence);
    WSI_CB(DestroyImage);
+   WSI_CB(DestroyQueryPool);
    WSI_CB(DestroySemaphore);
    WSI_CB(EndCommandBuffer);
    WSI_CB(FreeMemory);
@@ -221,14 +238,21 @@ struct wsi_device {
    WSI_CB(GetImageMemoryRequirements);
    WSI_CB(GetImageSubresourceLayout);
    WSI_CB(GetMemoryFdKHR);
+   WSI_CB(GetPhysicalDeviceCalibrateableTimeDomainsKHR);
+   WSI_CB(GetCalibratedTimestampsKHR);
+   WSI_CB(GetPhysicalDeviceProperties);
    WSI_CB(GetPhysicalDeviceFormatProperties);
    WSI_CB(GetPhysicalDeviceFormatProperties2);
    WSI_CB(GetPhysicalDeviceImageFormatProperties2);
+   WSI_CB(GetPhysicalDeviceQueueFamilyProperties);
+   WSI_CB(GetQueryPoolResults);
    WSI_CB(GetSemaphoreFdKHR);
    WSI_CB(ImportSemaphoreFdKHR);
    WSI_CB(ImportFenceFdKHR);
    WSI_CB(ResetFences);
    WSI_CB(QueueSubmit);
+   WSI_CB(QueueSubmit2);
+   WSI_CB(SetDebugUtilsObjectNameEXT);
    WSI_CB(WaitForFences);
    WSI_CB(MapMemory);
    WSI_CB(UnmapMemory);
@@ -249,6 +273,7 @@ typedef PFN_vkVoidFunction (VKAPI_PTR *WSI_FN_GetPhysicalDeviceProcAddr)(VkPhysi
 struct wsi_device_options {
    bool sw_device;
    bool extra_xwayland_image;
+   bool emulate_24as32;
 };
 
 VkResult
