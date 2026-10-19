@@ -247,6 +247,108 @@ if t and "[WSI] visual:" not in t:
         print("-> wsi_common_x11.c: trazas de visual + superficie tolerante")
 PY
 
+# Más migas [WSI] (entrada de cada consulta de superficie y resultado de crear la superficie)
+python3 - <<'PY'
+def entry_trace(t, name):
+    i = t.find(name + "(")
+    if i < 0:
+        return t
+    j = t.find("\n{\n", i)
+    if j < 0:
+        return t
+    ins = '\n   fprintf(stderr, "[WSI] -> %s\\n");' % name
+    if ins in t:
+        return t
+    return t[:j + 3] + ins[1:] + "\n" + t[j + 3:]
+
+f = "src/vulkan/wsi/wsi_common.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "[WSI] -> wsi_GetPhysicalDeviceSurfaceFormatsKHR" not in t:
+    for n in ("wsi_GetPhysicalDeviceSurfaceCapabilitiesKHR",
+              "wsi_GetPhysicalDeviceSurfaceCapabilities2KHR",
+              "wsi_GetPhysicalDeviceSurfaceFormatsKHR",
+              "wsi_GetPhysicalDeviceSurfaceFormats2KHR",
+              "wsi_GetPhysicalDeviceSurfacePresentModesKHR"):
+        t = entry_trace(t, n)
+    open(f, "w").write(t)
+    print("-> wsi_common.c: trazas de entrada")
+
+f = "src/vulkan/wsi/wsi_common_x11.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "[WSI] surface creada" not in t:
+    for k in ("xlib", "xcb"):
+        old = "   *pSurface = VkIcdSurfaceBase_to_handle(&surface->%s.base);\n   return VK_SUCCESS;" % k
+        new = ("   *pSurface = VkIcdSurfaceBase_to_handle(&surface->%s.base);\n"
+               "   fprintf(stderr, \"[WSI] surface creada (%s) has_alpha=%%d\\n\", (int)surface->has_alpha);\n"
+               "   return VK_SUCCESS;") % (k, k)
+        t = t.replace(old, new, 1)
+    for n in ("wsi_GetPhysicalDeviceXcbPresentationSupportKHR",
+              "wsi_GetPhysicalDeviceXlibPresentationSupportKHR"):
+        i = t.find(n + "(")
+        j = t.find("\n{\n", i) if i >= 0 else -1
+        if j >= 0:
+            t = t[:j + 3] + '   fprintf(stderr, "[WSI] -> %s\\n");\n' % n + t[j + 3:]
+    open(f, "w").write(t)
+    print("-> wsi_common_x11.c: trazas de creación y soporte de presentación")
+PY
+
+if [ -f src/vulkan/wsi/wsi_common.c ] && ! grep -q "\[CRASH\]" src/vulkan/wsi/wsi_common.c; then
+cat >> src/vulkan/wsi/wsi_common.c <<'CEOF'
+
+/* ---- [CRASH] backtrace en SIGABRT (solo si WRAPPER_DIAG está activo) ---- */
+#include <signal.h>
+#include <dlfcn.h>
+#include <unwind.h>
+#include <string.h>
+
+static _Unwind_Reason_Code
+wsi_crash_cb(struct _Unwind_Context *ctx, void *arg)
+{
+   int *n = (int *)arg;
+   uintptr_t pc = (uintptr_t)_Unwind_GetIP(ctx);
+   if (!pc)
+      return _URC_END_OF_STACK;
+   Dl_info info;
+   if (dladdr((void *)pc, &info) && info.dli_fname) {
+      const char *base = strrchr(info.dli_fname, '/');
+      fprintf(stderr, "[CRASH] #%d pc=%p %s+0x%lx %s\n", *n, (void *)pc,
+              base ? base + 1 : info.dli_fname,
+              (unsigned long)(pc - (uintptr_t)info.dli_fbase),
+              info.dli_sname ? info.dli_sname : "");
+   } else {
+      fprintf(stderr, "[CRASH] #%d pc=%p\n", *n, (void *)pc);
+   }
+   (*n)++;
+   return *n >= 40 ? _URC_END_OF_STACK : _URC_NO_REASON;
+}
+
+static void
+wsi_crash_handler(int sig)
+{
+   int n = 0;
+   fprintf(stderr, "[CRASH] signal %d, backtrace:\n", sig);
+   _Unwind_Backtrace(wsi_crash_cb, &n);
+   signal(sig, SIG_DFL);
+   raise(sig);
+}
+
+__attribute__((constructor)) static void
+wsi_crash_install(void)
+{
+   const char *d = getenv("WRAPPER_DIAG");
+   if (d && atoi(d))
+      signal(SIGABRT, wsi_crash_handler);   /* solo SIGABRT: Wine usa SIGSEGV */
+}
+CEOF
+echo "-> wsi_common.c: handler [CRASH] en SIGABRT añadido"
+fi
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
@@ -381,6 +483,10 @@ echo "=== Símbolos sin resolver (sin @LIBC ni AAudio/AHardwareBuffer/ANativeWin
   | grep -vE "@|^AAudio|^AHardwareBuffer|^ANativeWindow|^ASurface|^__android|^android_" | sort | head -300 || true
 echo "=== Resumen NEEDED final ==="
 "${NDK_BIN}/llvm-readelf" -d "$OUT" | grep -E "NEEDED|SONAME" || true
+
+# Tabla de símbolos para resolver los offsets [CRASH] (súbela junto al artefacto)
+"${NDK_BIN}/llvm-nm" -n -C --defined-only "${BUILD_DIR}/libvulkan_wrapper.so.unstripped" > ./symbols.txt 2>/dev/null || true
+echo "-> symbols.txt: $(wc -l < ./symbols.txt 2>/dev/null) símbolos"
 
 # ---------- ROOTFS ----------
 ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
