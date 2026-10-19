@@ -349,18 +349,6 @@ wsi_caps_get_image_usage(void);
 bool
 wsi_device_supports_explicit_sync(struct wsi_device *device);
 
-static inline VkImageUsageFlags2KHR
-vk_swapchain_usage_flags(const VkSwapchainCreateInfoKHR *info)
-{
-   const VkImageUsageFlags2CreateInfoKHR *usage2 =
-      vk_find_struct_const(info->pNext,
-                           IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR);
-   if (usage2)
-      return usage2->usage;
-   else
-      return info->imageUsage;
-}
-
 #define wsi_common_vk_warn_once(warning) \
    do { \
       static int warned = false; \
