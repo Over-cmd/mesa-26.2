@@ -77,12 +77,31 @@ if s:
         print(f"-> Parcheado {f}")
 PY
 
+# wrapper_physical_device.c: usa API que Mesa 26 ya no tiene.
+# - wsi_device.engine_name ya no existe -> se elimina la asignación.
+# - VK_QUEUE_PRESENT_BIT no es un flag real de Vulkan -> se define como 0 en c_args.
+python3 - <<'PY'
+import re
+f = "src/vulkan/wrapper/wrapper_physical_device.c"
+try:
+    s = open(f).read()
+except FileNotFoundError:
+    s = None
+if s:
+    n = re.sub(r"^[ \t]*pdevice->wsi_device\.engine_name\s*=.*$",
+               "   /* patched: wsi_device.engine_name removido en Mesa 26 */",
+               s, flags=re.M)
+    if n != s:
+        open(f, "w").write(n)
+        print(f"-> Parcheado {f}")
+PY
+
 # ---------- CROSS FILE ----------
 rm -rf "${BUILD_DIR}"
 CROSS="${BUILD_DIR}_cross_file.txt"
 rm -f "${CROSS}"
 
-COMMON_ARGS="'-include', 'sys/sysmacros.h', '-include', 'fcntl.h', '-include', 'unistd.h', '-D_GNU_SOURCE', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
+COMMON_ARGS="'-include', 'sys/sysmacros.h', '-include', 'fcntl.h', '-include', 'unistd.h', '-D_GNU_SOURCE', '-DVK_QUEUE_PRESENT_BIT=0', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
 
 cat << EOF > "${CROSS}"
 [binaries]
