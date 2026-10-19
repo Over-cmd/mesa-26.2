@@ -29,6 +29,7 @@
 #include "util/log.h"
 #include "vk_alloc.h"
 #include "vk_dispatch_table.h"
+#include "vk_internal_exts.h"
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_icd.h>
 
@@ -43,53 +44,6 @@ extern const struct vk_device_entrypoint_table wsi_device_entrypoints;
 #endif
 
 #include <util/list.h>
-
-/* This is guaranteed to not collide with anything because it's in the
- * VK_KHR_swapchain namespace but not actually used by the extension.
- */
-#define VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA (VkStructureType)1000001002
-#define VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA (VkStructureType)1000001003
-#define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA (VkStructureType)1000001005
-#define VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA (VkStructureType)1000001006
-
-#define VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA_cast struct wsi_image_create_info
-#define VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA_cast struct wsi_memory_allocate_info
-#define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA_cast struct wsi_surface_supported_counters
-#define VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA_cast struct wsi_memory_signal_submit_info
-
-/* This is always chained to VkImageCreateInfo when a wsi image is created.
- * It indicates that the image can be transitioned to/from
- * VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
- */
-struct wsi_image_create_info {
-    VkStructureType sType;
-    const void *pNext;
-    bool scanout;
-
-    /* if true, the image is a blit source */
-    bool blit_src;
-};
-
-struct wsi_memory_allocate_info {
-    VkStructureType sType;
-    const void *pNext;
-    bool implicit_sync;
-};
-
-/* To be chained into VkSurfaceCapabilities2KHR */
-struct wsi_surface_supported_counters {
-   VkStructureType sType;
-   const void *pNext;
-
-   VkSurfaceCounterFlagsEXT supported_surface_counters;
-};
-
-/* To be chained into VkSubmitInfo */
-struct wsi_memory_signal_submit_info {
-    VkStructureType sType;
-    const void *pNext;
-    VkDeviceMemory memory;
-};
 
 struct wsi_interface;
 struct vk_instance;
@@ -108,6 +62,7 @@ struct wsi_device {
    
    uint32_t queue_family_count;
    uint64_t queue_supports_blit;
+   uint32_t timestamp_bits;
 
    VkPhysicalDeviceDrmPropertiesEXT drm_info;
    VkPhysicalDevicePCIBusInfoPropertiesEXT pci_bus_info;
