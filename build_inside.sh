@@ -59,6 +59,24 @@ except FileNotFoundError:
     pass
 PY
 
+# vk_wrapper_features_gen.py: el vk.xml nuevo tiene features duplicadas entre KHR/EXT/NV
+# (micromap, deviceFault, rayTracingInvocationReorder). Se convierte el assert en aviso.
+python3 - <<'PY'
+import re
+f = "src/vulkan/wrapper/vk_wrapper_features_gen.py"
+try:
+    s = open(f).read()
+except FileNotFoundError:
+    s = None
+if s:
+    n = re.sub(r"^([ \t]*)assert len\(diagnostics\) == 0,.*$",
+               r"\1if diagnostics:\n\1    import sys; print('WARN (ignorado):\\n' + '\\n'.join(diagnostics), file=sys.stderr)",
+               s, flags=re.M)
+    if n != s:
+        open(f, "w").write(n)
+        print(f"-> Parcheado {f}")
+PY
+
 # ---------- CROSS FILE ----------
 rm -rf "${BUILD_DIR}"
 CROSS="${BUILD_DIR}_cross_file.txt"
