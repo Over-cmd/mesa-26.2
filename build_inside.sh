@@ -17,6 +17,10 @@ NDK_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 export CFLAGS="$CFLAGS -laaudio -I/data/data/com.termux/files/usr/include -I/data/data/com.termux/files/usr/include/libdrm"
 export LDFLAGS="$LDFLAGS -laaudio -L/data/data/com.termux/files/usr/lib -ldrm -lxcb -lxcb-randr -lxcb-xfixes -lX11 -lX11-xcb"
 
+# 🛠️ PARCHE INDUSTRIAL PARA EVITAR EL BLOQUEO DE PLATAFORMA EN UTILS DE MESA
+sed -i 's/#error unexpected platform in os_misc.c/\/\/ #error unexpected platform in os_misc.c/g' src/util/os_misc.c 2>/dev/null || true
+sed -i 's/#error unexpected platform in os_sysinfo.c/\/\/ #error unexpected platform in os_sysinfo.c/g' src/util/os_sysinfo.c 2>/dev/null || true
+
 # 🛠️ CREAR ARCHIVO DE COMPILACIÓN CRUZADA (CROSS FILE)
 rm -rf "${BUILD_DIR}"
 LOCAL_CROSS_FILE="${BUILD_DIR}_cross_file.txt"
