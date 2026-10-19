@@ -154,6 +154,23 @@ wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
     print(f"-> wsi_common.c parcheado (SurfaceSupport={n1}, fallback blit={n2})")
 PY
 
+# wsi_common_x11.c: ver_reply puede ser NULL si el servidor X (Termux:X11/Bannerlator) no responde la versión.
+python3 - <<'PY'
+f = "src/vulkan/wsi/wsi_common_x11.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t:
+    o = t
+    t = t.replace("has_present_v1_2 =\n        (ver_reply->major_version", "has_present_v1_2 = ver_reply != NULL &&\n        (ver_reply->major_version")
+    t = t.replace("has_present_v1_4 =\n        (ver_reply->major_version", "has_present_v1_4 = ver_reply != NULL &&\n        (ver_reply->major_version")
+    t = t.replace("wsi_conn->has_xfixes = (ver_reply->major_version >= 2);", "wsi_conn->has_xfixes = (ver_reply != NULL && ver_reply->major_version >= 2);")
+    if t != o:
+        open(f, "w").write(t)
+        print("-> wsi_common_x11.c parcheado (NULL checks)")
+PY
+
 # ---------- LIBS X11/XCB/DRM (el meson.build las pone como null_dep, hay que enlazarlas a mano) ----------
 TERMUX_LIB="/data/data/com.termux/files/usr/lib"
 XLINK=""
@@ -163,12 +180,23 @@ for f in "${TERMUX_LIB}"/libxcb*.so "${TERMUX_LIB}"/libX11.so "${TERMUX_LIB}"/li
 done
 echo "-> Libs X11/XCB enlazadas: ${XLINK}"
 
+# Mesa define HAVE_LIBDRM / HAVE_X11_DRM en su meson.build original; el tuyo no.
+# Sin ellos, wsi_common_x11.c cae en UNREACHABLE("X11 DRM support missing!") al crear
+# el swapchain (y wsi_common.c no compila el camino DRM). Por eso Vulkan no presenta.
+DRM_DEFS=""
+if [ -f "/data/data/com.termux/files/usr/include/libdrm/xf86drm.h" ] || [ -f "/data/data/com.termux/files/usr/include/xf86drm.h" ]; then
+    DRM_DEFS=", '-DHAVE_LIBDRM=1', '-DHAVE_X11_DRM=1'"
+    echo "-> libdrm encontrado: se definen HAVE_LIBDRM y HAVE_X11_DRM"
+else
+    echo "-> [AVISO] no hay xf86drm.h de libdrm; el WSI X11 no podrá presentar"
+fi
+
 # ---------- CROSS FILE ----------
 rm -rf "${BUILD_DIR}"
 CROSS="${BUILD_DIR}_cross_file.txt"
 rm -f "${CROSS}"
 
-COMMON_ARGS="'-include', 'sys/sysmacros.h', '-include', 'fcntl.h', '-include', 'unistd.h', '-D_GNU_SOURCE', '-DVK_QUEUE_PRESENT_BIT=0x80', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
+COMMON_ARGS="'-include', 'sys/sysmacros.h', '-include', 'fcntl.h', '-include', 'unistd.h', '-D_GNU_SOURCE', '-DVK_QUEUE_PRESENT_BIT=0x80', '-DHAVE_FFSLL=0'${DRM_DEFS}, '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
 
 cat << EOF > "${CROSS}"
 [binaries]
@@ -189,6 +217,9 @@ system = 'android'
 cpu_family = '${CPU_FAMILY}'
 cpu = '${CPU}'
 endian = 'little'
+
+[properties]
+pkg_config_libdir = ['/data/data/com.termux/files/usr/lib/pkgconfig', '/data/data/com.termux/files/usr/share/pkgconfig']
 EOF
 
 # ---------- MESON ----------
@@ -212,6 +243,11 @@ meson setup "${BUILD_DIR}" --cross-file "${CROSS}" \
 
 echo "-> Compilando con Ninja..."
 ninja -C "${BUILD_DIR}"
+
+echo "=== WSI: objetos compilados (wsi_common_drm debe aparecer) ==="
+find "${BUILD_DIR}" -name "wsi_common*.o" | sed 's|.*/||' | sort
+echo "=== Unidades con HAVE_X11_DRM en compile_commands ==="
+grep -c "HAVE_X11_DRM" "${BUILD_DIR}/compile_commands.json" || true
 
 # ---------- LOCALIZAR WRAPPER ----------
 SRC="${BUILD_DIR}/src/vulkan/wrapper/libvulkan_wrapper.so"
