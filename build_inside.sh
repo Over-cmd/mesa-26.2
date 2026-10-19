@@ -64,7 +64,7 @@ rm -rf "${BUILD_DIR}"
 CROSS="${BUILD_DIR}_cross_file.txt"
 rm -f "${CROSS}"
 
-COMMON_ARGS="'-D_GNU_SOURCE', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
+COMMON_ARGS="'-include', 'sys/sysmacros.h', '-D_GNU_SOURCE', '-DHAVE_FFSLL=0', '-DDETECT_OS_LINUX=1', '-DDETECT_OS_UNIX=1', '-DDETECT_OS_ANDROID=1', '-DVK_USE_PLATFORM_ANDROID_KHR=1', '-I/workspace/workspace_headers', '-I/data/data/com.termux/files/usr/include', '-I/data/data/com.termux/files/usr/include/libdrm'"
 
 cat << EOF > "${CROSS}"
 [binaries]
