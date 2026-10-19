@@ -34,6 +34,11 @@ else
   files_vulkan_wsi += files('wsi_common_headless.c')
 endif
 
+# 🟢 INTEGRACIÓN DEL WSI PERSONALIZADO DE ANDROID PARA EL BLIT
+if with_platform_android
+  files_vulkan_wsi += files('wsi_common_android.c')
+endif
+
 if with_platform_macos
   files_vulkan_wsi += files('wsi_common_metal.c', 'wsi_common_metal_layer.m')
 endif
