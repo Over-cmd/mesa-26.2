@@ -78,7 +78,7 @@ if s:
 PY
 
 # wrapper_physical_device.c: usa API que Mesa 26 ya no tiene.
-# - wsi_device.engine_name ya no existe -> se elimina la asignación.
+# - engine_name: solo se elimina la asignación si tu wsi_common.h NO tiene el campo (con tu header actual sí existe y se conserva).
 # - VK_QUEUE_PRESENT_BIT no es flag real de Vulkan -> bit libre 0x80 (NO 0: el wrapper lo usa como marca de "puede presentar").
 python3 - <<'PY'
 import re
@@ -87,7 +87,11 @@ try:
     s = open(f).read()
 except FileNotFoundError:
     s = None
-if s:
+try:
+    hdr = open("src/vulkan/wsi/wsi_common.h").read()
+except FileNotFoundError:
+    hdr = ""
+if s and "engine_name" not in hdr:
     n = re.sub(r"^[ \t]*pdevice->wsi_device\.engine_name\s*=.*$",
                "   /* patched: wsi_device.engine_name removido en Mesa 26 */",
                s, flags=re.M)
@@ -152,6 +156,24 @@ wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
         s = s.replace(marker, fb + marker, 1); n2 = 1
     open(f, "w").write(s)
     print(f"-> wsi_common.c parcheado (SurfaceSupport={n1}, fallback blit={n2})")
+PY
+
+# wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
+# (si tu copia local del header no está en el repo, el CI compila con otra versión).
+python3 - <<'PY'
+import re
+f = "src/vulkan/wsi/wsi_common.h"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "cached_sync_file_import_export_result" not in t:
+    n = re.sub(r"(struct wsi_device \{.*?)(\n\};)",
+               lambda m: m.group(1) + "\n   uint32_t cached_sync_file_import_export_result;" + m.group(2),
+               t, count=1, flags=re.S)
+    if n != t:
+        open(f, "w").write(n)
+        print("-> wsi_common.h: añadido cached_sync_file_import_export_result")
 PY
 
 # wsi_common_x11.c: ver_reply puede ser NULL si el servidor X (Termux:X11/Bannerlator) no responde la versión.
