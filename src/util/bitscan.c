@@ -28,6 +28,8 @@
 
 #include "bitscan.h"
 
+#if !defined(__ANDROID__)
+
 #ifdef HAVE___BUILTIN_FFS
 #elif defined(_MSC_VER) && (_M_IX86 || _M_ARM || _M_AMD64 || _M_IA64)
 #else
@@ -78,3 +80,5 @@ ffsll(long long int val)
    return 0;
 }
 #endif
+
+#endif /* !defined(__ANDROID__) */
