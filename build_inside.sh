@@ -158,6 +158,58 @@ wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
     print(f"-> wsi_common.c parcheado (SurfaceSupport={n1}, fallback blit={n2})")
 PY
 
+# Migas de pan [WSI] (stderr -> archivo de diagnóstico) para ver hasta dónde llega la presentación.
+python3 - <<'PY'
+def patch(path, pairs):
+    try:
+        t = open(path).read()
+    except FileNotFoundError:
+        return
+    o = t
+    for old, new in pairs:
+        if old in t and new not in t:
+            t = t.replace(old, new, 1)
+    if t != o:
+        open(path, "w").write(t)
+        print("-> trazas [WSI] añadidas en " + path)
+
+patch("src/vulkan/wsi/wsi_common.c", [
+(r'''   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
+   struct wsi_device *wsi_device = device->physical->wsi_device;
+''', r'''   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
+   struct wsi_device *wsi_device = device->physical->wsi_device;
+   fprintf(stderr, "[WSI] CreateSwapchain platform=%d fmt=%d %ux%u minImages=%u mode=%d iface=%p\n",
+           (int)surface->platform, (int)pCreateInfo->imageFormat,
+           pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+           pCreateInfo->minImageCount, (int)pCreateInfo->presentMode,
+           (void *)wsi_device->wsi[surface->platform]);
+'''),
+(r'''                                             &info, alloc,
+                                             &swapchain);
+   if (result != VK_SUCCESS)
+      return result;
+''', r'''                                             &info, alloc,
+                                             &swapchain);
+   fprintf(stderr, "[WSI] create_swapchain -> %d\n", (int)result);
+   if (result != VK_SUCCESS)
+      return result;
+'''),
+])
+
+patch("src/vulkan/wsi/wsi_common_x11.c", [
+(r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR);
+''', r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR);
+   fprintf(stderr, "[WSI] CreateXcbSurface conn=%p window=%u\n",
+           (void *)pCreateInfo->connection, (unsigned)pCreateInfo->window);
+'''),
+(r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR);
+''', r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR);
+   fprintf(stderr, "[WSI] CreateXlibSurface dpy=%p window=%lu\n",
+           (void *)pCreateInfo->dpy, (unsigned long)pCreateInfo->window);
+'''),
+])
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
