@@ -96,6 +96,64 @@ if s:
         print(f"-> Parcheado {f}")
 PY
 
+# wsi_common.c: diagnóstico + soporte de presentación robusto.
+# - Si iface->get_support falla (p.ej. DRI3 ausente en Termux:X11) no se pierde la cola gráfica.
+# - Si queue_supports_blit queda en 0, se marcan todas las colas.
+# - Imprime [WSI] support: ... en stderr para diagnosticar.
+python3 - <<'PY'
+import re
+f = "src/vulkan/wsi/wsi_common.c"
+try:
+    s = open(f).read()
+except FileNotFoundError:
+    s = None
+if s and "[WSI] support:" not in s:
+    new_fn = r'''VKAPI_ATTR VkResult VKAPI_CALL
+wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
+                                       uint32_t queueFamilyIndex,
+                                       VkSurfaceKHR _surface,
+                                       VkBool32 *pSupported)
+{
+   VK_FROM_HANDLE(vk_physical_device, device, physicalDevice);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
+   struct wsi_device *wsi_device = device->wsi_device;
+   struct wsi_interface *iface = wsi_device->wsi[surface->platform];
+
+   bool has_graphics =
+      (wsi_device->queue_supports_blit & BITFIELD64_BIT(queueFamilyIndex)) != 0;
+
+   VkResult res = iface ? iface->get_support(surface, wsi_device,
+                                             queueFamilyIndex, pSupported)
+                        : VK_ERROR_SURFACE_LOST_KHR;
+
+   fprintf(stderr, "[WSI] support: platform=%d qfi=%u iface=%p res=%d "
+           "native=%u blit_mask=0x%llx qcount=%u\n",
+           (int)surface->platform, queueFamilyIndex, (void *)iface, (int)res,
+           res == VK_SUCCESS ? (unsigned)*pSupported : 0u,
+           (unsigned long long)wsi_device->queue_supports_blit,
+           wsi_device->queue_family_count);
+
+   if (res != VK_SUCCESS) {
+      *pSupported = has_graphics;
+      return has_graphics ? VK_SUCCESS : res;
+   }
+   *pSupported = *pSupported || has_graphics;
+   return VK_SUCCESS;
+}
+'''
+    s, n1 = re.subn(
+        r'VKAPI_ATTR VkResult VKAPI_CALL\s*\nwsi_GetPhysicalDeviceSurfaceSupportKHR\(.*?\n}\n',
+        lambda m: new_fn, s, count=1, flags=re.S)
+    marker = "   for (VkExternalSemaphoreHandleTypeFlags handle_type = 1;"
+    fb = ("   if (!wsi->queue_supports_blit && wsi->queue_family_count)\n"
+          "      wsi->queue_supports_blit = BITFIELD64_MASK(wsi->queue_family_count);\n\n")
+    n2 = 0
+    if marker in s:
+        s = s.replace(marker, fb + marker, 1); n2 = 1
+    open(f, "w").write(s)
+    print(f"-> wsi_common.c parcheado (SurfaceSupport={n1}, fallback blit={n2})")
+PY
+
 # ---------- LIBS X11/XCB/DRM (el meson.build las pone como null_dep, hay que enlazarlas a mano) ----------
 TERMUX_LIB="/data/data/com.termux/files/usr/lib"
 XLINK=""
