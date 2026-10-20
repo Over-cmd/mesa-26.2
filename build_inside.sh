@@ -486,6 +486,14 @@ endian = 'little'
 pkg_config_libdir = ['/data/data/com.termux/files/usr/lib/pkgconfig', '/data/data/com.termux/files/usr/share/pkgconfig']
 EOF
 
+# ---------- Dónde decide el wrapper la presentación (se imprime en el log del CI) ----------
+echo "=== grep: SurfaceSupport / PRESENT_BIT / queue families en src/vulkan/wrapper ==="
+grep -rn "SurfaceSupport\|VK_QUEUE_PRESENT_BIT\|GetPhysicalDeviceQueueFamilyProperties\|wsi_device_init" src/vulkan/wrapper 2>/dev/null | head -60 || true
+echo "=== wrapper_physical_device.c alrededor de VK_QUEUE_PRESENT_BIT ==="
+L=$(grep -n "VK_QUEUE_PRESENT_BIT" src/vulkan/wrapper/wrapper_physical_device.c 2>/dev/null | head -1 | cut -d: -f1)
+[ -n "$L" ] && sed -n "$((L-25)),$((L+25))p" src/vulkan/wrapper/wrapper_physical_device.c || true
+echo "=== fin grep ==="
+
 # ---------- MESON ----------
 meson subprojects download || true
 
