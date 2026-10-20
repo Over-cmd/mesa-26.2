@@ -49,7 +49,7 @@ wsi_metal_release_drawable(CAMetalDrawableType *drawable_ptr);
 struct wsi_metal_layer_blit_context;
 
 struct wsi_metal_layer_blit_context *
-wsi_create_metal_layer_blit_context();
+wsi_create_metal_layer_blit_context(void);
 
 void
 wsi_destroy_metal_layer_blit_context(struct wsi_metal_layer_blit_context *context);
