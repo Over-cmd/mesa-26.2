@@ -8,8 +8,9 @@
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this paragraph shall be included in all
- * copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -3515,7 +3516,7 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    if (needs_color_surface(dpy, chain->color.colorspace)) {
       chain->color.color_surface =
-         wp_color_manager_v1_get_surface(dpy->color_manager,
+         wp_color_management_surface_v1_get_surface(dpy->color_manager,
                                          chain->wsi_wl_surface->wayland_surface.wrapper);
       if (!chain->color.color_surface) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
