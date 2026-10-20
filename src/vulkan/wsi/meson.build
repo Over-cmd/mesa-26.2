@@ -64,6 +64,8 @@ libvulkan_wsi = static_library(
   'vulkan_wsi',
   [files_vulkan_wsi, wsi_entrypoints],
   include_directories : [inc_include, inc_src],
+  c_args : ['-D__TERMUX__', '-DVK_USE_PLATFORM_ANDROID_KHR=1'],
+  cpp_args : ['-D__TERMUX__', '-DVK_USE_PLATFORM_ANDROID_KHR=1'],
   dependencies : [
     vulkan_wsi_deps, dep_libdrm, dep_libudev, idep_vulkan_util_headers,
     idep_vulkan_runtime_headers, idep_xmlconfig, idep_mesautil, platform_deps,
