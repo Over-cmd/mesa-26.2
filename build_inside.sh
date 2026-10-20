@@ -349,6 +349,29 @@ CEOF
 echo "-> wsi_common.c: handler [CRASH] en SIGABRT añadido"
 fi
 
+# [ICD] qué funciones de superficie/swapchain/queue pide el cargador al wrapper (para ver si la presentación llega a pedirse).
+python3 - <<'PY'
+f = "src/vulkan/runtime/vk_instance.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "[ICD] proc_addr" not in t:
+    o = t
+    trace = ('   if (name && (strstr(name, "Surface") || strstr(name, "Swapchain") || '
+             'strstr(name, "Present") || strstr(name, "QueueFamily")))\n'
+             '      fprintf(stderr, "[ICD] proc_addr(%s)\\n", name);\n')
+    for fn in ("\nvk_instance_get_proc_addr(", "\nvk_instance_get_physical_device_proc_addr("):
+        i = t.find(fn)
+        j = t.find("\n{\n", i) if i >= 0 else -1
+        if j >= 0:
+            t = t[:j + 3] + trace + t[j + 3:]
+    if t != o:
+        t = "#include <stdio.h>\n#include <string.h>\n" + t
+        open(f, "w").write(t)
+        print("-> vk_instance.c: trazas [ICD] proc_addr")
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
