@@ -1,3 +1,26 @@
+/*
+ * Copyright © 2017 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
 #include "wsi_common.h"
 #include "wsi_common_private.h"
 #include "vk_log.h"
@@ -12,18 +35,24 @@
 #ifndef AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
 #define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
 #endif
+#ifndef AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM
+#define AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM 4
+#endif
+#ifndef AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM
+#define AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM 43
+#endif
 
 static enum wsi_swapchain_blit_type
 wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
                                    VkDevice device)
 {
-   AHardwareBuffer *ahardware_buffer;
+   struct AHardwareBuffer *ahardware_buffer;
    VkResult result;
    uint32_t probe_format = wsi->emulate_bgra8
          ? AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
          : AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM;
    
-   if (AHardwareBuffer_allocate(&(AHardwareBuffer_Desc){
+   if (MALI_AHardwareBuffer_allocate(&(struct AHardwareBuffer_Desc){
       .width = 500,
       .height = 500,
       .layers = 1,
@@ -48,7 +77,7 @@ wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
    result = wsi->GetAndroidHardwareBufferPropertiesANDROID(
       device, ahardware_buffer, &ahardware_buffer_props);
 
-   AHardwareBuffer_release(ahardware_buffer);
+   MALI_AHardwareBuffer_release(ahardware_buffer);
 
    if (result != VK_SUCCESS) {
       WRAPPER_LOG(error, "Failed to get ahardware buffer properties, blitting");
@@ -103,7 +132,6 @@ wsi_get_android_blit_type(const struct wsi_device *wsi,
 {
    int wrapper_blit = getenv("WRAPPER_BLIT") && atoi(getenv("WRAPPER_BLIT"));
    
-   // Si necesitas forzar el blit por compatibilidad con Mali o entorno específico:
    if (wsi->needs_blit || wrapper_blit) {
       WRAPPER_LOG(info, "Forzando WSI_SWAPCHAIN_IMAGE_BLIT por configuración o entorno");
       return WSI_SWAPCHAIN_IMAGE_BLIT;
