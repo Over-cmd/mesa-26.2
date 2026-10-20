@@ -63,6 +63,7 @@ extern const struct vk_device_entrypoint_table wsi_device_entrypoints;
  * It indicates that the image can be transitioned to/from
  * VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
  */
+#ifndef VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA
 struct wsi_image_create_info {
     VkStructureType sType;
     const void *pNext;
@@ -71,20 +72,25 @@ struct wsi_image_create_info {
     /* if true, the image is a blit source */
     bool blit_src;
 };
+#endif
 
+#ifndef VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA
 struct wsi_memory_allocate_info {
     VkStructureType sType;
     const void *pNext;
     bool implicit_sync;
 };
+#endif
 
 /* To be chained into VkSurfaceCapabilities2KHR */
+#ifndef VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA
 struct wsi_surface_supported_counters {
    VkStructureType sType;
    const void *pNext;
 
    VkSurfaceCounterFlagsEXT supported_surface_counters;
 };
+#endif
 
 /* To be chained into VkSubmitInfo */
 struct wsi_memory_signal_submit_info {
