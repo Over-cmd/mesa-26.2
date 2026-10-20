@@ -400,6 +400,76 @@ if t and "[ICD] proc_addr" not in t:
         print("-> vk_instance.c: trazas [ICD] proc_addr")
 PY
 
+# vkGetPhysicalDeviceSurfaceSupportKHR revienta con 0xc0000005 dentro de la llamada Unix (Wine):
+# migas por etapas en esa ruta + se evita leer a mano la estructura Display de Xlib.
+python3 - <<'PY'
+def patch(path, pairs):
+    try:
+        t = open(path).read()
+    except FileNotFoundError:
+        return
+    o = t
+    for old, new in pairs:
+        if old in t and new not in t:
+            t = t.replace(old, new, 1)
+        elif old not in t:
+            print("-> AVISO: no se encontró el trozo en " + path + ": " + old.strip().splitlines()[0][:60])
+    if t != o:
+        open(path, "w").write(t)
+        print("-> trazas de soporte de presentación añadidas en " + path)
+
+patch("src/vulkan/wsi/wsi_common_x11.c", [
+# 1) no tocar la estructura Display de Xlib (Wine siempre llama XInitThreads)
+("      return x11_xlib_display_is_thread_safe(((VkIcdSurfaceXlib *)icd_surface)->dpy);",
+ "      return true; /* parcheado: no se lee la estructura Display */"),
+("   if (!x11_xlib_display_is_thread_safe(dpy))\n      return false;\n", "   /* parcheado: sin lectura de Display */\n"),
+# 2) get_support por etapas
+("   if (!x11_surface_is_thread_safe(icd_surface)) {\n      *pSupported = false;\n      return VK_SUCCESS;\n   }\n",
+ "   WSI_TRACE(\"[WSI] get_support: entrada platform=%d qfi=%u\\n\", (int)icd_surface->platform, queueFamilyIndex);\n"
+ "   if (!x11_surface_is_thread_safe(icd_surface)) {\n      *pSupported = false;\n      return VK_SUCCESS;\n   }\n"
+ "   WSI_TRACE(\"[WSI] get_support: thread-safe ok\\n\");\n"),
+("   struct wsi_x11_connection *wsi_conn =\n      wsi_x11_get_connection(wsi_device, conn);\n   if (!wsi_conn)\n      return VK_ERROR_OUT_OF_HOST_MEMORY;\n\n   if (!wsi_device->sw) {\n      if (!wsi_x11_check_for_dri3(wsi_conn)) {\n         *pSupported = false;",
+ "   WSI_TRACE(\"[WSI] get_support: antes de get_connection conn=%p\\n\", (void *)conn);\n"
+ "   struct wsi_x11_connection *wsi_conn =\n      wsi_x11_get_connection(wsi_device, conn);\n"
+ "   WSI_TRACE(\"[WSI] get_support: wsi_conn=%p has_dri3=%d\\n\", (void *)wsi_conn, wsi_conn ? (int)wsi_conn->has_dri3 : -1);\n"
+ "   if (!wsi_conn)\n      return VK_ERROR_OUT_OF_HOST_MEMORY;\n\n   if (!wsi_device->sw) {\n      if (!wsi_x11_check_for_dri3(wsi_conn)) {\n         *pSupported = false;"),
+("   if (!visual_supported(get_visualtype_for_window(conn, window, NULL, NULL))) {\n      *pSupported = false;\n      return VK_SUCCESS;\n   }\n\n   *pSupported = true;",
+ "   if (!visual_supported(get_visualtype_for_window(conn, window, NULL, NULL))) {\n      *pSupported = false;\n      return VK_SUCCESS;\n   }\n\n"
+ "   WSI_TRACE(\"[WSI] get_support: visual ok -> soportado\\n\");\n   *pSupported = true;"),
+# 3) creación de la conexión X por etapas
+('   sync_cookie = xcb_query_extension(conn, 4, "SYNC");',
+ '   WSI_TRACE("[WSI] conn_create: inicio conn=%p sw=%d\\n", (void *)conn, (int)wsi_dev->sw);\n   sync_cookie = xcb_query_extension(conn, 4, "SYNC");'),
+("   if (!dri3_reply || !pres_reply || !xfixes_reply) {\n      free(dri3_reply);",
+ "   WSI_TRACE(\"[WSI] conn_create: extensiones dri3=%p present=%p xfixes=%p randr=%p\\n\",\n"
+ "             (void *)dri3_reply, (void *)pres_reply, (void *)xfixes_reply, (void *)randr_reply);\n"
+ "   if (!dri3_reply || !pres_reply || !xfixes_reply) {\n      free(dri3_reply);"),
+("   wsi_conn->has_xfixes = xfixes_reply->present != 0;",
+ "   WSI_TRACE(\"[WSI] conn_create: dri3/present consultados\\n\");\n   wsi_conn->has_xfixes = xfixes_reply->present != 0;"),
+("   wsi_conn->is_xwayland = wsi_x11_detect_xwayland(conn, randr_reply,\n                                                   xwl_reply);\n",
+ "   WSI_TRACE(\"[WSI] conn_create: antes de detect_xwayland\\n\");\n"
+ "   wsi_conn->is_xwayland = wsi_x11_detect_xwayland(conn, randr_reply,\n                                                   xwl_reply);\n"
+ "   WSI_TRACE(\"[WSI] conn_create: xwayland=%d\\n\", (int)wsi_conn->is_xwayland);\n"),
+("   list_inithead(&wsi_conn->screen_resources_list);\n\n   xcb_screen_iterator_t it",
+ "   WSI_TRACE(\"[WSI] conn_create: antes de screen_resources\\n\");\n   list_inithead(&wsi_conn->screen_resources_list);\n\n   xcb_screen_iterator_t it"),
+("   free(dri3_reply);\n   free(pres_reply);\n   free(randr_reply);\n   free(xwl_reply);",
+ "   WSI_TRACE(\"[WSI] conn_create: screen_resources ok\\n\");\n   free(dri3_reply);\n   free(pres_reply);\n   free(randr_reply);\n   free(xwl_reply);"),
+])
+
+# entrada de wsi_GetPhysicalDeviceSurfaceSupportKHR
+f = "src/vulkan/wsi/wsi_common.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "[WSI] -> SurfaceSupportKHR" not in t:
+    i = t.find("wsi_GetPhysicalDeviceSurfaceSupportKHR(")
+    j = t.find("\n{\n", i) if i >= 0 else -1
+    if j >= 0:
+        t = t[:j + 3] + '   WSI_TRACE("[WSI] -> SurfaceSupportKHR qfi=%u\\n", queueFamilyIndex);\n' + t[j + 3:]
+        open(f, "w").write(t)
+        print("-> wsi_common.c: traza de entrada de SurfaceSupportKHR")
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
