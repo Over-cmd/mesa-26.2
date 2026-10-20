@@ -46,13 +46,13 @@ static enum wsi_swapchain_blit_type
 wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
                                    VkDevice device)
 {
-   struct AHardwareBuffer *ahardware_buffer;
+   AHardwareBuffer *ahardware_buffer;
    VkResult result;
    uint32_t probe_format = wsi->emulate_bgra8
          ? AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
          : AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM;
    
-   if (MALI_AHardwareBuffer_allocate(&(struct AHardwareBuffer_Desc){
+   if (AHardwareBuffer_allocate(&(AHardwareBuffer_Desc){
       .width = 500,
       .height = 500,
       .layers = 1,
@@ -77,7 +77,7 @@ wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
    result = wsi->GetAndroidHardwareBufferPropertiesANDROID(
       device, ahardware_buffer, &ahardware_buffer_props);
 
-   MALI_AHardwareBuffer_release(ahardware_buffer);
+   AHardwareBuffer_release(ahardware_buffer);
 
    if (result != VK_SUCCESS) {
       WRAPPER_LOG(error, "Failed to get ahardware buffer properties, blitting");
