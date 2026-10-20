@@ -130,7 +130,7 @@ wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
                                              queueFamilyIndex, pSupported)
                         : VK_ERROR_SURFACE_LOST_KHR;
 
-   fprintf(stderr, "[WSI] support: platform=%d qfi=%u iface=%p res=%d "
+   WSI_TRACE("[WSI] support: platform=%d qfi=%u iface=%p res=%d "
            "native=%u blit_mask=0x%llx qcount=%u\n",
            (int)surface->platform, queueFamilyIndex, (void *)iface, (int)res,
            res == VK_SUCCESS ? (unsigned)*pSupported : 0u,
@@ -158,6 +158,34 @@ wsi_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
     print(f"-> wsi_common.c parcheado (SurfaceSupport={n1}, fallback blit={n2})")
 PY
 
+# WSI_TRACE: escribe las trazas directamente en WRAPPER_DIAG_FILE (el stderr solo se redirige al crear el
+# dispositivo, así que lo anterior —superficie, cargador— se perdía). Solo actúa con WRAPPER_DIAG=1.
+python3 - <<'PY'
+MACRO = r'''#ifndef WSI_TRACE
+#include <stdio.h>
+#include <stdlib.h>
+#define WSI_TRACE(...) do { \
+   const char *_wd = getenv("WRAPPER_DIAG"); \
+   if (_wd && atoi(_wd)) { \
+      const char *_wp = getenv("WRAPPER_DIAG_FILE"); \
+      FILE *_wf = _wp ? fopen(_wp, "a") : NULL; \
+      if (_wf) { fprintf(_wf, __VA_ARGS__); fclose(_wf); } \
+      else { fprintf(stderr, __VA_ARGS__); } \
+   } \
+} while (0)
+#endif
+'''
+for f in ("src/vulkan/wsi/wsi_common.c", "src/vulkan/wsi/wsi_common_x11.c",
+          "src/vulkan/runtime/vk_instance.c"):
+    try:
+        t = open(f).read()
+    except FileNotFoundError:
+        continue
+    if "define WSI_TRACE" not in t:
+        open(f, "w").write(MACRO + t)
+        print("-> WSI_TRACE añadido a " + f)
+PY
+
 # Migas de pan [WSI] (stderr -> archivo de diagnóstico) para ver hasta dónde llega la presentación.
 python3 - <<'PY'
 def patch(path, pairs):
@@ -178,7 +206,7 @@ patch("src/vulkan/wsi/wsi_common.c", [
    struct wsi_device *wsi_device = device->physical->wsi_device;
 ''', r'''   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
    struct wsi_device *wsi_device = device->physical->wsi_device;
-   fprintf(stderr, "[WSI] CreateSwapchain platform=%d fmt=%d %ux%u minImages=%u mode=%d iface=%p\n",
+   WSI_TRACE("[WSI] CreateSwapchain platform=%d fmt=%d %ux%u minImages=%u mode=%d iface=%p\n",
            (int)surface->platform, (int)pCreateInfo->imageFormat,
            pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
            pCreateInfo->minImageCount, (int)pCreateInfo->presentMode,
@@ -190,7 +218,7 @@ patch("src/vulkan/wsi/wsi_common.c", [
       return result;
 ''', r'''                                             &info, alloc,
                                              &swapchain);
-   fprintf(stderr, "[WSI] create_swapchain -> %d\n", (int)result);
+   WSI_TRACE("[WSI] create_swapchain -> %d\n", (int)result);
    if (result != VK_SUCCESS)
       return result;
 '''),
@@ -199,12 +227,12 @@ patch("src/vulkan/wsi/wsi_common.c", [
 patch("src/vulkan/wsi/wsi_common_x11.c", [
 (r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR);
 ''', r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR);
-   fprintf(stderr, "[WSI] CreateXcbSurface conn=%p window=%u\n",
+   WSI_TRACE("[WSI] CreateXcbSurface conn=%p window=%u\n",
            (void *)pCreateInfo->connection, (unsigned)pCreateInfo->window);
 '''),
 (r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR);
 ''', r'''   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR);
-   fprintf(stderr, "[WSI] CreateXlibSurface dpy=%p window=%lu\n",
+   WSI_TRACE("[WSI] CreateXlibSurface dpy=%p window=%lu\n",
            (void *)pCreateInfo->dpy, (unsigned long)pCreateInfo->window);
 '''),
 ])
@@ -220,7 +248,7 @@ except FileNotFoundError:
 if t and "[WSI] visual:" not in t:
     o = t
     t = t.replace(r'''   if (attrib == NULL || tree == NULL) {
-      free(attrib);''', r'''   fprintf(stderr, "[WSI] visual: conn=%p conn_err=%d window=%u tree=%p attrib=%p\n",
+      free(attrib);''', r'''   WSI_TRACE("[WSI] visual: conn=%p conn_err=%d window=%u tree=%p attrib=%p\n",
            (void *)conn, xcb_connection_has_error(conn), (unsigned)window,
            (void *)tree, (void *)attrib);
    if (attrib == NULL || tree == NULL) {
@@ -229,7 +257,7 @@ if t and "[WSI] visual:" not in t:
    if (screen == NULL)
       return NULL;
 ''', r'''   xcb_screen_t *screen = get_screen_for_root(conn, root);
-   fprintf(stderr, "[WSI] visual: root=%u screen=%p visual_id=%u\n",
+   WSI_TRACE("[WSI] visual: root=%u screen=%p visual_id=%u\n",
            (unsigned)root, (void *)screen, (unsigned)visual_id);
    if (screen == NULL)
       return NULL;
@@ -238,7 +266,7 @@ if t and "[WSI] visual:" not in t:
     t = t.replace(r'''   if (!visual)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 ''', r'''   if (!visual)
-      fprintf(stderr, "[WSI] WARNING: visual no encontrado, se crea la superficie sin alpha\n");
+      WSI_TRACE("[WSI] WARNING: visual no encontrado, se crea la superficie sin alpha\n");
 ''')
     t = t.replace("surface->has_alpha = visual_has_alpha(visual, visual_depth);",
                   "surface->has_alpha = visual ? visual_has_alpha(visual, visual_depth) : false;")
@@ -256,7 +284,7 @@ def entry_trace(t, name):
     j = t.find("\n{\n", i)
     if j < 0:
         return t
-    ins = '\n   fprintf(stderr, "[WSI] -> %s\\n");' % name
+    ins = '\n   WSI_TRACE("[WSI] -> %s\\n");' % name
     if ins in t:
         return t
     return t[:j + 3] + ins[1:] + "\n" + t[j + 3:]
@@ -285,7 +313,7 @@ if t and "[WSI] surface creada" not in t:
     for k in ("xlib", "xcb"):
         old = "   *pSurface = VkIcdSurfaceBase_to_handle(&surface->%s.base);\n   return VK_SUCCESS;" % k
         new = ("   *pSurface = VkIcdSurfaceBase_to_handle(&surface->%s.base);\n"
-               "   fprintf(stderr, \"[WSI] surface creada (%s) has_alpha=%%d\\n\", (int)surface->has_alpha);\n"
+               "   WSI_TRACE(\"[WSI] surface creada (%s) has_alpha=%%d\\n\", (int)surface->has_alpha);\n"
                "   return VK_SUCCESS;") % (k, k)
         t = t.replace(old, new, 1)
     for n in ("wsi_GetPhysicalDeviceXcbPresentationSupportKHR",
@@ -293,7 +321,7 @@ if t and "[WSI] surface creada" not in t:
         i = t.find(n + "(")
         j = t.find("\n{\n", i) if i >= 0 else -1
         if j >= 0:
-            t = t[:j + 3] + '   fprintf(stderr, "[WSI] -> %s\\n");\n' % n + t[j + 3:]
+            t = t[:j + 3] + '   WSI_TRACE("[WSI] -> %s\\n");\n' % n + t[j + 3:]
     open(f, "w").write(t)
     print("-> wsi_common_x11.c: trazas de creación y soporte de presentación")
 PY
@@ -360,7 +388,7 @@ if t and "[ICD] proc_addr" not in t:
     o = t
     trace = ('   if (name && (strstr(name, "Surface") || strstr(name, "Swapchain") || '
              'strstr(name, "Present") || strstr(name, "QueueFamily")))\n'
-             '      fprintf(stderr, "[ICD] proc_addr(%s)\\n", name);\n')
+             '      WSI_TRACE("[ICD] proc_addr(%s)\\n", name);\n')
     for fn in ("\nvk_instance_get_proc_addr(", "\nvk_instance_get_physical_device_proc_addr("):
         i = t.find(fn)
         j = t.find("\n{\n", i) if i >= 0 else -1
