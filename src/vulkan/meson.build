@@ -62,7 +62,7 @@ if with_xlib_lease
   vulkan_wsi_deps += [dep_xlib_xrandr]
   vulkan_wsi_list += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
-if with_platform_android
+if with_platform_android or with_wrapper_vk
   vulkan_wsi_list += '-DVK_USE_PLATFORM_ANDROID_KHR'
 endif
 if with_platform_windows
