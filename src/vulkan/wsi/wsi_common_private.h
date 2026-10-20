@@ -101,7 +101,14 @@ struct wsi_image_info {
 
    /**
     * If set, the WSI backend and the WSI device support timeline-based explicit
-    * synchronization.
+    * synchronization.  The device check requires non-emulated timeline
+    * semaphores, so they can be exported as an opaque fd.
+    *
+    * The present will take in the explicit_sync[WSI_ES_ACQUIRE] timeline point
+    * and not present until that completes, and sets up the
+    * explicit_sync[WSI_ES_RELEASE] timeline point for when the image is done
+    * being used by the compositor (whether that's a GPU composite completing,
+    * or the scanned-out frame being flipped away from).
     */
    bool explicit_sync;
 
@@ -207,6 +214,9 @@ struct wsi_presentation_timing {
    uint64_t complete_time; /* Best effort timestamp we get from backend. */
    uint64_t earliest_present_time; /* earliestPresentTime for GOOGLE timing. */
    uint64_t present_margin; /* presentMargin for GOOGLE timing. */
+   /* If we're rendering with IMMEDIATE, it's possible for images to IDLE long before they complete.
+    * In this case, we have to ensure that queue_done_time is sampled at QueuePresentKHR time
+    * before we recycle an image. */
    struct wsi_image *image;
    VkPresentStageFlagsEXT requested_feedback;
    VkBool32 complete;
@@ -231,12 +241,23 @@ struct wsi_swapchain {
    VkFence* fences;
    VkPresentModeKHR present_mode;
    /**
-    * Timeline for presents completing according to VK_KHR_present_wait.
+    * Timeline for presents completing according to VK_KHR_present_wait.  The
+    * present should complete as close as possible (before or after!) to the
+    * first pixel being scanned out.
     */
    VkSemaphore present_id_timeline;
    bool present_wait_enabled;
 
    int signal_dma_buf_from_semaphore;
+   /**
+    * Optional semaphore for implicit-sync swapchains.  It will be signaled by
+    * the pre-present vkQueueSubmit2, and its syncobj will get imported into the
+    * image's dma-buf before being presented.
+    *
+    * If not set (due to older kernels missing sync-file import/export), for
+    * implicit-sync swapchains, then you have to support
+    * create_sync_for_memory().
+    */
    VkSemaphore dma_buf_semaphore;
 
    struct wsi_image_info image_info;
@@ -247,6 +268,12 @@ struct wsi_swapchain {
    struct {
       enum wsi_swapchain_blit_type type;
       VkSemaphore *semaphores;
+
+      /* If the driver wants to use a special queue to execute the buffer blit,
+       * it'll implement the wsi_device::get_blit_queue callback.
+       * The created queue will be stored here and will be used to execute the
+       * buffer blit instead of using the present queue.
+       */
       struct vk_queue *queue;
    } blit;
 
@@ -255,21 +282,28 @@ struct wsi_swapchain {
    struct {
       mtx_t lock;
       bool active;
-      bool google_timing_mode;
+      bool google_timing_mode; /* Use VK_GOOGLE_display_timing semantic */
 
       struct wsi_presentation_timing *timings;
       size_t timings_capacity;
       size_t timings_count;
 
       size_t serial;
+
+      /* Timestamp of most recently presented frame. */
       uint64_t latest_present_time;
+
+      /* Maps to Vulkan spec definitions. */
       uint64_t refresh_duration;
       uint64_t refresh_interval;
+      /* When 0, we don't know yet. Every time the refresh rate changes,
+       * increase this counter. This counter must also be passed in GetPastTimings. */
       uint64_t refresh_counter;
 
       VkTimeDomainKHR time_domain;
 
       VkPresentStageFlagsEXT supported_query_stages;
+      /* Ensures monotonicity for complete_time. */
       uint64_t minimum_queue_done_time;
       uint64_t minimum_complete_time;
    } present_timing;
@@ -304,6 +338,21 @@ struct wsi_swapchain {
    void (*set_timing_request)(struct wsi_swapchain *swap_chain,
                             const struct wsi_image_timing_request *request);
    void (*poll_timing_request)(struct wsi_swapchain *swap_chain);
+
+   /* On some backends we may be able to query the refresh parameters before
+    * we get any feedback from the compositor.
+    * Return value is refreshDuration in the API which is intended to be minimum
+    * duration between screen refreshes. E.g. if 16.6ms, a FIFO swapchain will not update
+    * more often than 60 Hz. refreshDuration may be 0 in case we truly have no idea
+    * what the actual screen refresh rate is.
+    * The interval maps to refreshInterval in the API which has different meanings:
+    * - 0: Unknown if the monitor is VRR or FRR. Application cannot rely on fully locked frame pacing
+    *   for interval > 1.
+    * - UINT64_MAX: VRR.
+    * - Equal to refreshDuration: Normal FRR scenario.
+    * - refreshInterval * N == refreshDuration: This can be a situation where the monitor is e.g. 120 Hz,
+    *   but has been locked to maximum of 60 Hz. This would allow for application to request e.g. 40 Hz.
+    */
    uint64_t (*poll_early_refresh)(struct wsi_swapchain *swap_chain, uint64_t *interval);
 };
 
@@ -567,6 +616,19 @@ VkResult wsi_configure_android_image(
    const VkSwapchainCreateInfoKHR *pCreateInfo,
    const struct wsi_base_image_params *params,
    struct wsi_image_info *info);
+
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+struct wsi_metal_image_params {
+   struct wsi_base_image_params base;
+   bool can_render_to_texture;
+};
+
+VkResult
+wsi_metal_configure_image(const struct wsi_swapchain *chain,
+                          const VkSwapchainCreateInfoKHR *pCreateInfo,
+                          const struct wsi_metal_image_params *params,
+                          struct wsi_image_info *info);
+#endif /* defined(VK_USE_PLATFORM_METAL_EXT) */
 
 #ifdef __cplusplus
 }
