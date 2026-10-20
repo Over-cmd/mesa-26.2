@@ -179,7 +179,7 @@ struct wsi_device {
       uint32_t override_minImageCount;
 
       /* Forces strict number of image on the swapchain using application
-       * provided VkSwapchainCreateInfoKH::RminImageCount.
+       * provided VkSwapchainCreateInfoKHR::minImageCount.
        */
       bool strict_imageCount;
 
