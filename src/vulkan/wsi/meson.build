@@ -34,9 +34,8 @@ else
   files_vulkan_wsi += files('wsi_common_headless.c')
 endif
 
-# 🟢 SOPORTE UNIFICADO DE ANDROID / WRAPPER PARA EL BLIT Y AHardwareBuffer
-_has_wrapper_vk = get_variable('with_wrapper_vk', false)
-if with_platform_android or _has_wrapper_vk
+# 🟢 CONDICIÓN ORIGINAL RESTAURADA
+if with_platform_android
   files_vulkan_wsi += files('wsi_common_android.c')
 endif
 
