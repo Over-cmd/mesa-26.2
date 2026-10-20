@@ -132,8 +132,8 @@ wsi_get_android_blit_type(const struct wsi_device *wsi,
 {
    int wrapper_blit = getenv("WRAPPER_BLIT") && atoi(getenv("WRAPPER_BLIT"));
    
-   if (wsi->needs_blit || wrapper_blit) {
-      WRAPPER_LOG(info, "Forzando WSI_SWAPCHAIN_IMAGE_BLIT por configuración o entorno");
+   if (wsi->needs_blit || wrapper_blit || true) {
+      WRAPPER_LOG(info, "Forzando WSI_SWAPCHAIN_IMAGE_BLIT para compatibilidad con Mali");
       return WSI_SWAPCHAIN_IMAGE_BLIT;
    }
 
