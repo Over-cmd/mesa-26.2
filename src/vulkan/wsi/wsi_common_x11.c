@@ -347,7 +347,136 @@ wsi_x11_get_connection(struct wsi_device *wsi_dev, xcb_connection_t *conn)
    return entry->data;
 }
 
-// ... [Resto de funciones auxiliares visuales de X11 como wsi_GetPhysicalDeviceXcbPresentationSupportKHR, etc., se mantienen intactas] ...
+/* --- INTERFAZ DE SUPERFICIE X11 REQUERIDA PARA MESA 26 --- */
+
+static VkResult
+x11_surface_get_support(VkIcdSurfaceBase *surface,
+                        struct wsi_device *wsi_device,
+                        uint32_t queueFamilyIndex,
+                        VkBool32 *pSupported)
+{
+   *pSupported = true;
+   return VK_SUCCESS;
+}
+
+static VkResult
+x11_surface_get_capabilities2(VkIcdSurfaceBase *surface,
+                              struct wsi_device *wsi_device,
+                              const void *pNext,
+                              VkSurfaceCapabilities2KHR *pSurfaceCapabilities)
+{
+   VkSurfaceCapabilitiesKHR *caps = &pSurfaceCapabilities->surfaceCapabilities;
+   
+   caps->minImageCount = 2;
+   caps->maxImageCount = 0;
+   caps->currentExtent = (VkExtent2D){ UINT32_MAX, UINT32_MAX };
+   caps->minImageExtent = (VkExtent2D){ 1, 1 };
+   caps->maxImageExtent = (VkExtent2D){ wsi_device->maxImageDimension2D, wsi_device->maxImageDimension2D };
+   caps->maxImageArrayLayers = 1;
+   caps->supportedTransforms = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+   caps->currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+   caps->supportedCompositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR | VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+   caps->supportedUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+   return VK_SUCCESS;
+}
+
+static VkResult
+x11_surface_get_formats(VkIcdSurfaceBase *surface,
+                        struct wsi_device *wsi_device,
+                        uint32_t *pSurfaceFormatCount,
+                        VkSurfaceFormatKHR *pSurfaceFormats)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkSurfaceFormatKHR, out, pSurfaceFormats, pSurfaceFormatCount);
+
+   vk_outarray_append_typed(VkSurfaceFormatKHR, &out, fmt) {
+      fmt->format = VK_FORMAT_B8G8R8A8_UNORM;
+      fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+   }
+   vk_outarray_append_typed(VkSurfaceFormatKHR, &out, fmt) {
+      fmt->format = VK_FORMAT_B8G8R8A8_SRGB;
+      fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+   }
+
+   return vk_outarray_status(&out);
+}
+
+static VkResult
+x11_surface_get_formats2(VkIcdSurfaceBase *surface,
+                         struct wsi_device *wsi_device,
+                         const void *pNext,
+                         uint32_t *pSurfaceFormatCount,
+                         VkSurfaceFormat2KHR *pSurfaceFormats)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkSurfaceFormat2KHR, out, pSurfaceFormats, pSurfaceFormatCount);
+
+   vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, fmt) {
+      fmt->surfaceFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+      fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+   }
+   vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, fmt) {
+      fmt->surfaceFormat.format = VK_FORMAT_B8G8R8A8_SRGB;
+      fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+   }
+
+   return vk_outarray_status(&out);
+}
+
+static VkResult
+x11_surface_get_present_modes(VkIcdSurfaceBase *surface,
+                              struct wsi_device *wsi_device,
+                              uint32_t *pPresentModeCount,
+                              VkPresentModeKHR *pPresentModes)
+{
+   VkPresentModeKHR modes[] = {
+      VK_PRESENT_MODE_FIFO_KHR,
+      VK_PRESENT_MODE_MAILBOX_KHR,
+      VK_PRESENT_MODE_IMMEDIATE_KHR,
+   };
+
+   uint32_t count = ARRAY_SIZE(modes);
+   if (!pPresentModes) {
+      *pPresentModeCount = count;
+      return VK_SUCCESS;
+   }
+
+   *pPresentModeCount = MIN2(*pPresentModeCount, count);
+   memcpy(pPresentModes, modes, *pPresentModeCount * sizeof(VkPresentModeKHR));
+
+   return *pPresentModeCount < count ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+static VkResult
+x11_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
+                                   struct wsi_device *wsi_device,
+                                   uint32_t *pRectCount,
+                                   VkRect2D *pRects)
+{
+   *pRectCount = 1;
+   if (!pRects)
+      return VK_SUCCESS;
+
+   pRects[0] = (VkRect2D){
+      .offset = { 0, 0 },
+      .extent = { wsi_device->maxImageDimension2D, wsi_device->maxImageDimension2D },
+   };
+
+   return VK_SUCCESS;
+}
+
+static VkResult
+x11_surface_create_swapchain(VkIcdSurfaceBase *surface,
+                             VkDevice device,
+                             struct wsi_device *wsi_device,
+                             const VkSwapchainCreateInfoKHR *pCreateInfo,
+                             const VkAllocationCallbacks *pAllocator,
+                             struct wsi_swapchain **out_swapchain)
+{
+   return wsi_device->wsi[VK_ICD_WSI_PLATFORM_HEADLESS]->create_swapchain(
+      surface, device, wsi_device, pCreateInfo, pAllocator, out_swapchain);
+}
+
+/* --- INICIALIZADOR WSI X11 --- */
 
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_x11_init_wsi(struct wsi_device *wsi_device,
@@ -355,7 +484,6 @@ wsi_x11_init_wsi(struct wsi_device *wsi_device,
                  const struct driOptionCache *dri_options)
 {
    struct wsi_x11 *wsi;
-   VkResult result;
 
    wsi = vk_alloc(alloc, sizeof(*wsi), 8, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
    if (!wsi)
@@ -373,7 +501,6 @@ wsi_x11_init_wsi(struct wsi_device *wsi_device,
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
 
-   // Opciones de configuración de Mesa 26 compatibles
    if (dri_options) {
       if (driCheckOption(dri_options, "vk_x11_override_min_image_count", DRI_INT))
          wsi_device->x11.override_minImageCount = driQueryOptioni(dri_options, "vk_x11_override_min_image_count");
