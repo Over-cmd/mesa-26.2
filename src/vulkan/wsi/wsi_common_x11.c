@@ -283,7 +283,7 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev, xcb_connection_t *conn)
    wsi_conn->has_dri3_modifiers = has_dri3_v1_2 && has_present_v1_2;
    wsi_conn->has_dri3_explicit_sync = has_dri3_v1_4 && has_present_v1_4;
    wsi_conn->is_proprietary_x11 = (amd_reply && amd_reply->present) || (nv_reply && nv_reply->present);
-
+   
    wsi_conn->has_mit_shm = false;
 #if defined(HAVE_X11_DRM) && defined(HAVE_SYS_SHM_H)
    if (wsi_conn->has_dri3 && wsi_conn->has_present && wants_shm) {
@@ -469,7 +469,18 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *surface,
                              const VkAllocationCallbacks *pAllocator,
                              struct wsi_swapchain **out_swapchain)
 {
-   return wsi_swapchain_init(wsi_device, (struct wsi_swapchain *)pAllocator, device, pCreateInfo, NULL, pAllocator);
+   struct wsi_swapchain *chain = vk_zalloc(pAllocator, sizeof(*chain), 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   if (!chain)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   VkResult result = wsi_swapchain_init(wsi_device, chain, device, pCreateInfo, NULL, pAllocator);
+   if (result != VK_SUCCESS) {
+      vk_free(pAllocator, chain);
+      return result;
+   }
+
+   *out_swapchain = chain;
+   return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
