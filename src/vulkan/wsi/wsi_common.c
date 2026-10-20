@@ -50,7 +50,7 @@
 #include <unistd.h>
 #endif
 
-/* --- INYECCIÓN MAESTRA REAL DE CARGA DINÁMICA CON CACHÉ ESTÁTICA Y LOGS AISLADOS V38 --- */
+/* --- INYECCIÓN SEGURA DE CARGA DINÁMICA CON CACHÉ ESTÁTICA --- */
 #define RTLD_NOW 2
 extern void* dlopen(const char* filename, int flag);
 extern void* dlsym(void* handle, const char* symbol);
@@ -58,12 +58,10 @@ extern void* dlsym(void* handle, const char* symbol);
 struct AHardwareBuffer;
 struct AHardwareBuffer_Desc;
 
-/* Prototipos obligatorios públicos globales para silenciar el flag -Werror=missing-prototypes */
 int MALI_AHardwareBuffer_allocate(const struct AHardwareBuffer_Desc* desc, struct AHardwareBuffer** outBuffer);
 void MALI_AHardwareBuffer_release(struct AHardwareBuffer* buffer);
 int MALI_AHardwareBuffer_sendHandleToUnixSocket(const struct AHardwareBuffer* b, int s);
 
-/* 🟢 AISLAMIENTO ESTÁTICO LOCAL COMPLETO: Declaramos los stubs de logs como static inline. */
 static inline int Mesa_get_wrapper_log_level(const char *option) { (void)option; return 0; }
 static inline void Mesa_write_to_logfile(const char *fmt, const char *level, ...) { (void)fmt; (void)level; }
 
@@ -71,7 +69,6 @@ typedef int (*pfn_MALI_AHB_allocate)(const struct AHardwareBuffer_Desc*, struct 
 typedef void (*pfn_MALI_AHB_release)(struct AHardwareBuffer*);
 typedef int (*pfn_MALI_AHB_send)(const struct AHardwareBuffer*, int);
 
-/* 1. Resolvedor Público Global con Caché Estática */
 int MALI_AHardwareBuffer_allocate(const struct AHardwareBuffer_Desc* desc, struct AHardwareBuffer** outBuffer) {
     static pfn_MALI_AHB_allocate func = (pfn_MALI_AHB_allocate)-2;
     if (func == (pfn_MALI_AHB_allocate)-2) {
@@ -83,7 +80,6 @@ int MALI_AHardwareBuffer_allocate(const struct AHardwareBuffer_Desc* desc, struc
     return -1;
 }
 
-/* 2. Resolvedor Público Global con Caché Estática */
 void MALI_AHardwareBuffer_release(struct AHardwareBuffer* buffer) {
     static pfn_MALI_AHB_release func = (pfn_MALI_AHB_release)-2;
     if (func == (pfn_MALI_AHB_release)-2) {
@@ -94,7 +90,6 @@ void MALI_AHardwareBuffer_release(struct AHardwareBuffer* buffer) {
     if (func) func(buffer);
 }
 
-/* 3. Resolvedor Público Global con Caché Estática */
 int MALI_AHardwareBuffer_sendHandleToUnixSocket(const struct AHardwareBuffer* b, int s) {
     static pfn_MALI_AHB_send func = (pfn_MALI_AHB_send)-2;
     if (func == (pfn_MALI_AHB_send)-2) {
@@ -325,7 +320,7 @@ wsi_device_init(struct wsi_device *wsi,
    WSI_GET_CB(UnmapMemory);
    if (wsi->has_present_wait)
       WSI_GET_CB(WaitSemaphores);
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    WSI_GET_CB(GetMemoryAndroidHardwareBufferANDROID);
    WSI_GET_CB(GetAndroidHardwareBufferPropertiesANDROID);
 #endif
@@ -490,7 +485,7 @@ get_blit_type(const struct wsi_device *wsi,
       return wsi_cpu_image_needs_buffer_blit(wsi, cpu_params) ?
          WSI_SWAPCHAIN_BUFFER_BLIT : WSI_SWAPCHAIN_NO_BLIT;
    }
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    case WSI_IMAGE_TYPE_ANDROID: {
       return wsi_get_android_blit_type(wsi, params, device);
    }
@@ -535,7 +530,7 @@ configure_image(const struct wsi_swapchain *chain,
          container_of(params, const struct wsi_cpu_image_params, base);
       return wsi_configure_cpu_image(chain, pCreateInfo, cpu_params, info);
    }
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    case WSI_IMAGE_TYPE_ANDROID: {
       return wsi_configure_android_image(chain, pCreateInfo, params, info);
    }
@@ -675,7 +670,6 @@ wsi_swapchain_init(const struct wsi_device *wsi,
       chain->present_timing.supported_query_stages = timing_caps.presentStageQueries;
    }
 
-   /* 🚨 ALINEACIÓN DE PRODUCCIÓN MASTER MALI (256/64) */
    const char *force_audio_sync = getenv("WRAPPER_AUDIO_SYNC");
    if (!force_audio_sync || atoi(force_audio_sync) != 0) {
       ((struct wsi_device *)wsi)->optimalBufferCopyRowPitchAlignment = 256;
@@ -957,7 +951,7 @@ wsi_destroy_image_info(const struct wsi_swapchain *chain,
       vk_free(&chain->alloc, info->modifier_props);
       info->modifier_props = NULL;
    }
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    if (info->ahardware_buffer_desc != NULL) {
       vk_free(&chain->alloc, info->ahardware_buffer_desc);
       info->ahardware_buffer_desc = NULL;
@@ -981,7 +975,7 @@ wsi_create_image(const struct wsi_swapchain *chain,
       image->explicit_sync[i].fd = -1;
 #endif
 
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    if (info->ahardware_buffer_desc && MALI_AHardwareBuffer_allocate(info->ahardware_buffer_desc,
                                 &image->ahardware_buffer) != 0)
    {
@@ -1108,7 +1102,7 @@ wsi_destroy_image(const struct wsi_swapchain *chain,
 {
    const struct wsi_device *wsi = chain->wsi;
 
-#if defined(__TERMUX__) || defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(ANDROID)
    if (image->ahardware_buffer)
       MALI_AHardwareBuffer_release(image->ahardware_buffer);
 #endif
