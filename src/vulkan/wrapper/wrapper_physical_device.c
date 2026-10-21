@@ -222,7 +222,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       }
       pdevice->vk.wsi_device = &pdevice->wsi_device;
       pdevice->wsi_device.force_bgra8_unorm_first = true;
-      pdevice->wsi_device.supports_blit = true;
 
       pdevice->driver_properties = (VkPhysicalDeviceDriverProperties) {
          .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
@@ -417,7 +416,6 @@ VKAPI_ATTR void VKAPI_CALL
 wrapper_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
                                   VkPhysicalDeviceFeatures* pFeatures) 
 {
-   VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
    vk_common_GetPhysicalDeviceFeatures(physicalDevice, pFeatures);
 
    pFeatures->textureCompressionBC = true;
