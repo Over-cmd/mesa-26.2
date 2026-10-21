@@ -61,10 +61,11 @@ wsi_headless_surface_get_capabilities(VkIcdSurfaceBase *surface,
    /* For true mailbox mode, we need at least 4 images:
     *  1) One to scan out from
     *  2) One to have queued for scan-out
-    *  3) One to be currently held by the compositor
+    *  3) One to be currently held by the Wayland compositor
     *  4) One to render to
     */
    caps->surfaceCapabilities.minImageCount = 4;
+   /* There is no real maximum */
    caps->surfaceCapabilities.maxImageCount = 0;
 
    caps->surfaceCapabilities.currentExtent = (VkExtent2D) { -1, -1 };
@@ -112,7 +113,7 @@ wsi_headless_surface_get_capabilities2(VkIcdSurfaceBase *surface,
    assert(caps->sType == VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
 
    const VkSurfacePresentModeKHR *present_mode =
-      vk_find_struct_const(info_next, SURFACE_PRESENT_MODE_KHR);
+      vk_find_struct_const(info_next, SURFACE_PRESENT_MODE_EXT);
 
    VkResult result =
       wsi_headless_surface_get_capabilities(surface, wsi_device,
@@ -126,6 +127,7 @@ wsi_headless_surface_get_capabilities2(VkIcdSurfaceBase *surface,
          break;
       }
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
+         /* Unsupported */
          VkSurfacePresentScalingCapabilitiesKHR *scaling = (void *)ext;
          scaling->supportedPresentScaling = 0;
          scaling->supportedPresentGravityX = 0;
@@ -135,6 +137,7 @@ wsi_headless_surface_get_capabilities2(VkIcdSurfaceBase *surface,
          break;
       }
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
+         /* Unsupported */
          VkSurfacePresentModeCompatibilityKHR *compat = (void *)ext;
          if (compat->pPresentModes == NULL) {
             if (!present_mode) {
@@ -162,6 +165,7 @@ wsi_headless_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       default:
+         /* Ignored */
          break;
       }
    }
@@ -293,6 +297,7 @@ wsi_headless_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
    VK_OUTARRAY_MAKE_TYPED(VkRect2D, out, pRects, pRectCount);
 
    vk_outarray_append_typed(VkRect2D, &out, rect) {
+      /* We don't know a size so just return the usual "I don't know." */
       *rect = (VkRect2D) {
          .offset = { 0, 0 },
          .extent = { UINT32_MAX, UINT32_MAX },
@@ -304,7 +309,17 @@ wsi_headless_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
 
 struct wsi_headless_image {
    struct wsi_image base;
+
+   /* whether the host side ownership is taken by the app or the display */
    bool busy_on_host;
+
+   /* whether the image may still be worked on by the device
+    *
+    * The headless display does not involve a presentation queue to wait for
+    * the gpu out-fence. To let the app acquire the most likely idle image, we
+    * use a second boolean to steer the app to acquire all the swapchain images
+    * in a loop.
+    */
    bool busy_on_device;
 };
 
@@ -357,13 +372,16 @@ wsi_headless_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
    timespec_add(&end_time, &rel_timeout, &start_time);
 
    while (1) {
+      /* Try to find a free image. */
       for (uint32_t i = 0; i < chain->base.image_count; i++) {
          if (!chain->images[i].busy_on_host) {
             if (chain->images[i].busy_on_device) {
+               /* simple trick to avoid the just presented image */
                chain->images[i].busy_on_device = false;
                continue;
             }
 
+            /* We found a non-busy image */
             *image_index = i;
             chain->images[i].busy_on_host = true;
             chain->images[i].busy_on_device = true;
@@ -371,6 +389,7 @@ wsi_headless_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
          }
       }
 
+      /* Check for timeout. */
       struct timespec current_time;
       clock_gettime(CLOCK_MONOTONIC, &current_time);
       if (timespec_after(&current_time, &end_time))
