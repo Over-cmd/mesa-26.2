@@ -63,6 +63,12 @@
 #include <math.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+
+#ifdef __ANDROID__
+#include <signal.h>
+#include <pthread.h>
+#endif
+
 #ifdef HAVE_LIBUDEV
 #include <libudev.h>
 #endif
