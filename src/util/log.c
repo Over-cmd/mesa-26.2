@@ -543,7 +543,7 @@ mesa_log_stream_flush(struct log_stream *stream, size_t scan_offset)
    }
 }
 
-void mesa_log_stream_printf(struct log_src_stream *stream, const char *format, ...)
+void mesa_log_stream_printf(struct log_stream *stream, const char *format, ...)
 {
    size_t old_pos = stream->pos;
 
