@@ -1108,21 +1108,3 @@ wrapper_setup_device_extensions(struct wrapper_physical_device *pdevice) {
 
    return VK_SUCCESS;
 }
-
-VKAPI_ATTR VkResult VKAPI_CALL
-wrapper_GetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
-                                           uint32_t queueFamilyIndex,
-                                           VkSurfaceKHR surface,
-                                           VkBool32 *pSupported)
-{
-   VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
-   
-   if (pdevice->dispatch_table.GetPhysicalDeviceSurfaceSupportKHR) {
-      pdevice->dispatch_table.GetPhysicalDeviceSurfaceSupportKHR(
-         pdevice->dispatch_handle, queueFamilyIndex, surface, pSupported);
-   }
-
-   *pSupported = VK_TRUE;
-
-   return VK_SUCCESS;
-}
