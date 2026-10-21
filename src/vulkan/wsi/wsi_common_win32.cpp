@@ -44,14 +44,16 @@
 #include <dcomp.h>
 
 #if defined(__GNUC__)
-#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
+#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"      // warning: cast to pointer from integer of different size
 #endif
 
 struct wsi_win32;
 
 struct wsi_win32 {
    struct wsi_interface                     base;
+
    struct wsi_device *wsi;
+
    const VkAllocationCallbacks *alloc;
    VkPhysicalDevice physical_device;
    struct {
@@ -187,21 +189,21 @@ wsi_win32_surface_get_capabilities(VkIcdSurfaceBase *surf,
    if (!wsi_device->sw && wsi_device->win32.get_d3d12_command_queue) {
       /* DXGI doesn't support random presenting order (images need to
        * be presented in the order they were acquired), so we can't
-       * expose more than two images per swapchain.
+       * expose more than two image per swapchain.
        */
       caps->surfaceCapabilities.minImageCount = caps->surfaceCapabilities.maxImageCount = 2;
    } else {
       caps->surfaceCapabilities.minImageCount = 1;
-      /* Software fallback, there is no real maximum */
+      /* Software callbacke, there is no real maximum */
       caps->surfaceCapabilities.maxImageCount = 0;
    }
 
-   caps->surfaceCapabilities.currentExtent = (VkExtent2D) {
+   caps->surfaceCapabilities.currentExtent = {
       (uint32_t)win_rect.right - (uint32_t)win_rect.left,
       (uint32_t)win_rect.bottom - (uint32_t)win_rect.top
    };
-   caps->surfaceCapabilities.minImageExtent = (VkExtent2D) { 1u, 1u };
-   caps->surfaceCapabilities.maxImageExtent = (VkExtent2D) {
+   caps->surfaceCapabilities.minImageExtent = { 1u, 1u };
+   caps->surfaceCapabilities.maxImageExtent = {
       wsi_device->maxImageDimension2D,
       wsi_device->maxImageDimension2D,
    };
@@ -310,6 +312,7 @@ wsi_win32_surface_get_capabilities2(VkIcdSurfaceBase *surface,
    return result;
 }
 
+
 static const struct {
    VkFormat     format;
 } available_surface_formats[] = {
@@ -317,6 +320,7 @@ static const struct {
    { VK_FORMAT_R8G8B8A8_UNORM },
    { VK_FORMAT_B8G8R8A8_SRGB },
 };
+
 
 static void
 get_sorted_vk_formats(struct wsi_device *wsi_device, VkFormat *sorted_formats)
@@ -428,7 +432,7 @@ wsi_win32_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
 
    vk_outarray_append_typed(VkRect2D, &out, rect) {
       /* We don't know a size so just return the usual "I don't know." */
-      *rect = (VkRect2D) {
+      *rect = {
          { 0, 0 },
          { UINT32_MAX, UINT32_MAX },
       };
@@ -488,7 +492,7 @@ wsi_create_dxgi_image_mem(const struct wsi_swapchain *drv_chain,
 
    const VkMemoryDedicatedAllocateInfo memory_dedicated_info = {
       VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-      NULL,
+      nullptr,
       image->blit.image,
       VK_NULL_HANDLE,
    };
@@ -563,7 +567,7 @@ wsi_win32_image_init(VkDevice device_h,
    BITMAPINFO info = { 0 };
    info.bmiHeader.biSize = sizeof(BITMAPINFO);
    info.bmiHeader.biWidth = create_info->imageExtent.width;
-   info.bmiHeader.biHeight = -((int)create_info->imageExtent.height);
+   info.bmiHeader.biHeight = -create_info->imageExtent.height;
    info.bmiHeader.biPlanes = 1;
    info.bmiHeader.biBitCount = 32;
    info.bmiHeader.biCompression = BI_RGB;
@@ -592,7 +596,7 @@ wsi_win32_image_finish(struct wsi_win32_swapchain *chain,
 
    if (image->sw.dc)
       DeleteDC(image->sw.dc);
-   if (image->sw.bmp)
+   if(image->sw.bmp)
       DeleteObject(image->sw.bmp);
    wsi_destroy_image(&chain->base, &image->base);
 }
@@ -607,10 +611,9 @@ wsi_win32_swapchain_destroy(struct wsi_swapchain *drv_chain,
    for (uint32_t i = 0; i < chain->base.image_count; i++)
       wsi_win32_image_finish(chain, allocator, &chain->images[i]);
 
-   if (chain->chain_dc)
-      DeleteDC(chain->chain_dc);
+   DeleteDC(chain->chain_dc);
 
-   if (chain->surface && chain->surface->current_swapchain == chain)
+   if (chain->surface->current_swapchain == chain)
       chain->surface->current_swapchain = NULL;
 
    if (chain->dxgi)
@@ -775,8 +778,6 @@ wsi_win32_queue_present_dxgi(struct wsi_win32_swapchain *chain,
    DXGI_PRESENT_PARAMETERS params = {
       rect_count,
       rects,
-      NULL,
-      NULL,
    };
 
    image->state = WSI_IMAGE_QUEUED;
@@ -785,8 +786,6 @@ wsi_win32_queue_present_dxgi(struct wsi_win32_swapchain *chain,
       DXGI_PRESENT_ALLOW_TEARING : 0;
 
    HRESULT hres = chain->dxgi->Present1(sync_interval, present_flags, &params);
-   STACK_ARRAY_FINISH(rects);
-
    switch (hres) {
    case DXGI_ERROR_DEVICE_REMOVED: return VK_ERROR_DEVICE_LOST;
    case E_OUTOFMEMORY: return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -802,6 +801,7 @@ wsi_win32_queue_present_dxgi(struct wsi_win32_swapchain *chain,
       chain->surface->current_swapchain = chain;
    }
 
+   /* Mark the other image idle */
    chain->status = VK_SUCCESS;
    return VK_SUCCESS;
 }
@@ -869,9 +869,9 @@ wsi_win32_surface_create_swapchain_dxgi(
       create_info->imageExtent.width,
       create_info->imageExtent.height,
       DXGI_FORMAT_B8G8R8A8_UNORM,
-      create_info->imageArrayLayers > 1,  /* Stereo */
-      { 1 },                              /* SampleDesc */
-      0,                                  /* Usage (filled in below) */
+      create_info->imageArrayLayers > 1,  // Stereo
+      { 1 },                              // SampleDesc
+      0,                                  // Usage (filled in below)
       create_info->minImageCount,
       DXGI_SCALING_STRETCH,
       DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
@@ -1049,7 +1049,7 @@ dxgi_get_factory(bool debug)
 }
 
 static IDCompositionDevice *
-dcomp_get_device(void)
+dcomp_get_device()
 {
    HMODULE dcomp_mod = LoadLibraryA("DComp.DLL");
    if (!dcomp_mod) {
@@ -1081,7 +1081,7 @@ wsi_win32_init_wsi(struct wsi_device *wsi_device,
    struct wsi_win32 *wsi;
    VkResult result;
 
-   wsi = (struct wsi_win32 *)vk_zalloc(alloc, sizeof(*wsi), 8,
+   wsi = (wsi_win32 *)vk_zalloc(alloc, sizeof(*wsi), 8,
                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
    if (!wsi) {
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -1128,7 +1128,7 @@ fail:
 
 void
 wsi_win32_finish_wsi(struct wsi_device *wsi_device,
-                     const VkAllocationCallbacks *alloc)
+                  const VkAllocationCallbacks *alloc)
 {
    struct wsi_win32 *wsi =
       (struct wsi_win32 *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WIN32];
