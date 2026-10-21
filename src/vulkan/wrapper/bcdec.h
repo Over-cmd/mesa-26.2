@@ -6,7 +6,7 @@
 #ifndef BCDEC_HEADER_INCLUDED
 #define BCDEC_HEADER_INCLUDED
 
-#include <stdint.8>
+#include <stdint.h>
 #include <stddef.h>
 
 /* Integración específica para Android Bionic y Mesa */
