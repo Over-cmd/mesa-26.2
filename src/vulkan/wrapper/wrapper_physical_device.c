@@ -206,10 +206,14 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       supported_features->swapchainMaintenance1 = true;
       supported_features->imageCompressionControlSwapchain = false;
       
+      struct wsi_device_options wsi_options = {
+         .sw_device = false,
+      };
+
       result = wsi_device_init(&pdevice->wsi_device,
                                wrapper_physical_device_to_handle(pdevice),
                                wrapper_wsi_proc_addr, &_instance->alloc, -1,
-                               NULL, &(struct wsi_device_options){});
+                               NULL, &wsi_options);
       if (result != VK_SUCCESS) {
          vk_physical_device_finish(&pdevice->vk);
          vk_free(&_instance->alloc, pdevice);
@@ -218,6 +222,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       }
       pdevice->vk.wsi_device = &pdevice->wsi_device;
       pdevice->wsi_device.force_bgra8_unorm_first = true;
+      pdevice->wsi_device.supports_blit = true;
 
       pdevice->driver_properties = (VkPhysicalDeviceDriverProperties) {
          .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
