@@ -63,6 +63,14 @@
 #include <math.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+
+#ifdef __ANDROID__
+#include <sys/types.h>
+/* Android-specific adjustments if needed */
+#undef HAVE_LIBUDEV
+#undef VK_USE_PLATFORM_XLIB_XRANDR_EXT
+#endif
+
 #ifdef HAVE_LIBUDEV
 #include <libudev.h>
 #endif
@@ -4576,7 +4584,7 @@ wsi_AcquireDrmDisplayEXT(VkPhysicalDevice physicalDevice,
       return VK_ERROR_UNKNOWN;
 
    struct wsi_display *wsi =
-      (struct wsi_display *) wsi_device->wsi[VK_ICD_WSI_PLATFORM_DISPLAY];
+      (struct wsi_display *) wsi_device->wsi[VK_IC_D_WSI_PLATFORM_DISPLAY];
 
    /* "The provided drmFd must correspond to the one owned by the
     *  physicalDevice.  If not, the error code VK_ERROR_UNKNOWN must be returned.
@@ -4637,7 +4645,7 @@ wsi_GetDrmDisplayEXT(VkPhysicalDevice physicalDevice,
    VK_FROM_HANDLE(vk_physical_device, pdevice, physicalDevice);
    struct wsi_device *wsi_device = pdevice->wsi_device;
 
-   if (!wsi_device->can_present_on_device(wsi_device->pdevice, drmFd)) {
+   if (!wsi_device->can_platform_present_on_device(wsi_device->pdevice, drmFd)) { // Ajustado a variantes estándar de Mesa si aplica
       *pDisplay = VK_NULL_HANDLE;
       return VK_ERROR_UNKNOWN;
    }
