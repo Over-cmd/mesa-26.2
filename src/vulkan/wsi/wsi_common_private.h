@@ -47,6 +47,7 @@ extern uint64_t WSI_DEBUG;
 enum wsi_image_type {
    WSI_IMAGE_TYPE_CPU,
    WSI_IMAGE_TYPE_DRM,
+   WSI_IMAGE_TYPE_ANDROID,
    WSI_IMAGE_TYPE_DXGI,
    WSI_IMAGE_TYPE_METAL,
 };
