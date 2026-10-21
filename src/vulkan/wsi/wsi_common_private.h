@@ -41,8 +41,6 @@ struct wsi_swapchain;
 #define WSI_DEBUG_LINEAR      (1ull << 3)
 #define WSI_DEBUG_DXGI        (1ull << 4)
 #define WSI_DEBUG_NOWLTS      (1ull << 5)
-#define WSI_DEBUG_BLIT        (1ull << 8)
-#define WSI_DEBUG_FORCESYNC   (1ull << 9)
 
 extern uint64_t WSI_DEBUG;
 
@@ -51,7 +49,6 @@ enum wsi_image_type {
    WSI_IMAGE_TYPE_DRM,
    WSI_IMAGE_TYPE_DXGI,
    WSI_IMAGE_TYPE_METAL,
-   WSI_IMAGE_TYPE_ANDROID,
 };
 
 struct wsi_base_image_params {
@@ -93,9 +90,6 @@ struct wsi_image_info {
    VkImageDrmFormatModifierListCreateInfoEXT drm_mod_list;
    VkImageCompressionControlEXT img_compr_ctrl;
    VkColorSpaceKHR color_space;
-#ifdef __TERMUX__
-   struct AHardwareBuffer_Desc *ahardware_buffer_desc;
-#endif
 
    enum wsi_image_type image_type;
 
@@ -201,9 +195,6 @@ struct wsi_image {
    VkQueryPool query_pool;
    VkCommandBuffer *timestamp_cmd_buffers;
    uint32_t query_pool_busy;
-#ifdef __TERMUX__
-   struct AHardwareBuffer *ahardware_buffer;
-#endif
 };
 
 struct wsi_presentation_timing {
@@ -276,8 +267,6 @@ struct wsi_swapchain {
        */
       struct vk_queue *queue;
    } blit;
-
-   bool capture_key_pressed;
 
    struct {
       mtx_t lock;
@@ -514,6 +503,7 @@ wsi_drm_wait_for_explicit_sync_release(struct wsi_swapchain *chain,
 
 VkResult
 wsi_drm_init_swapchain_implicit_sync(struct wsi_swapchain *chain);
+
 #endif
 
 struct wsi_interface {
@@ -571,6 +561,7 @@ VkResult wsi_metal_init_wsi(struct wsi_device *wsi_device,
 void wsi_metal_finish_wsi(struct wsi_device *wsi_device,
                           const VkAllocationCallbacks *alloc);
 
+
 VkResult
 wsi_display_init_wsi(struct wsi_device *wsi_device,
                      const VkAllocationCallbacks *alloc,
@@ -594,6 +585,8 @@ void wsi_headless_finish_wsi(struct wsi_device *wsi_device,
 VK_DEFINE_NONDISP_HANDLE_CASTS(wsi_swapchain, base, VkSwapchainKHR,
                                VK_OBJECT_TYPE_SWAPCHAIN_KHR)
 
+/* This should be static inline here since this can be called by runtime,
+ * and we cannot create cyclic dependencies. */
 static inline VkTimeDomainKHR
 wsi_common_get_time_domain(VkSwapchainKHR _swapchain,
                            VkPresentStageFlagBitsEXT stage,
@@ -606,20 +599,12 @@ wsi_common_get_time_domain(VkSwapchainKHR _swapchain,
              : swapchain->present_timing.time_domain;
 }
 
-enum wsi_swapchain_blit_type
-wsi_get_android_blit_type(const struct wsi_device *wsi,
-                          const struct wsi_base_image_params *params,
-                          VkDevice device);
-
-VkResult wsi_configure_android_image(
-   const struct wsi_swapchain *chain,
-   const VkSwapchainCreateInfoKHR *pCreateInfo,
-   const struct wsi_base_image_params *params,
-   struct wsi_image_info *info);
-
 #if defined(VK_USE_PLATFORM_METAL_EXT)
 struct wsi_metal_image_params {
    struct wsi_base_image_params base;
+   /* Software implementations like lavapipe cannot render to an MTLTexture
+    * directly and therefore require a blit
+    */
    bool can_render_to_texture;
 };
 
