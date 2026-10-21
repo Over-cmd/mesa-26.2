@@ -13,14 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#ifdef __OBJC__
-@class CAMetalLayer;
-@class CAMetalDrawable;
-typedef CAMetalDrawable CAMetalDrawableType;
-#else
-typedef void CAMetalLayer;
-typedef void CAMetalDrawableType;
-#endif
+typedef void CAMetalDrawable;
 
 void
 wsi_metal_layer_size(const CAMetalLayer *metal_layer,
@@ -40,23 +33,23 @@ void
 wsi_metal_layer_set_hdr_metadata(const CAMetalLayer *metal_layer,
                                  const VkHdrMetadataEXT *metadata);
 
-CAMetalDrawableType *
+CAMetalDrawable *
 wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer);
 
 void
-wsi_metal_release_drawable(CAMetalDrawableType *drawable_ptr);
+wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr);
 
 struct wsi_metal_layer_blit_context;
 
 struct wsi_metal_layer_blit_context *
-wsi_create_metal_layer_blit_context(void);
+wsi_create_metal_layer_blit_context();
 
 void
 wsi_destroy_metal_layer_blit_context(struct wsi_metal_layer_blit_context *context);
 
 void
 wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
-   CAMetalDrawableType **drawable_ptr, void *buffer,
+   CAMetalDrawable **drawable_ptr, void *buffer,
    uint32_t width, uint32_t height, uint32_t row_pitch);
 
 #endif // WSI_COMMON_METAL_LAYER_H
