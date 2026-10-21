@@ -34,12 +34,6 @@ else
   files_vulkan_wsi += files('wsi_common_headless.c')
 endif
 
-# 🟢 SOPORTE UNIFICADO DE ANDROID / WRAPPER PARA EL BLIT Y AHardwareBuffer
-_has_wrapper_vk = get_variable('with_wrapper_vk', true)
-if with_platform_android or _has_wrapper_vk
-  files_vulkan_wsi += files('wsi_common_android.c')
-endif
-
 if with_platform_macos
   files_vulkan_wsi += files('wsi_common_metal.c', 'wsi_common_metal_layer.m')
 endif
@@ -64,8 +58,6 @@ libvulkan_wsi = static_library(
   'vulkan_wsi',
   [files_vulkan_wsi, wsi_entrypoints],
   include_directories : [inc_include, inc_src],
-  c_args : ['-D__TERMUX__', '-DANDROID', '-DVK_USE_PLATFORM_ANDROID_KHR=1'],
-  cpp_args : ['-D__TERMUX__', '-DANDROID', '-DVK_USE_PLATFORM_ANDROID_KHR=1'],
   dependencies : [
     vulkan_wsi_deps, dep_libdrm, dep_libudev, idep_vulkan_util_headers,
     idep_vulkan_runtime_headers, idep_xmlconfig, idep_mesautil, platform_deps,
