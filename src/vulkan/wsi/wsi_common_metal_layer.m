@@ -7,7 +7,6 @@
 #include "wsi_common_metal_layer.h"
 
 #import <QuartzCore/CAMetalLayer.h>
-#import <QuartzCore/CAEDRMetadata.h>
 #import <Metal/Metal.h>
 
 void
@@ -15,8 +14,19 @@ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
    uint32_t *width, uint32_t *height)
 {
    @autoreleasepool {
-      /* Using bounds and contentsScale ensures accurate size reporting
-       * even if drawables haven't been allocated yet (fixing CTS failures).
+      /* The reason why "drawableSize" is not being used here because it will
+       * only return non-zero values if there has actually been any kind of
+       * drawable allocated (acquired). Without this we also run into crashes
+       * in KosmicKrisp. Initializing the CAMetalLayer with a NSView with
+       * a frame does not create the drawable. Due to this, we fail/crash
+       * tests in the following Vulkan CTS test family:
+       * dEQP-VK.wsi.metal.surface.*
+       *
+       * There are 2 possible ways to fix this:
+       * 1. The one implemented.
+       * 2. Return the special value allowed by the spec to state that we will
+       *    actually give it a value once the swapchain is created
+       *    https://docs.vulkan.org/refpages/latest/refpages/source/VkSurfaceCapabilitiesKHR.html
        */
       CGSize size = metal_layer.bounds.size;
       CGFloat scaleFactor = metal_layer.contentsScale;
@@ -164,9 +174,8 @@ wsi_metal_layer_configure(const CAMetalLayer *metal_layer,
 
       metal_layer.colorspace = cg_color_space;
       metal_layer.wantsExtendedDynamicRangeContent = wants_edr;
-      
-      if (cg_color_space)
-         CGColorSpaceRelease(cg_color_space);
+      /* Needs release: https://github.com/KhronosGroup/MoltenVK/issues/940 */
+      CGColorSpaceRelease(cg_color_space);
    }
 
    return VK_SUCCESS;
@@ -198,6 +207,7 @@ static_assert(sizeof(struct content_light_level_info) == 4,
 static inline uint16_t
 chromaticity_to_cie1931(float value)
 {
+   /* 1 unit = 0.00002 */
    return __builtin_bswap16((uint16_t)(value * 50000.0f));
 }
 
@@ -213,6 +223,7 @@ vk_xy_color_ext_to_cie1931xy(VkXYColorEXT xy)
 static inline uint32_t
 nits_to_mastering_luminance(float nits)
 {
+   /* 1 unit = 0.0001 nits */
    return __builtin_bswap32((uint32_t)(nits * 10000.0f));
 }
 
@@ -226,6 +237,8 @@ void
 wsi_metal_layer_set_hdr_metadata(const CAMetalLayer *metal_layer,
                                  const VkHdrMetadataEXT *metadata)
 {
+   /* Convert to HDR10 metadata. Apple does not provide structures for this,
+    * so we roll our own based on the spec. */
    struct mastering_display_color_volume color_volume = {
        .display_primaries[0] = vk_xy_color_ext_to_cie1931xy(metadata->displayPrimaryGreen),
        .display_primaries[1] = vk_xy_color_ext_to_cie1931xy(metadata->displayPrimaryBlue),
@@ -253,17 +266,17 @@ wsi_metal_layer_set_hdr_metadata(const CAMetalLayer *metal_layer,
    }
 }
 
-CAMetalDrawableType *
+CAMetalDrawable *
 wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [metal_layer nextDrawable];
-      return (CAMetalDrawableType *)[drawable retain];
+      return (CAMetalDrawable *)[drawable retain];
    }
 }
 
 void
-wsi_metal_release_drawable(CAMetalDrawableType *drawable_ptr)
+wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr)
 {
    [(id<CAMetalDrawable>)drawable_ptr release];
 }
@@ -274,7 +287,7 @@ struct wsi_metal_layer_blit_context {
 };
 
 struct wsi_metal_layer_blit_context *
-wsi_create_metal_layer_blit_context(void)
+wsi_create_metal_layer_blit_context()
 {
    @autoreleasepool {
       struct wsi_metal_layer_blit_context *context = malloc(sizeof(struct wsi_metal_layer_blit_context));
@@ -299,7 +312,7 @@ wsi_destroy_metal_layer_blit_context(struct wsi_metal_layer_blit_context *contex
 
 void
 wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
-   CAMetalDrawableType **drawable_ptr, void *buffer,
+   CAMetalDrawable **drawable_ptr, void *buffer,
    uint32_t width, uint32_t height, uint32_t row_pitch)
 {
    @autoreleasepool {
