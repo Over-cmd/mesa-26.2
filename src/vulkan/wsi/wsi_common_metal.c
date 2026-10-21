@@ -120,6 +120,7 @@ wsi_metal_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
+         /* TODO: support scaling */
          VkSurfacePresentScalingCapabilitiesKHR *scaling =
             (VkSurfacePresentScalingCapabilitiesKHR *)ext;
          scaling->supportedPresentScaling = 0;
@@ -131,6 +132,7 @@ wsi_metal_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
+         /* Unsupported, just report the input present mode. */
          VkSurfacePresentModeCompatibilityKHR *compat =
             (VkSurfacePresentModeCompatibilityKHR *)ext;
          if (compat->pPresentModes) {
@@ -160,6 +162,7 @@ wsi_metal_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       default:
+         /* Ignored */
          break;
       }
    }
@@ -291,6 +294,7 @@ wsi_metal_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
    VK_OUTARRAY_MAKE_TYPED(VkRect2D, out, pRects, pRectCount);
 
    vk_outarray_append_typed(VkRect2D, &out, rect) {
+      /* We don't know a size so just return the usual "I don't know." */
       *rect = (VkRect2D) {
          .offset = { 0, 0 },
          .extent = { UINT32_MAX, UINT32_MAX },
@@ -302,7 +306,7 @@ wsi_metal_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
 
 struct wsi_metal_image {
    struct wsi_image base;
-   CAMetalDrawableType *drawable;
+   CAMetalDrawable *drawable;
 };
 
 struct wsi_metal_swapchain {
@@ -335,6 +339,7 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
                             const struct wsi_image_info *info,
                             struct wsi_image *image)
 {
+   /* Should only be called from non-software backends */
    assert(!chain->wsi->sw);
    
    const struct wsi_device *wsi = chain->wsi;
@@ -346,9 +351,13 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
       if (!chain->cmd_pools[i])
          continue;
 
+      /* We need to cycle command buffers since the MTLTexture backing the presentable
+       * VkImage changes every time it's acquired. We only have one command buffer
+       * per blit since we only submit to a single queue which is the blit queue. */
       wsi->FreeCommandBuffers(chain->device, chain->cmd_pools[i], 1u,
                               &image->blit.cmd_buffers[i + queue_count]);
 
+      /* Store the command buffer in flight */
       image->blit.cmd_buffers[i + queue_count] = image->blit.cmd_buffers[i];
 
       const VkCommandBufferAllocateInfo cmd_buffer_info = {
@@ -461,6 +470,7 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
       wsi->metal.encode_drawable_present(image->blit.cmd_buffers[i], metal_image->drawable);
    }
 
+   /* Release the drawable since command buffers should have retained the drawable. */
    wsi_metal_release_drawable(metal_image->drawable);
    metal_image->drawable = NULL;
 
@@ -483,7 +493,8 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
    timespec_add(&end_time, &rel_timeout, &start_time);
 
    while (1) {
-      CAMetalDrawableType *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
+      /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
+      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
       if (drawable) {
          uint32_t i = (chain->current_image_index++) % chain->base.image_count;
          struct wsi_metal_image *image = &chain->images[i];
@@ -492,11 +503,14 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
          if (!wsi_chain->wsi->sw) {
             chain->base.wsi->metal.bind_drawable_to_vkimage(image->base.blit.image,
                                                             image->drawable);
+            /* Since present images will only be backed by MTLTextures after acquisition,
+             * we need to re-record the command buffer so it uses the new drawable. */
             wsi_cmd_blit_image_to_image(wsi_chain, &wsi_chain->image_info, &image->base);
          }
          return VK_SUCCESS;
       }
 
+      /* Check for timeout. */
       struct timespec current_time;
       clock_gettime(CLOCK_MONOTONIC, &current_time);
       if (timespec_after(&current_time, &end_time))
@@ -518,11 +532,14 @@ wsi_metal_swapchain_release_images(struct wsi_swapchain *wsi_chain,
       struct wsi_metal_image *image = &chain->images[indices[idx]];
 
       if (wsi->sw) {
+         /* Directly release drawable */
          if (image->drawable) {
             wsi_metal_release_drawable(image->drawable);
             image->drawable = NULL;
          }
       } else {
+         /* Drawable has been released and is retained by blit command buffers.
+          * Free them to release the reference. */
          for (uint32_t queue_idx = 0; queue_idx < queue_count; queue_idx++) {
             wsi->FreeCommandBuffers(
                chain->base.device, chain->base.cmd_pools[queue_idx], 1u,
@@ -588,11 +605,17 @@ wsi_metal_destroy_image(const struct wsi_metal_swapchain *metal_chain,
    const struct wsi_device *wsi = chain->wsi;
    struct wsi_image *image = &metal_image->base;
 
+   /* Software backends can just call common and return */
    if (wsi->sw) {
       wsi_destroy_image(chain, image);
       return;
    }
 
+   /* Required since we allocate 2 per queue, stored with the following layout:
+    * cmd_pool 0: 0, queue_count
+    * cmd_pool 1: 1, 1 + queue_count
+    * ...
+    */
    if (image->blit.cmd_buffers) {
       int queue_count =
          chain->blit.queue != NULL ? 1 : wsi->queue_family_count;
@@ -623,9 +646,11 @@ wsi_metal_create_image(const struct wsi_metal_swapchain *metal_chain,
 
    VkResult result = wsi_create_image(chain, info, image);
 
+   /* Software backends can just call common and return */
    if (wsi->sw || result != VK_SUCCESS)
       return result;
 
+   /* Create VkImages to handle binding at acquisition. */
    result = wsi->CreateImage(chain->device, &chain->image_info.create,
                              &chain->alloc, &image->blit.image);
    if (result != VK_SUCCESS)
@@ -648,7 +673,7 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
          image->drawable = NULL;
       }
 
-      if (image->base.image != VK_NULL_HANDLE)
+      if (image != VK_NULL_HANDLE)
          wsi_metal_destroy_image(chain, image);
    }
 
@@ -694,6 +719,11 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    if (chain == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
+   /* Software drivers cannot render to an MTLTexture as of now. Rendering to
+    * MTLTexture could be supported, but outside of the scope of adding a
+    * Metal backend that uses MTLTexture as render target. The software path
+    * will render to a CPU texture, and blit it to the presentation MTLTexture
+    * at the last moment. */
    const bool is_sw_driver = wsi_device->sw;
    struct wsi_cpu_image_params cpu_params = {
       .base.image_type = WSI_IMAGE_TYPE_CPU,
@@ -802,7 +832,7 @@ wsi_metal_finish_wsi(struct wsi_device *wsi_device,
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateMetalSurfaceEXT(
+wsi_CreateMetalSurfaceEXT(
    VkInstance _instance,
    const VkMetalSurfaceCreateInfoEXT* pCreateInfo,
    const VkAllocationCallbacks* pAllocator,
@@ -864,6 +894,9 @@ wsi_metal_allocate_command_buffer(const struct wsi_swapchain *chain,
                                   struct wsi_image *image)
 {
    const struct wsi_device *wsi = chain->wsi;
+   /* We need to create 2 command buffers per queue to be able to ping pong the blit.
+    * The first queue_family_count will store the next blit command,
+    * and the remaining will store the ones in flight. */
    int cmd_buffer_count =
       chain->blit.queue != NULL ? 2 : wsi->queue_family_count * 2;
    image->blit.cmd_buffers =
@@ -874,6 +907,7 @@ wsi_metal_allocate_command_buffer(const struct wsi_swapchain *chain,
    return image->blit.cmd_buffers ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
+/* Common utilities required by wsi_common.c */
 VkResult
 wsi_metal_configure_image(const struct wsi_swapchain *chain,
                           const VkSwapchainCreateInfoKHR *pCreateInfo,
