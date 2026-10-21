@@ -71,6 +71,11 @@
 #include <sys/shm.h>
 #endif
 
+#ifdef __TERMUX__
+#include <android/hardware_buffer.h>
+#include <sys/socket.h>
+#endif
+
 #ifndef XCB_PRESENT_OPTION_ASYNC_MAY_TEAR
 #define XCB_PRESENT_OPTION_ASYNC_MAY_TEAR 16
 #endif
@@ -250,10 +255,6 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    bool has_dri3_v1_4 = false;
    bool has_present_v1_4 = false;
 
-   /* wsi_x11_get_connection may be called from a thread, but we will never end up here on a worker thread,
-    * since the connection will always be in the hash-map,
-    * so we will not violate Vulkan's rule on allocation callbacks w.r.t.
-    * when it is allowed to call the allocation callbacks. */
    struct wsi_x11_connection *wsi_conn =
       vk_alloc(&wsi_dev->instance_alloc, sizeof(*wsi_conn), 8,
                 VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
@@ -270,15 +271,6 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    if (wants_shm)
       shm_cookie = xcb_query_extension(conn, 7, "MIT-SHM");
 
-   /* We try to be nice to users and emit a warning if they try to use a
-    * Vulkan application on a system without DRI3 enabled.  However, this ends
-    * up spewing the warning when a user has, for example, both Intel
-    * integrated graphics and a discrete card with proprietary drivers and are
-    * running on the discrete card with the proprietary DDX.  In this case, we
-    * really don't want to print the warning because it just confuses users.
-    * As a heuristic to detect this case, we check for a couple of proprietary
-    * X11 extensions.
-    */
    amd_cookie = xcb_query_extension(conn, 11, "ATIFGLRXDRI");
    nv_cookie = xcb_query_extension(conn, 10, "NV-CONTROL");
 
@@ -419,14 +411,6 @@ wsi_x11_check_for_dri3(struct wsi_x11_connection *wsi_conn)
    return false;
 }
 
-/**
- * Get internal struct representing an xcb_connection_t.
- *
- * This can allocate the struct but the caller does not own the struct. It is
- * deleted on wsi_x11_finish_wsi by the hash table it is inserted.
- *
- * If the allocation fails NULL is returned.
- */
 static struct wsi_x11_connection *
 wsi_x11_get_connection(struct wsi_device *wsi_dev,
                        xcb_connection_t *conn)
@@ -438,9 +422,6 @@ wsi_x11_get_connection(struct wsi_device *wsi_dev,
 
    struct hash_entry *entry = _mesa_hash_table_search(wsi->connections, conn);
    if (!entry) {
-      /* We're about to make a bunch of blocking calls.  Let's drop the
-       * mutex for now so we don't block up too badly.
-       */
       mtx_unlock(&wsi->mutex);
 
       struct wsi_x11_connection *wsi_conn =
@@ -452,7 +433,6 @@ wsi_x11_get_connection(struct wsi_device *wsi_dev,
 
       entry = _mesa_hash_table_search(wsi->connections, conn);
       if (entry) {
-         /* Oops, someone raced us to it */
          wsi_x11_connection_destroy(wsi_dev, wsi_conn);
       } else {
          entry = _mesa_hash_table_insert(wsi->connections, conn, wsi_conn);
@@ -471,8 +451,6 @@ wsi_x11_connection_find_screen_resources(struct wsi_device *wsi_dev, xcb_connect
    xcb_get_geometry_cookie_t geometry_cookie = xcb_get_geometry_unchecked(conn, window);
    xcb_get_geometry_reply_t *geometry_reply = xcb_get_geometry_reply(conn, geometry_cookie, NULL);
 
-   /* Returning NULL would normally signal SURFACE_LOST, but this isn't fatal.
-    * We just won't support present timing. */
    if (!geometry_reply)
       return NULL;
 
@@ -547,9 +525,6 @@ connection_get_visualtype(xcb_connection_t *conn, xcb_visualid_t visual_id)
    xcb_screen_iterator_t screen_iter =
       xcb_setup_roots_iterator(xcb_get_setup(conn));
 
-   /* For this we have to iterate over all of the screens which is rather
-    * annoying.  Fortunately, there is probably only 1.
-    */
    for (; screen_iter.rem; xcb_screen_next (&screen_iter)) {
       xcb_visualtype_t *visual = screen_get_visualtype(screen_iter.data,
                                                        visual_id, NULL);
@@ -603,7 +578,6 @@ visual_has_alpha(xcb_visualtype_t *visual, unsigned depth)
 
    uint32_t all_mask = 0xffffffff >> (32 - depth);
 
-   /* Do we have bits left over after RGB? */
    return (all_mask & ~rgb_mask) != 0;
 }
 
@@ -626,11 +600,8 @@ wsi_GetPhysicalDeviceXcbPresentationSupportKHR(VkPhysicalDevice physicalDevice,
    VK_FROM_HANDLE(vk_physical_device, pdevice, physicalDevice);
    struct wsi_device *wsi_device = pdevice->wsi_device;
 
-   /* These should overlap. */
    uint64_t effective_queues = wsi_device->queue_supports_blit & wsi_device->queue_supports_timestamps;
 
-   /* If there are no queues that support both blits and timestamps,
-    * don't report support for queue timestamps. */
    if (!effective_queues)
       effective_queues = wsi_device->queue_supports_blit;
 
@@ -660,9 +631,6 @@ wsi_GetPhysicalDeviceXlibPresentationSupportKHR(VkPhysicalDevice physicalDevice,
                                                 Display *dpy,
                                                 VisualID visualID)
 {
-   /* Our WSI implementation for X11 relies on threads.  Check Xlib is running
-    * in thread safe mode before advertising support.
-    */
    if (!x11_xlib_display_is_thread_safe(dpy))
       return false;
 
@@ -740,27 +708,6 @@ x11_get_min_image_count(const struct wsi_device *wsi_device, bool is_xwayland)
    if (wsi_device->x11.override_minImageCount)
       return wsi_device->x11.override_minImageCount;
 
-   /* For IMMEDIATE and FIFO, most games work in a pipelined manner where the
-    * can produce frames at a rate of 1/MAX(CPU duration, GPU duration), but
-    * the render latency is CPU duration + GPU duration.
-    *
-    * This means that with scanout from pageflipping we need 3 frames to run
-    * full speed:
-    * 1) CPU rendering work
-    * 2) GPU rendering work
-    * 3) scanout
-    *
-    * Once we have a nonblocking acquire that returns a semaphore we can merge
-    * 1 and 3. Hence the ideal implementation needs only 2 images, but games
-    * cannot tellwe currently do not have an ideal implementation and that
-    * hence they need to allocate 3 images. So let us do it for them.
-    *
-    * This is a tradeoff as it uses more memory than needed for non-fullscreen
-    * and non-performance intensive applications.
-    *
-    * For Xwayland Venus reports four images as described in
-    *   wsi_wl_surface_get_capabilities
-    */
    return is_xwayland && wsi_device->x11.extra_xwayland_image ? 4 : 3;
 }
 
@@ -813,8 +760,6 @@ x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
    }
 
    VkImageUsageFlags image_usage = wsi_caps_get_image_usage();
-
-   /* There is no real maximum */
    caps->surfaceCapabilities.maxImageCount = 0;
 
    caps->surfaceCapabilities.supportedTransforms = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -829,7 +774,7 @@ x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
    if (surface_caps && pdevice->supported_extensions.EXT_multisampled_render_to_swapchain)
       surface_caps->swapchainSupportedFlags |= VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
 
-   VkImageUsageFlags2CreateInfoKHR *usage2 =
+   VkImageUsageFLAGS2CreateInfoKHR *usage2 =
       vk_find_struct(caps->pNext, IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR);
    if (usage2) {
       usage2->usage = image_usage;
@@ -866,8 +811,7 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
          break;
       }
 
-      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
-         /* Unsupported. */
+      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT: {
          VkSurfacePresentScalingCapabilitiesKHR *scaling = (void *)ext;
          scaling->supportedPresentScaling = 0;
          scaling->supportedPresentGravityX = 0;
@@ -877,13 +821,11 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
          break;
       }
 
-      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
-         /* All present modes are compatible with each other. */
+      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_EXT: {
          VkSurfacePresentModeCompatibilityKHR *compat = (void *)ext;
          if (compat->pPresentModes) {
             assert(present_mode);
             VK_OUTARRAY_MAKE_TYPED(VkPresentModeKHR, modes, compat->pPresentModes, &compat->presentModeCount);
-            /* Must always return queried present mode even when truncating. */
             vk_outarray_append_typed(VkPresentModeKHR, &modes, mode) {
                *mode = present_mode->presentMode;
             }
@@ -908,14 +850,12 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
 
       case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR: {
          VkSurfaceCapabilitiesPresentId2KHR *pid2 = (void *)ext;
-
          pid2->presentId2Supported = VK_TRUE;
          break;
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR: {
          VkSurfaceCapabilitiesPresentWait2KHR *pwait2 = (void *)ext;
-
          pwait2->presentWait2Supported = VK_TRUE;
          break;
       }
@@ -927,10 +867,6 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
          struct wsi_x11_connection *wsi_conn = wsi_x11_get_connection(wsi_device, conn);
 
          if (!wsi_device->has_host_query_reset && !wsi_conn->is_xwayland) {
-            /* X11 can sometimes COMPLETE before the GPU is even done.
-             * In this case, we need to observe a reset timestamp when polling,
-             * which requires host query resets. On Xwayland, this cannot happen,
-             * and not every platform supports host query reset. */
             wait->presentTimingSupported = VK_FALSE;
             wait->presentStageQueries = 0;
             wait->presentAtAbsoluteTimeSupported = VK_FALSE;
@@ -941,22 +877,7 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
          wait->presentTimingSupported = VK_TRUE;
 
          if (wsi_conn->is_xwayland) {
-            /* Wayland COMPLETE is tied to fence callback, so that's what we'll report.
-             * For pure frame pacing support, this is likely fine. */
             wait->presentStageQueries = VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT;
-
-            /* Xwayland cannot get a reliable refresh rate estimate since MSC is not tied to monitor refresh at all.
-             * However, it's pragmatically very important to expose some baseline Xwl support since
-             * a large amount of applications (mostly games) rely on X11 APIs.
-             *
-             * Relative timings are easier to deal with since errors against an absolute timer are more or less expected,
-             * and it's sufficient for implementing present intervals in GL/D3D, etc, but likely not for
-             * tight A/V sync in e.g. media players, but those should be using Wayland when available anyway.
-             * As per-spec the timing request we provide should correlate with PIXEL_VISIBLE_BIT stage,
-             * but when we only observe dequeue, that's not really possible, but relative timings don't have that problem.
-             *
-             * There is PRESENT_CAPABILITY_UST, which would help, but xserver does not implement it at all.
-             */
             wait->presentAtAbsoluteTimeSupported = VK_FALSE;
             wait->presentAtRelativeTimeSupported = VK_TRUE;
          } else {
@@ -969,7 +890,6 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
       }
 
       default:
-         /* Ignored */
          break;
       }
    }
@@ -1003,7 +923,6 @@ get_sorted_vk_formats(VkIcdSurfaceBase *surface, struct wsi_device *wsi_device,
    if (!visual)
       return false;
 
-   /* use the root window's visual to set the default */
    *count = 0;
    for (unsigned i = 0; i < ARRAY_SIZE(formats); i++) {
       if (rgb_component_bits_are_equal(formats[i], rootvis))
@@ -1203,8 +1122,8 @@ struct x11_image_pending_completion {
 struct x11_image {
    struct wsi_image                          base;
    xcb_pixmap_t                              pixmap;
-   xcb_xfixes_region_t                       update_region; /* long lived XID */
-   xcb_xfixes_region_t                       update_area;   /* the above or None */
+   xcb_xfixes_region_t                       update_region;
+   xcb_xfixes_region_t                       update_area;
    struct xshmfence *                        shm_fence;
    uint32_t                                  sync_fence;
    xcb_shm_seg_t                             shmseg;
@@ -1216,14 +1135,6 @@ struct x11_image {
    int                                       rectangle_count;
    struct wsi_image_timing_request           timing_request;
 
-   /* In IMMEDIATE and MAILBOX modes, we can have multiple pending presentations per image.
-    * We need to keep track of them when considering present ID. */
-
-   /* This is arbitrarily chosen. With IMMEDIATE on a 3 deep swapchain,
-    * we allow over 300 outstanding presentations per vblank, which is more than enough
-    * for any reasonable application.
-    * This used to be 16, but it regressed benchmarks that did 15k+ FPS.
-    * This should allow over 25k FPS on a 60 Hz monitor. Any more than this is comical. */
 #define X11_SWAPCHAIN_MAX_PENDING_COMPLETIONS 128
    uint32_t                                  present_queued_count;
    struct x11_image_pending_completion       pending_completions[X11_SWAPCHAIN_MAX_PENDING_COMPLETIONS];
@@ -1272,29 +1183,16 @@ struct x11_swapchain {
    thrd_t                                       queue_manager;
    thrd_t                                       event_manager;
 
-   /* Used for communicating between event_manager and queue_manager.
-    * Lock is also taken when reading and writing status.
-    * When reading status in application threads,
-    * x11_swapchain_read_status_atomic can be used as a wrapper function. */
    mtx_t                                        thread_state_lock;
    struct u_cnd_monotonic                       thread_state_cond;
 
    struct wsi_x11_screen_resources *            screen_resources;
 
-   /* This holds the fallback for MSC rate, i.e. refresh rate.
-    * If we cannot get ahold of a stable estimate based on real feedback,
-    * we defer to using this. With multi-monitors and other potential effects affecting actual rates,
-    * we shouldn't trust this blindly.
-    * This data is only accessed by event thread.
-    * FIFO thread which computes target MSC accesses the current refresh rate
-    * via the base structure present_timing or via present timing window. */
    uint64_t                                     randr_current_refresh_ns;
    bool                                         dirty_geometry;
    uint32_t                                     dirty_geometry_width;
    uint32_t                                     dirty_geometry_height;
 
-   /* Lock and condition variable for present wait.
-    * Signalled by event thread and waited on by callers to PresentWaitKHR. */
    mtx_t                                        present_progress_mutex;
    struct u_cnd_monotonic                       present_progress_cond;
    uint64_t                                     present_id;
@@ -1311,11 +1209,6 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(x11_swapchain, base.base, VkSwapchainKHR,
 
 static bool x11_refresh_rate_estimate_is_stable(struct x11_swapchain *swapchain, uint64_t base_rate)
 {
-   /* Only accept a refresh rate estimate if it's *very* stable.
-    * Keith's old GOOGLE_display_timing MR suggests that using this estimate is better than blindly
-    * accepting the modeline in some cases.
-    * When running in VRR modes, the MSC will appear to be highly unstable, and we cannot accept those estimates. */
-
    for (int i = 0; i < X11_SWAPCHAIN_REFRESH_RATE_WINDOW_SIZE; i++) {
       const struct x11_present_timing_entry *a =
             &swapchain->present_timing_window[i];
@@ -1333,12 +1226,6 @@ static bool x11_refresh_rate_estimate_is_stable(struct x11_swapchain *swapchain,
 
       uint64_t refresh_ns = 1000 * ust_delta / msc_delta;
 
-      /* The true UST values are expected to be quite accurate.
-       * Anything more than 20us difference in rate is considered unstable.
-       * (20us limit suggested by Mario Kleiner based on default value
-       * of /sys/module/drm/parameters/timestamp_precision_usec).
-       * If the MSC is driven by GPU progress in VRR mode,
-       * it's extremely unlikely that they are paced *perfectly* for 16 frames in a row. */
       if (llabs((int64_t)base_rate - (int64_t)refresh_ns) > 20000)
          return false;
    }
@@ -1356,22 +1243,18 @@ static void x11_present_update_refresh_cycle_estimate(struct x11_swapchain *swap
    struct x11_present_timing_entry *entry = &swapchain->present_timing_window[swapchain->present_timing_window_index];
 
    if (!swapchain->has_reliable_msc) {
-      /* If we don't have reliable MSC, we always trust the fallback RANDR query.
-       * We have no idea if we're FRR or VRR. */
       wsi_swapchain_present_timing_update_refresh_rate(&swapchain->base, randr_refresh_ns, 0, 0);
       entry->msc = msc;
       entry->ust = ust;
       return;
    }
 
-   /* Try to get an initial estimate as quickly as possible, we will refine it over time. */
    if (entry->msc == 0)
       entry = &swapchain->present_timing_window[1];
 
    if (entry->msc != 0) {
       uint64_t msc_delta = msc - entry->msc;
 
-      /* Safeguard against any weird interactions with IMMEDIATE. */
       if (msc_delta != 0) {
          uint64_t ust_delta = 1000 * (ust - entry->ust);
          uint64_t refresh_ns = ust_delta / msc_delta;
@@ -1379,18 +1262,10 @@ static void x11_present_update_refresh_cycle_estimate(struct x11_swapchain *swap
          swapchain->msc_estimate_is_stable = x11_refresh_rate_estimate_is_stable(swapchain, refresh_ns);
 
          if (swapchain->msc_estimate_is_stable) {
-            /* If MSC is tightly locked in, we can safely make the assumption we're in FRR mode.
-             * It's possible we're technically doing VRR, but if we're rendering at above monitor refresh
-             * rate consistently, then there is no meaningful difference anyway. */
-
-            /* Our refresh rates are only estimates, so expect some deviation (+/- 1us). */
             wsi_swapchain_present_timing_update_refresh_rate(&swapchain->base, refresh_ns, refresh_ns, 1000);
          } else if (!flip || !swapchain->base.wsi->enable_adaptive_sync) {
-            /* If we're not flipping, we're not getting VRR. If MSC estimate is unstable for whatever reason, fallback to randr query. */
             wsi_swapchain_present_timing_update_refresh_rate(&swapchain->base, randr_refresh_ns, randr_refresh_ns, 0);
          } else {
-            /* If we have enabled adaptive sync, and we're seeing highly irregular MSC values, we assume
-             * we're driving the display VRR. */
             wsi_swapchain_present_timing_update_refresh_rate(&swapchain->base, randr_refresh_ns, UINT64_MAX, 0);
          }
       }
@@ -1407,12 +1282,9 @@ static void x11_present_complete(struct x11_swapchain *swapchain,
 {
    swapchain->last_complete_is_flip = flip;
 
-   /* Update estimate for refresh rate. */
    if (swapchain->base.present_timing.active)
       x11_present_update_refresh_cycle_estimate(swapchain, msc, ust, flip);
 
-   /* Make sure to signal present timings before signalling present wait,
-    * this way we get minimal latency for reports. */
    uint64_t timing_serial = image->pending_completions[index].timing_serial;
    if (timing_serial)
       wsi_swapchain_present_timing_notify_completion(&swapchain->base, timing_serial, ust * 1000, &image->base);
@@ -1444,7 +1316,6 @@ static void x11_notify_pending_present(struct x11_swapchain *swapchain,
    u_cnd_monotonic_signal(&swapchain->thread_state_cond);
 }
 
-/* It is assumed that thread_state_lock is taken when calling this function. */
 static void x11_swapchain_notify_error(struct x11_swapchain *swapchain, VkResult result)
 {
    mtx_lock(&swapchain->present_progress_mutex);
@@ -1473,11 +1344,9 @@ x11_update_present_timing_xrandr_estimate(struct x11_swapchain *chain, uint32_t 
 
    ret = 1000000000ull * screen_resources->crtcs[0].refresh_denominator / screen_resources->crtcs[0].refresh_numerator;
 
-   /* Don't need to ponder multi-monitor. */
    if (screen_resources->num_crtcs == 1)
       goto out;
 
-   /* Find the best matching screen for the window. */
    xcb_translate_coordinates_cookie_t cookie =
          xcb_translate_coordinates_unchecked(chain->conn, chain->window,
                                              screen_resources->screen->root, 0, 0);
@@ -1511,17 +1380,6 @@ out:
    return ret;
 }
 
-/**
- * Update the swapchain status with the result of an operation, and return
- * the combined status. The chain status will eventually be returned from
- * AcquireNextImage and QueuePresent.
- *
- * We make sure to 'stick' more pessimistic statuses: an out-of-date error
- * is permanent once seen, and every subsequent call will return this. If
- * this has not been seen, success will be returned.
- *
- * It is assumed that thread_state_lock is taken when calling this function.
- */
 static VkResult
 _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
                       const char *file, int line)
@@ -1529,11 +1387,9 @@ _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
    if (result < 0)
       x11_swapchain_notify_error(chain, result);
 
-   /* Prioritise returning existing errors for consistency. */
    if (chain->status < 0)
       return chain->status;
 
-   /* If we have a new error, mark it as permanent on the chain and return. */
    if (result < 0) {
 #ifndef NDEBUG
       mesa_logd("%s:%d: Swapchain status changed to %s\n",
@@ -1543,13 +1399,9 @@ _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
       return result;
    }
 
-   /* Return temporary errors, but don't persist them. */
    if (result == VK_TIMEOUT || result == VK_NOT_READY)
       return result;
 
-   /* Suboptimal isn't an error, but is a status which sticks to the swapchain
-    * and is always returned rather than success.
-    */
    if (result == VK_SUBOPTIMAL_KHR) {
 #ifndef NDEBUG
       if (chain->status != VK_SUBOPTIMAL_KHR) {
@@ -1561,7 +1413,6 @@ _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
       return result;
    }
 
-   /* No changes, so return the last status. */
    return chain->status;
 }
 #define x11_swapchain_result(chain, result) \
@@ -1573,10 +1424,12 @@ x11_get_wsi_image(struct wsi_swapchain *wsi_chain, uint32_t image_index)
    struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
    return &chain->images[image_index].base;
 }
+
 #ifdef HAVE_X11_DRM
 static bool
 wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain);
 #endif
+
 static VkResult
 x11_wait_for_explicit_sync_release_submission(struct x11_swapchain *chain,
                                               uint64_t rel_timeout_ns,
@@ -1600,13 +1453,10 @@ x11_wait_for_explicit_sync_release_submission(struct x11_swapchain *chain,
    return result;
 }
 
-/* XXX this belongs in presentproto */
 #ifndef PresentWindowDestroyed
 #define PresentWindowDestroyed (1 << 0)
 #endif
-/**
- * Process an X11 Present event. Does not update chain->status.
- */
+
 static VkResult
 x11_handle_dri3_present_event(struct x11_swapchain *chain,
                               xcb_present_generic_event_t *event)
@@ -1625,10 +1475,6 @@ x11_handle_dri3_present_event(struct x11_swapchain *chain,
       }
 
       if (chain->base.present_timing.active) {
-         /* It's possible that we have multiple monitors and moving windows around change the effective rate.
-          * Lots of logic reused from platform_x11.c. */
-
-         /* Rate limit this query to once per present since this can be very spammy. */
          chain->dirty_geometry_width = config->width;
          chain->dirty_geometry_height = config->height;
          chain->dirty_geometry = true;
@@ -1655,18 +1501,6 @@ x11_handle_dri3_present_event(struct x11_swapchain *chain,
 
    case XCB_PRESENT_EVENT_COMPLETE_NOTIFY: {
       xcb_present_complete_notify_event_t *complete = (void *) event;
-
-      /* Clamping the ust here serves multiple purposes.
-       * - In VRR/Xwl paths, we pulled back the sleep for a few ms to be able to hit the target time
-       *   more reliably.
-       * - For any RELATIVE timing, we need to drive the estimate for next frame based on
-       *   next_present_ust_lower_bound, not complete->ust, which might come in shortly before
-       *   the expected time.
-       * - For any ABSOLUTE timing, we cannot report a time earlier than targetTime,
-       *   since that would be out of spec and we kind of skirted the spec a little by
-       *   presenting before targetTime (although the error is minimized to just 1 ms).
-       * - For stable msc estimation on native X11, we intentionally add a bit of jitter,
-       *   such that this clamping will never falsely claim a stable MSC rate. */
       uint64_t ust = MAX2(complete->ust, chain->next_present_ust_lower_bound);
 
       if (complete->kind == XCB_PRESENT_COMPLETE_KIND_PIXMAP) {
@@ -1684,10 +1518,6 @@ x11_handle_dri3_present_event(struct x11_swapchain *chain,
       }
 
       if (chain->dirty_geometry) {
-         /* Update this after reporting present complete to avoid adding roundtrip delays to the present.
-          * COMPLETE_NOTIFY is used to unblock clients and affects pacing.
-          * This adds potentially one frame of delay to refresh rate estimates when moving windows around,
-          * but the effect of this is inconsequential. */
          chain->randr_current_refresh_ns =
             x11_update_present_timing_xrandr_estimate(chain, chain->dirty_geometry_width, chain->dirty_geometry_height);
          chain->dirty_geometry = false;
@@ -1705,21 +1535,10 @@ x11_handle_dri3_present_event(struct x11_swapchain *chain,
             result = VK_SUBOPTIMAL_KHR;
          break;
       case XCB_PRESENT_COMPLETE_MODE_FLIP:
-         /* If we ever go from flipping to copying, the odds are very likely
-          * that we could reallocate in a more optimal way if we didn't have
-          * to care about scanout, so we always do this.
-          */
          chain->copy_is_suboptimal = true;
          break;
 #ifdef HAVE_X11_DRM
       case XCB_PRESENT_COMPLETE_MODE_SUBOPTIMAL_COPY:
-         /* The winsys is now trying to flip directly and cannot due to our
-          * configuration. Request the user reallocate.
-          */
-
-         /* Sometimes, this complete mode is spurious, and a false positive.
-          * Xwayland may report SUBOPTIMAL_COPY even if there are no changes in the modifiers.
-          * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/26616 for more details. */
          if (chain->status == VK_SUCCESS &&
              wsi_x11_swapchain_query_dri3_modifiers_changed(chain)) {
             result = VK_SUBOPTIMAL_KHR;
@@ -1739,10 +1558,8 @@ x11_handle_dri3_present_event(struct x11_swapchain *chain,
 
    return VK_SUCCESS;
 }
+
 #ifdef HAVE_X11_DRM
-/**
- * Send image to X server via Present extension.
- */
 static VkResult
 x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
                         uint64_t target_msc, VkPresentModeKHR present_mode)
@@ -1803,13 +1620,13 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
          chain->window,
          image->pixmap,
          serial,
-         0,                                   /* valid */
-         image->update_area,                  /* update */
-         0,                                   /* x_off */
-         0,                                   /* y_off */
-         XCB_NONE,                            /* target_crtc */
-         image->dri3_syncobj[WSI_ES_ACQUIRE], /* acquire_syncobj */
-         image->dri3_syncobj[WSI_ES_RELEASE], /* release_syncobj */
+         0,
+         image->update_area,
+         0,
+         0,
+         XCB_NONE,
+         image->dri3_syncobj[WSI_ES_ACQUIRE],
+         image->dri3_syncobj[WSI_ES_RELEASE],
          acquire_point,
          release_point,
          options,
@@ -1823,11 +1640,11 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
                                   chain->window,
                                   image->pixmap,
                                   serial,
-                                  0,                  /* valid */
-                                  image->update_area, /* update */
-                                  0,                  /* x_off */
-                                  0,                  /* y_off */
-                                  XCB_NONE,           /* target_crtc */
+                                  0,
+                                  image->update_area,
+                                  0,
+                                  0,
+                                  XCB_NONE,
                                   XCB_NONE,
                                   image->sync_fence,
                                   options,
@@ -1840,17 +1657,13 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
    return x11_swapchain_result(chain, VK_SUCCESS);
 }
 #endif
-/**
- * Send image to X server unaccelerated (software drivers).
- */
+
 static VkResult
 x11_present_to_x11_sw(struct x11_swapchain *chain, uint32_t image_index)
 {
    assert(!chain->base.image_info.explicit_sync);
    struct x11_image *image = &chain->images[image_index];
 
-   /* Begin querying this before submitting the frame for improved async performance.
-    * In this _sw() mode we're expecting network round-trip delay, not just UNIX socket delay. */
    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(chain->conn, chain->window);
 
    xcb_void_cookie_t cookie;
@@ -1909,11 +1722,7 @@ x11_present_to_x11_sw(struct x11_swapchain *chain, uint32_t image_index)
 
    xcb_flush(chain->conn);
 
-   /* We don't have queued present here.
-    * Immediately let application acquire again, but query geometry first so
-    * we can report OUT_OF_DATE on resize. */
    xcb_generic_error_t *err;
-
    xcb_get_geometry_reply_t *geom = xcb_get_geometry_reply(chain->conn, geom_cookie, &err);
    VkResult result = VK_SUCCESS;
    if (geom) {
@@ -1965,20 +1774,11 @@ x11_capture_trace(struct x11_swapchain *chain)
 #endif
 }
 
-/* Use a trivial helper here to make it easier to read in code
- * where we're intending to access chain->status outside the thread lock. */
 static VkResult x11_swapchain_read_status_atomic(struct x11_swapchain *chain)
 {
    return chain->status;
 }
 
-/**
- * Decides if an early wait on buffer fences before buffer submission is required.
- * That is for mailbox mode, as otherwise the latest image in the queue might not be fully rendered at
- * present time, which could lead to missing a frame. This is an Xorg issue.
- * On Wayland, we don't know at this point if tearing protocol is/can be used by Xwl,
- * so we have to make the MAILBOX assumption.
- */
 static bool
 x11_needs_wait_for_fences(const struct wsi_device *wsi_device,
                           struct wsi_x11_connection *wsi_conn,
@@ -2004,20 +1804,9 @@ x11_swapchain_present_timing_is_out_of_order_completion(
       struct wsi_x11_connection *wsi_conn,
       const struct wsi_image_timing_request *request)
 {
-   /* On native X11, COMPLETE can be called even before the GPU is done rendering when not flipping.
-    * This creates a lot of confusion for present timing since we have no way to
-    * guarantee anything useful.
-    *
-    * The transition between blit and flip could create a small blip where timings are not quite accurate,
-    * since we base our decisions on the previously completed frame.
-    *
-    * The primary way this weirdness manifests for present timing is that COMPLETE may get signaled,
-    * but the timestamp query has not yet been written and we cannot properly report timestamps.
-    */
    return !chain->last_complete_is_flip && !wsi_conn->is_xwayland && (request->feedback || request->time);
 }
 
-/* This matches Wayland. */
 #define X11_SWAPCHAIN_MAILBOX_IMAGES 4
 
 static bool
@@ -2025,48 +1814,10 @@ x11_requires_mailbox_image_count(const struct wsi_device *device,
                                  struct wsi_x11_connection *wsi_conn,
                                  VkPresentModeKHR present_mode)
 {
-   /* If we're resorting to wait for fences, we're assuming a MAILBOX-like model,
-    * and we should allocate accordingly.
-    *
-    * One potential concern here is IMMEDIATE mode on Wayland.
-    * This situation could arise:
-    * - Fullscreen FLIP mode
-    * - Compositor does not support tearing protocol (we cannot know this here)
-    *
-    * With 3 images, during the window between latch and flip, there is only one image left to app,
-    * so peak FPS may not be reached if the window between latch and flip is large,
-    * but tests on contemporary compositors suggest this effect is minor.
-    * Frame rate in the thousands can easily be reached.
-    *
-    * There are pragmatic reasons to expose 3 images for IMMEDIATE on Xwl.
-    * - minImageCount is not intended as a tool to tune performance, its intent is to signal forward progress.
-    *   Our X11 and WL implementations do so for pragmatic reasons due to sync acquire interacting poorly with 2 images.
-    *   A jump from 3 to 4 is at best a minor improvement which only affects applications
-    *   running at extremely high frame rates, way beyond the monitor refresh rate.
-    *   On the other hand, lowering minImageCount to 2 would break the fundamental idea of MAILBOX
-    *   (and IMMEDIATE without tear), since FPS > refresh rate would not be possible.
-    *
-    * - Several games developed for other platforms and other Linux WSI implementations
-    *   do not expect that image counts arbitrarily change when changing present mode,
-    *   and will crash when Mesa does so.
-    *   There are several games using the strict_image_count drirc to work around this,
-    *   and it would be good to be friendlier in the first place, so we don't have to work around more games.
-    *   IMMEDIATE is a common presentation mode on those platforms, but MAILBOX is more Wayland-centric in nature,
-    *   so increasing image count for that mode is more reasonable.
-    *
-    * - IMMEDIATE expects tearing, and when tearing, 3 images are more than enough.
-    *
-    * - With KHR_swapchain_maintenance1, toggling between FIFO / IMMEDIATE (used extensively by D3D layering)
-    *   would require application to allocate >3 images which is unfortunate for memory usage,
-    *   and potentially disastrous for latency unless KHR_present_wait is used.
-    */
    return x11_needs_wait_for_fences(device, wsi_conn, present_mode) ||
           present_mode == VK_PRESENT_MODE_MAILBOX_KHR;
 }
 
-/**
- * Send image to the X server for presentation at target_msc.
- */
 static VkResult
 x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index,
                    uint64_t target_msc, VkPresentModeKHR present_mode)
@@ -2099,7 +1850,6 @@ x11_release_images(struct wsi_swapchain *wsi_chain,
    if (chain->status == VK_ERROR_SURFACE_LOST_KHR)
       return chain->status;
 
-   /* If we're using implicit sync, push images to the acquire queue */
    if (!chain->base.image_info.explicit_sync) {
       for (uint32_t i = 0; i < count; i++) {
          uint32_t index = indices[i];
@@ -2131,24 +1881,12 @@ static uint64_t
 x11_poll_early_refresh(struct wsi_swapchain *wsi_chain, uint64_t *interval)
 {
    struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
-
-   /* We don't know yet if we're VRR or FRR.
-    * For Xwl we will never really know with current Xserver,
-    * and for plain X11, we will know based on feedback. */
    *interval = 0;
-
-   /* Query for refresh rate. This is an Xrandr based query. */
    chain->randr_current_refresh_ns =
       x11_update_present_timing_xrandr_estimate(chain, chain->extent.width, chain->extent.height);
    return chain->randr_current_refresh_ns;
 }
 
-/**
- * Acquire a ready-to-use image from the swapchain.
- *
- * This means usually that the image is not waiting on presentation and that the
- * image has been released by the X server to be used again by the consumer.
- */
 static VkResult
 x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
                        const VkAcquireNextImageInfoKHR *info,
@@ -2157,7 +1895,6 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
    struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
    uint64_t timeout = info->timeout;
 
-   /* If the swapchain is in an error state, don't go any further. */
    VkResult result = x11_swapchain_read_status_atomic(chain);
    if (result < 0)
       return result;
@@ -2169,9 +1906,6 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
       result = wsi_queue_pull(&chain->acquire_queue,
                               image_index, timeout);
 
-      /* x11_wait_for_explicit_sync_release_submission() is smart enough to do
-       * this for us but wsi_queue_pull() isn't.
-       */
       if (result == VK_TIMEOUT && info->timeout == 0)
          result = VK_NOT_READY;
    }
@@ -2200,13 +1934,6 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
    return result;
 }
 
-/**
- * Queue a new presentation of an image that was previously acquired by the
- * consumer.
- *
- * Note that in immediate presentation mode this does not really queue the
- * presentation but directly asks the X server to show it.
- */
 static VkResult
 x11_queue_present(struct wsi_swapchain *wsi_chain,
                   uint32_t image_index,
@@ -2216,7 +1943,6 @@ x11_queue_present(struct wsi_swapchain *wsi_chain,
    struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
    xcb_xfixes_region_t update_area = 0;
 
-   /* If the swapchain is in an error state, don't go any further. */
    VkResult status = x11_swapchain_read_status_atomic(chain);
    if (status < 0)
       return status;
@@ -2242,7 +1968,6 @@ x11_queue_present(struct wsi_swapchain *wsi_chain,
    }
    chain->images[image_index].update_area = update_area;
    chain->images[image_index].present_id = present_id;
-   /* With KHR_swapchain_maintenance1, the present mode can change per present. */
    chain->images[image_index].present_mode = chain->base.present_mode;
    chain->images[image_index].timing_request = chain->timing_request;
    memset(&chain->timing_request, 0, sizeof(chain->timing_request));
@@ -2251,93 +1976,55 @@ x11_queue_present(struct wsi_swapchain *wsi_chain,
    return x11_swapchain_read_status_atomic(chain);
 }
 
-/**
- * The number of images that are not owned by X11:
- *  (1) in the ownership of the app, or
- *  (2) app to take ownership through an acquire, or
- *  (3) in the present queue waiting for the FIFO thread to present to X11.
- */
 static unsigned x11_driver_owned_images(const struct x11_swapchain *chain)
 {
    return chain->base.image_count - chain->sent_image_count;
 }
 
-/* This thread is responsible for pumping PRESENT replies.
- * This is done in a separate thread from the X11 presentation thread
- * to be able to support non-blocking modes like IMMEDIATE and MAILBOX.
- * Frame completion events can happen at any time, and we need to handle
- * the events as soon as they come in to have a quality implementation.
- * The presentation thread may go to sleep waiting for new presentation events to come in,
- * and it cannot wait for both X events and application events at the same time.
- * If we only cared about FIFO, this thread wouldn't be very useful.
- * Earlier implementation of X11 WSI had a single FIFO thread that blocked on X events after presenting.
- * For IMMEDIATE and MAILBOX, the application thread pumped the event queue, which caused a lot of pain
- * when trying to deal with present wait.
- */
 static int
 x11_manage_event_queue(void *state)
 {
    struct x11_swapchain *chain = state;
    u_thread_setname("WSI swapchain event");
 
-   /* While there is an outstanding IDLE we should wait for it.
-    * In FLIP modes at most one image will not be driver owned eventually.
-    * In BLIT modes, we expect that all images will eventually be driver owned,
-    * but we don't know which mode is being used. */
    unsigned forward_progress_guaranteed_acquired_images = chain->base.image_count - 1;
 
    mtx_lock(&chain->thread_state_lock);
 
    while (chain->status >= 0) {
-      /* This thread should only go sleep waiting for X events when we know there are pending events.
-       * We expect COMPLETION events when there is at least one image marked as present_queued.
-       * We also expect IDLE events, but we only consider waiting for them when all images are busy,
-       * and application has fewer than N images acquired. */
-
       bool assume_forward_progress = false;
 
       for (uint32_t i = 0; i < chain->base.image_count; i++) {
          if (chain->images[i].present_queued_count != 0) {
-            /* We must pump through a present wait and unblock FIFO thread if using FIFO mode. */
             assume_forward_progress = true;
             break;
          }
       }
 
       if (!assume_forward_progress && !chain->base.image_info.explicit_sync) {
-         /* If true, application expects acquire (IDLE) to happen in finite time. */
          assume_forward_progress = x11_driver_owned_images(chain) <
                                    forward_progress_guaranteed_acquired_images;
       }
 
       if (assume_forward_progress) {
-         /* Only yield lock when blocking on X11 event. */
          mtx_unlock(&chain->thread_state_lock);
          xcb_generic_event_t *event =
                xcb_wait_for_special_event(chain->conn, chain->special_event);
          mtx_lock(&chain->thread_state_lock);
 
-         /* Re-check status since we dropped the lock while waiting for X. */
          VkResult result = chain->status;
 
          if (result >= 0) {
             if (event) {
-               /* Queue thread will be woken up if anything interesting happened in handler.
-                * Queue thread blocks on:
-                * - Presentation events completing
-                * - Presentation requests from application
-                * - WaitForFence workaround if applicable */
                result = x11_handle_dri3_present_event(chain, (void *) event);
             } else {
                result = VK_ERROR_SURFACE_LOST_KHR;
             }
          }
 
-         /* Updates chain->status and wakes up threads as necessary on error. */
          x11_swapchain_result(chain, result);
          free(event);
       } else {
-         /* Nothing important to do, go to sleep until queue thread wakes us up. */
          u_cnd_monotonic_wait(&chain->thread_state_cond, &chain->thread_state_lock);
       }
    }
@@ -2354,8 +2041,6 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
    const struct x11_present_timing_entry *entry = &chain->present_timing_window[chain->present_timing_window_index];
    bool relative = (request->flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT) != 0;
 
-   /* Just use the FIFO derived MSC. From spec on relative:
-    * "If the swapchain has never been used to present an image, the provided targetTime is ignored." */
    if (!request->serial || !request->time || (relative && !entry->ust))
       return minimum_msc;
 
@@ -2363,11 +2048,7 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
 
    mtx_lock(&chain->base.present_timing.lock);
 
-   /* Present timing is only defined to work with FIFO modes, so we can rely on having
-    * reliable relative timings, since we block for COMPLETE to come through before we queue up more presents. */
    if (relative) {
-      /* If application is trying to drive us at refresh rate, FIFO will take care of it.
-       * Don't end up in a situation where we sleep and miss the deadline by mistake. */
       if (!chain->has_reliable_msc) {
          uint64_t relative_threshold;
          if (request->flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT)
@@ -2385,19 +2066,11 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
       target_ns = (int64_t)request->time;
    }
 
-   /* Snap to nearest half refresh. This only makes sense for FRR, but it is the application's
-    * responsibility to not use this for VRR. If this flag is not used, this is strictly a "not before". */
    if (request->flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT)
       target_ns -= (int64_t)chain->base.present_timing.refresh_duration / 2;
 
-  /* Xwl cannot understand MSC that jumps by more than 1. It appears that if there are MSC jumps above 1,
-   * each MSC cycle is padded by 16.6ms or something like that.
-   * If we want to target specific time, we must sleep to achieve that until Xwl improves.
-   * Fortunately, we're on a submit thread, so that is mostly an acceptable solution. */
-
    if (entry->msc && chain->base.present_timing.refresh_duration != 0 &&
        chain->msc_estimate_is_stable && chain->has_reliable_msc) {
-      /* If we can trust MSC to be a stable FRR heartbeat, we sync to that. */
       uint64_t delta_time_ns = MAX2(target_ns - 1000 * (int64_t)entry->ust, 0);
       uint64_t periods = (delta_time_ns + chain->base.present_timing.refresh_duration - 1) /
                          chain->base.present_timing.refresh_duration;
@@ -2405,48 +2078,16 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
 
       minimum_msc = MAX2(minimum_msc, entry->msc + periods);
    } else {
-      /* If we don't have a stable estimate (e.g. true VRR, or Xwl) we just sleep until deadline.
-       * This relies on timebase on os_time_nanosleep is MONOTONIC as well as UST being MONOTONIC. */
-
-      /* On Xwl we never accept MSC estimates as ground truth, so ignore this perturbation. */
       if (chain->has_reliable_msc) {
-         /* Very regular sleeping can trigger a strange feedback loop where MSC estimates becomes stable enough
-          * that we accept it as stable MSC. Perturb the rates enough to make it extremely unlikely
-          * we accept sleeping patterns as ground truth rate, introduce a 50 us error between each timestamp,
-          * which should avoid the 20 us check reliably. If sleep quantas are not as accurate, it's extremely unlikely
-          * we get a stable pace anyway. TODO: Is there a more reliable way? */
-
          target_ns += 50000ll * (chain->present_timing_window_index & 1) - 25000;
          target_ns = MAX2(target_ns, 0);
       }
 
-      /* If we're on Xwl or VRR X11 and trying to target a specific cycle by sleeping, pull back the sleep a bit.
-       * We will be racing against time once we wake up to send the request to Xwl -> Wayland -> frame callback -> COMPLETE.
-       * If target_ns syncs well to a refresh cycle, we speculate that COMPLETE will come through at about target_ns. */
-
-      /* To get proper pace on an actual VRR display, we will have to detect if we're presenting too early
-       * compared to what application actually expected.
-       * In that case, we need to remove this compensation if we detect that presents come in too early.
-       * Effectively, we will need to adjust the report UST up if we somehow end up seeing a timestamp too early.
-       * The relative refresh will feed off this adjustment in a tight loop, so this should be pretty solid
-       * for both VRR and FRR. Present timing can only be used with FIFO modes, i.e. we will not overwrite this
-       * until the present is actually complete.  Skip the assignment if we are definitely FRR on a vblank-less setup. */
       if (chain->base.wsi->enable_adaptive_sync || !chain->has_reliable_msc)
          chain->next_present_ust_lower_bound = target_ns / 1000;
 
-      /* We also need to pull back the sleep a bit to account for X.org roundtrip delays.
-       * If we sleep until targetTime we will most certainly introduce a lot of jitter.
-       * This hack wouldn't be needed if Xserver had proper support for absolute timing requests,
-       * but at this point it's unlikely it will ever happen given major DEs are starting to remove native X11
-       * support entirely.
-       *
-       * Be adaptive in how much error we expect to deal with.
-       * For absolute timing, there is a strong expectation that timing requests are accurately met.
-       * For relative timing, the priority is correct pacing, so be a little more relaxed.
-       * Allow up to 3ms of error here. */
       int max_error_ms = 0;
 
-      /* If we use nearest refresh cycle, we've already pulled back a half refresh cycle which should be sufficient. */
       if (!(request->flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT)) {
          if (chain->has_reliable_msc) {
             if (relative)
@@ -2454,9 +2095,6 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
             else
                max_error_ms = 1;
          } else {
-            /* Xwl case. The pace of a frame in Wayland is more floaty than X11.
-             * The frame callback which we get driven by isn't necessarily as stable as MSC.
-             * We only support RELATIVE timing on Xwl anyway. */
             max_error_ms = 3;
          }
       }
@@ -2470,27 +2108,12 @@ x11_present_compute_target_msc(struct x11_swapchain *chain,
 
       os_time_nanosleep_until(target_ns);
 
-      /* Reacquiring the lock won't change any invariants for us, so this is fine.
-       * We make sure to check chain->status after this function in case that got updated while we were sleeping. */
       mtx_lock(&chain->thread_state_lock);
    }
 
    return minimum_msc;
 }
 
-/**
- * Presentation thread.
- *
- * Runs in a separate thread, blocks and reacts to queued images on the
- * present-queue
- *
- * This must be a thread since we have to block in two cases:
- * - FIFO:
- *     We must wait for previous presentation to complete
- *     in some way so we can compute the target MSC.
- * - WaitForFence workaround:
- *     In some cases, we need to wait for image to complete rendering before submitting it to X.
- */
 static int
 x11_manage_present_queue(void *state)
 {
@@ -2511,8 +2134,6 @@ x11_manage_present_queue(void *state)
          assert(result != VK_TIMEOUT);
       }
 
-      /* The status can change underneath us if the swapchain is destroyed
-       * from another thread. */
       if (result >= 0)
          result = x11_swapchain_read_status_atomic(chain);
       if (result < 0)
@@ -2520,7 +2141,6 @@ x11_manage_present_queue(void *state)
 
       VkPresentModeKHR present_mode = chain->images[image_index].present_mode;
 
-      /* Not necessary to block when we have explicit sync */
       bool need_fence_wait =
             x11_needs_wait_for_fences(chain->base.wsi, wsi_conn, present_mode) &&
             !chain->base.image_info.explicit_sync;
@@ -2541,8 +2161,6 @@ x11_manage_present_queue(void *state)
 
       mtx_lock(&chain->thread_state_lock);
 
-      /* In IMMEDIATE and MAILBOX modes, there is a risk that we have exhausted the presentation queue,
-       * since IDLE could return multiple times before observing a COMPLETE. */
       while (chain->status >= 0 &&
              chain->images[image_index].present_queued_count ==
              ARRAY_SIZE(chain->images[image_index].pending_completions)) {
@@ -2568,13 +2186,9 @@ x11_manage_present_queue(void *state)
          MESA_TRACE_SCOPE("wait present");
 
          while (chain->status >= 0 && chain->images[image_index].present_queued_count != 0) {
-            /* In FIFO mode, we need to make sure we observe a COMPLETE before queueing up
-             * another present. */
             u_cnd_monotonic_wait(&chain->thread_state_cond, &chain->thread_state_lock);
          }
 
-         /* If next present is not FIFO, we still need to ensure we don't override that
-          * present. If FIFO, we need to ensure MSC is larger than the COMPLETED frame. */
          target_msc = chain->last_present_msc + 1;
       }
 
@@ -2600,7 +2214,6 @@ alloc_shm(struct wsi_image *imagew, unsigned size)
       return NULL;
 
    uint8_t *addr = (uint8_t *)shmat(image->shmid, 0, 0);
-   /* mark the segment immediately for deletion to avoid leaks */
    shmctl(image->shmid, IPC_RMID, 0);
 
    if (addr == (uint8_t *) -1)
@@ -2659,10 +2272,20 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    image->pixmap = xcb_generate_id(chain->conn);
 
    if (image->base.drm_modifier != DRM_FORMAT_MOD_INVALID) {
-      /* If the image has a modifier, we must have DRI3 v1.2. */
       assert(chain->has_dri3_modifiers);
 
-      /* XCB requires an array of file descriptors but we only have one */
+#ifdef __TERMUX__
+      int sock_fds[2] = { -1, -1 };
+      if (image->base.ahardware_buffer) {
+         if (socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds) < 0) {
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+         }
+         AHardwareBuffer_sendHandleToUnixSocket(
+            image->base.ahardware_buffer, sock_fds[0]);
+         image->base.dma_buf_fd = sock_fds[1];
+      }
+#endif
+
       int fds[4] = { -1, -1, -1, -1 };
       for (int i = 0; i < image->base.num_planes; i++) {
          fds[i] = os_dupfd_cloexec(image->base.dma_buf_fd);
@@ -2692,11 +2315,20 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
                                               chain->depth, bpp,
                                               image->base.drm_modifier,
                                               fds);
+#ifdef __TERMUX__
+      if (image->base.ahardware_buffer) {
+         xcb_flush(chain->conn);
+         uint8_t read_buf;
+         read(sock_fds[0], &read_buf, 1);
+         for (int i = 0; i < ARRAY_SIZE(sock_fds); i++) {
+            close(sock_fds[i]);
+         }
+         image->base.dma_buf_fd = -1;
+      }
+#endif
    } else {
-      /* Without passing modifiers, we can't have multi-plane RGB images. */
       assert(image->base.num_planes == 1);
 
-      /* XCB will take ownership of the FD we pass it. */
       int fd = os_dupfd_cloexec(image->base.dma_buf_fd);
       if (fd == -1)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -2729,7 +2361,7 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
          cookie = xcb_dri3_import_syncobj_checked(chain->conn,
                                                   image->dri3_syncobj[i],
                                                   chain->window,
-                                                  fd /* libxcb closes the fd */);
+                                                  fd);
          error = xcb_request_check(chain->conn, cookie);
          if (error != NULL) {
             free(error);
@@ -2936,13 +2568,6 @@ wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain)
       .explicit_sync = chain->base.image_info.explicit_sync,
    };
 
-   /* This is called from a thread, so we must not use an allocation callback from user.
-    * From spec:
-    * An implementation must only make calls into an application-provided allocator
-    * during the execution of an API command.
-    * An implementation must only make calls into an application-provided allocator
-    * from the same thread that called the provoking API command. */
-
    wsi_x11_get_dri3_modifiers(wsi_conn, chain->conn, chain->window, bit_depth, 32,
                               modifiers, num_modifiers,
                               &drm_image_params.num_modifier_lists,
@@ -2960,6 +2585,7 @@ wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain)
    return memcmp(hash, chain->dri3_modifier_hash, sizeof(hash)) != 0;
 }
 #endif
+
 static VkResult
 x11_swapchain_destroy(struct wsi_swapchain *wsi_chain,
                       const VkAllocationCallbacks *pAllocator)
@@ -2971,7 +2597,6 @@ x11_swapchain_destroy(struct wsi_swapchain *wsi_chain,
    u_cnd_monotonic_broadcast(&chain->thread_state_cond);
    mtx_unlock(&chain->thread_state_lock);
 
-   /* Push a UINT32_MAX to wake up the manager */
    wsi_queue_push(&chain->present_queue, UINT32_MAX);
    thrd_join(chain->queue_manager, NULL);
    thrd_join(chain->event_manager, NULL);
@@ -3038,8 +2663,6 @@ static VkResult x11_wait_for_present(struct wsi_swapchain *wsi_chain,
    if (timeout != 0)
       abs_timeout = os_time_get_absolute_timeout(timeout);
 
-   /* Need to observe that the swapchain semaphore has been unsignalled,
-    * as this is guaranteed when a present is complete. */
    VkResult result = wsi_swapchain_wait_for_present_semaphore(
          &chain->base, waitValue, timeout);
    if (result != VK_SUCCESS)
@@ -3079,12 +2702,6 @@ x11_get_min_image_count_for_present_mode(struct wsi_device *wsi_device,
       return min_image_count;
 }
 
-/**
- * Create the swapchain.
- *
- * Supports immediate, fifo and mailbox presentation mode.
- *
- */
 static VkResult
 x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
                              VkDevice device,
@@ -3100,26 +2717,15 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
 
-   /* We really shouldn't get here as we return no WSI support for XLib when
-    * it's not threadsafe.  However, one final check doesn't cost much.
-    */
    if (!x11_surface_is_thread_safe(icd_surface))
       return VK_ERROR_UNKNOWN;
 
-   /* Get xcb connection from the icd_surface and from that our internal struct
-    * representing it.
-    */
    xcb_connection_t *conn = x11_surface_get_connection(icd_surface);
    struct wsi_x11_connection *wsi_conn =
       wsi_x11_get_connection(wsi_device, conn);
    if (!wsi_conn)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   /* Get number of images in our swapchain. This count depends on:
-    * - requested minimal image count
-    * - device characteristics
-    * - presentation mode.
-    */
    unsigned num_images = pCreateInfo->minImageCount;
    if (!wsi_device->x11.strict_imageCount) {
       if (x11_requires_mailbox_image_count(wsi_device, wsi_conn, present_mode) ||
@@ -3130,12 +2736,8 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       }
    }
 
-   /* Check that we have a window up-front. It is an error to not have one. */
    xcb_window_t window = x11_surface_get_window(icd_surface);
 
-   /* Get the geometry of that window. The bit depth of the swapchain will be fitted and the
-    * chain's images extents should fit it for performance-optimizing flips.
-    */
    xcb_get_geometry_reply_t *geometry =
       xcb_get_geometry_reply(conn, xcb_get_geometry(conn, window), NULL);
    if (geometry == NULL)
@@ -3145,7 +2747,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    const uint16_t cur_height = geometry->height;
    free(geometry);
 
-   /* Allocate the actual swapchain. The size depends on image count. */
    size_t size = sizeof(*chain) + num_images * sizeof(chain->images[0]);
    chain = vk_zalloc(pAllocator, size, 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -3258,8 +2859,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.poll_early_refresh = x11_poll_early_refresh;
    chain->base.present_mode = present_mode;
    chain->base.image_count = num_images;
-
-   /* This is what Xserver is using. We cannot really query it, but we rely on it working. */
    chain->base.present_timing.time_domain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
 
    chain->conn = conn;
@@ -3275,41 +2874,13 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->has_async_may_tear = present_caps & XCB_PRESENT_CAPABILITY_ASYNC_MAY_TEAR;
    chain->has_reliable_msc = !wsi_conn->is_xwayland;
 
-   /* When images in the swapchain don't fit the window, X can still present them, but it won't
-    * happen by flip, only by copy. So this is a suboptimal copy, because if the client would change
-    * the chain extents X may be able to flip
-    */
    if (!wsi_device->x11.ignore_suboptimal) {
       if (chain->extent.width != cur_width || chain->extent.height != cur_height)
          chain->status = VK_SUBOPTIMAL_KHR;
    }
 
-   /* On a new swapchain this helper variable is set to false. Once we present it will have an
-    * impact once we ever do at least one flip and go back to copying afterwards. It is presumed
-    * that in this case here is a high likelihood X could do flips again if the client reallocates a
-    * new swapchain.
-    *
-    * Note that we used to inheritted this property from 'pCreateInfo->oldSwapchain'. But when it
-    * was true, and when the next present was completed with copying, we would return
-    * VK_SUBOPTIMAL_KHR and hint the app to reallocate again for no good reason. If all following
-    * presents on the surface were completed with copying because of some surface state change, we
-    * would always return VK_SUBOPTIMAL_KHR no matter how many times the app had reallocated.
-    *
-    * Note also that is is questionable in general if that mechanism is really useful. It ist not
-    * clear why on a change from flipping to copying we can assume a reallocation has a high chance
-    * of making flips work again per se. In other words it is not clear why there is need for
-    * another way to inform clients about suboptimal copies besides forwarding the
-    * 'PresentOptionSuboptimal' complete mode.
-    */
    chain->copy_is_suboptimal = false;
 #ifdef HAVE_X11_DRM
-   /* For our swapchain we need to listen to following Present extension events:
-    * - Configure: Window dimensions changed. Images in the swapchain might need
-    *              to be reallocated.
-    * - Complete: An image from our swapchain was presented on the output.
-    * - Idle: An image from our swapchain is not anymore accessed by the X
-    *         server and can be reused.
-    */
    chain->event_id = xcb_generate_id(chain->conn);
    uint32_t event_mask = XCB_PRESENT_EVENT_MASK_CONFIGURE_NOTIFY |
                          XCB_PRESENT_EVENT_MASK_COMPLETE_NOTIFY;
@@ -3317,17 +2888,12 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       event_mask |= XCB_PRESENT_EVENT_MASK_IDLE_NOTIFY;
    xcb_present_select_input(chain->conn, chain->event_id, chain->window, event_mask);
 
-   /* Create an XCB event queue to hold present events outside of the usual
-    * application event queue
-    */
    chain->special_event =
       xcb_register_for_special_xge(chain->conn, &xcb_present_id,
                                    chain->event_id, NULL);
 #endif
-   /* Create the graphics context. */
    chain->gc = xcb_generate_id(chain->conn);
    if (!chain->gc) {
-      /* FINISHME: Choose a better error. */
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
       goto fail_register;
    }
@@ -3347,16 +2913,11 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          goto fail_init_images;
    }
 
-   /* The queues have a length of base.image_count + 1 because we will
-    * occasionally use UINT32_MAX to signal the other thread that an error
-    * has occurred and we don't want an overflow.
-    */
    result = wsi_queue_init(&chain->present_queue, chain->base.image_count + 1);
    if (result != VK_SUCCESS) {
       goto fail_init_images;
    }
 
-   /* Acquire queue is only needed when using implicit sync */
    if (!chain->base.image_info.explicit_sync) {
       result = wsi_queue_init(&chain->acquire_queue, chain->base.image_count + 1);
       if (result != VK_SUCCESS) {
@@ -3384,9 +2945,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    chain->screen_resources = wsi_x11_connection_find_screen_resources(wsi_device, conn, window);
 
-   /* It is safe to set it here as only one swapchain can be associated with
-    * the window, and swapchain creation does the association. At this point
-    * we know the creation is going to succeed. */
    wsi_x11_set_adaptive_sync_property(conn, window,
                                       wsi_device->enable_adaptive_sync);
 
@@ -3395,7 +2953,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    return VK_SUCCESS;
 
 fail_init_event_queue:
-   /* Push a UINT32_MAX to wake up the manager */
    wsi_queue_push(&chain->present_queue, UINT32_MAX);
    thrd_join(chain->queue_manager, NULL);
 
@@ -3441,7 +2998,6 @@ wsi_x11_init_wsi(struct wsi_device *wsi_device,
       if (ret == ENOMEM) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
       } else {
-         /* FINISHME: Choose a better error. */
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
       }
 
