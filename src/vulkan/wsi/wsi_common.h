@@ -65,6 +65,10 @@ extern const struct vk_device_entrypoint_table wsi_device_entrypoints;
 #define unreachable(str) do { fprintf(stderr, "%s\n", str); abort(); } while (0)
 #endif
 
+/* Forward declarations for Android structures if needed */
+typedef struct AHardwareBuffer AHardwareBuffer;
+typedef struct AHardwareBuffer_Desc AHardwareBuffer_Desc;
+
 /* This is always chained to VkImageCreateInfo when a wsi image is created.
  * It indicates that the image can be transitioned to/from
  * VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
