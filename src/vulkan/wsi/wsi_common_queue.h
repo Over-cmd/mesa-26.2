@@ -61,7 +61,7 @@ fail_cond:
 fail_vector:
    u_vector_finish(&queue->vector);
 
-   return VK_ERROR_OUT_OF_HOST_MEMORY;
+   return ret;
 }
 
 static inline void
