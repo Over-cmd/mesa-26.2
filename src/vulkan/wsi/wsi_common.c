@@ -416,6 +416,16 @@ get_blit_type(const struct wsi_device *wsi,
          WSI_SWAPCHAIN_BUFFER_BLIT : WSI_SWAPCHAIN_NO_BLIT;
    }
 #endif
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(WSI_IMAGE_TYPE_ANDROID)
+   case WSI_IMAGE_TYPE_ANDROID: {
+#ifdef HAVE_LIBDRM
+      /* Los búferes de Android se pueden presentar directamente a través de DMA-BUF/DRM */
+      return WSI_SWAPCHAIN_NO_BLIT;
+#else
+      return WSI_SWAPCHAIN_BUFFER_BLIT;
+#endif
+   }
+#endif
 #ifdef _WIN32
    case WSI_IMAGE_TYPE_DXGI: {
       const struct wsi_dxgi_image_params *dxgi_params =
@@ -463,6 +473,20 @@ configure_image(const struct wsi_swapchain *chain,
       const struct wsi_drm_image_params *drm_params =
          container_of(params, const struct wsi_drm_image_params, base);
       return wsi_drm_configure_image(chain, pCreateInfo, drm_params, info);
+   }
+#endif
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(WSI_IMAGE_TYPE_ANDROID)
+   case WSI_IMAGE_TYPE_ANDROID: {
+#ifdef HAVE_LIBDRM
+      /* Tratamos la imagen de Android como un contenedor de DRM/DMA-BUF implícito */
+      const struct wsi_drm_image_params *drm_params =
+         container_of(params, const struct wsi_drm_image_params, base);
+      return wsi_drm_configure_image(chain, pCreateInfo, drm_params, info);
+#else
+      const struct wsi_cpu_image_params *cpu_params =
+         container_of(params, const struct wsi_cpu_image_params, base);
+      return wsi_configure_cpu_image(chain, pCreateInfo, cpu_params, info);
+#endif
    }
 #endif
 #ifdef _WIN32
@@ -3224,7 +3248,8 @@ wsi_cmd_blit_image_to_buffer(VkCommandBuffer cmd_buffer,
                              uint32_t qfi)
 {
    assert(info->image_type == WSI_IMAGE_TYPE_CPU ||
-          info->image_type == WSI_IMAGE_TYPE_DRM);
+          info->image_type == WSI_IMAGE_TYPE_DRM ||
+          info->image_type == WSI_IMAGE_TYPE_ANDROID);
 
    VkImageMemoryBarrier img_mem_barrier = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
