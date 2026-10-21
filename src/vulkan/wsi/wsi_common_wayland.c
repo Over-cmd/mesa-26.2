@@ -289,6 +289,7 @@ clock_id_to_vk_time_domain(clockid_t id)
       case CLOCK_MONOTONIC_RAW:
          return VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
       default:
+         /* Default fallback. Will likely not be used, but is safe to use. */
          return VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
    }
 }
@@ -302,6 +303,7 @@ vk_time_domain_to_clock_id(VkTimeDomainKHR id)
       case VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR:
          return CLOCK_MONOTONIC_RAW;
       default:
+         /* Default fallback. Will not be used. */
          return 0;
    }
 }
@@ -324,27 +326,36 @@ wsi_wl_convert_wayland_to_swapchain_time(struct wsi_wl_swapchain *chain,
       dst = chain->wsi_wl_surface->display->presentation_clock_id;
    }
 
+   /* Common case, most compositors: Nothing to do if both time domains match. */
    if (src == dst)
       return in_timestamp;
 
+   /* Get reference time of src and dst time domain, with max 10 usecs error. */
    do {
       fail = clock_gettime(src, &src_ts);
       fail |= clock_gettime(dst, &dst_ts);
       fail |= clock_gettime(src, &src_ts2);
    } while (!fail && (timespec_sub_to_nsec(&src_ts2, &src_ts) > 10 * 1000ULL));
 
+   /* fail should not happen in practice, unless there's a Wayland server bug. */
    assert(!fail);
-   if (fail)
+   if (fail) {
       return 0;
+   }
 
    timestamps[0] = timespec_to_nsec(&src_ts);
    timestamps[1] = timespec_to_nsec(&dst_ts);
 
+   /* Remap */
    int64_t delta_ns = (int64_t)in_timestamp - (int64_t)timestamps[0];
    uint64_t target_timestamp = timestamps[1] + delta_ns;
    return target_timestamp;
 }
 
+/* Given a time base and a refresh period, find the next
+ * time past 'from' that is an even multiple of the period
+ * past the base.
+ */
 static uint64_t
 next_phase_locked_time(uint64_t base, uint64_t period, uint64_t from)
 {
@@ -355,9 +366,36 @@ next_phase_locked_time(uint64_t base, uint64_t period, uint64_t from)
    if (base == 0)
       return from;
 
+   /* If our time base is in the future (which can happen when using
+    * presentation feedback events), target the next possible
+    * presentation time.
+    */
    if (base >= from)
       return base + period;
 
+   /* The presentation time extension recommends that the compositor
+    * use a clock with "precision of one millisecond or better",
+    * so we shouldn't rely on these times being perfectly precise.
+    *
+    * Additionally, some compositors round off feedback times
+    * internally, (eg: to microsecond precision), so our times can
+    * have some jitter in either direction.
+    *
+    * We need to be especially careful not to miss an opportunity
+    * to display by calculating a cycle too far into the future.
+    * This will cause delays in frame presentation.
+    *
+    * If we choose a cycle too soon, fifo barrier will still keep
+    * the pace properly, except in the case of occluded surfaces -
+    * but occluded surfaces don't move their base time in response
+    * to presentation events, so there is no jitter and the math
+    * is more forgiving. That case just needs to monotonically
+    * increase.
+    *
+    * We fairly arbitrarily use period / 4 here to try to stay
+    * well away from rounding up too far, but to also avoid
+    * scheduling too soon if the time values are imprecise.
+    */
    cycles = (from - base + period / 4) / period;
    target = base + (cycles + 1) * period;
    return target;
@@ -370,13 +408,16 @@ wsi_wl_display_add_vk_format(struct wsi_wl_display *display,
 {
    assert(flags & (WSI_WL_FMT_ALPHA | WSI_WL_FMT_OPAQUE));
 
+   /* Don't add a format that's already in the list */
    struct wsi_wl_format *f = find_format(formats, format);
    if (f) {
       f->flags |= flags;
       return f;
    }
 
+   /* Don't add formats that aren't renderable. */
    VkFormatProperties props;
+
    display->wsi_wl->wsi->GetPhysicalDeviceFormatProperties(display->wsi_wl->physical_device,
                                                            format, &props);
    if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))
@@ -437,6 +478,11 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
    VK_FROM_HANDLE(vk_physical_device, pdevice, display->wsi_wl->physical_device);
    struct wsi_device *wsi_device = pdevice->wsi_device;
 
+   /* From Vulkan 1.3 onwards, we can always try adding the 4444 formats.
+    * If the format isn't supported or isn't renderable,
+    * wsi_wl_display_add_vk_format() will reject it via
+    * vkGetPhysicalDeviceFormatProperties().
+    */
    if (pdevice->supported_features.formatA4R4G4B4 ||
        pdevice->properties.apiVersion >= VK_MAKE_VERSION(1, 3, 0)) {
       switch (drm_format) {
@@ -469,6 +515,8 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
    }
 
    switch (drm_format) {
+   /* Vulkan _PACKN formats have the same component order as DRM formats
+    * on little endian systems, on big endian there exists no analog. */
 #if UTIL_ARCH_LITTLE_ENDIAN
    case DRM_FORMAT_RGBA4444:
       wsi_wl_display_add_vk_format_modifier(display, formats,
@@ -552,6 +600,11 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
                                             VK_FORMAT_A2B10G10R10_UNORM_PACK32,
                                             WSI_WL_FMT_OPAQUE, modifier);
       break;
+
+   /* Vulkan 16-bits-per-channel formats have an inverted channel order
+    * compared to DRM formats, just like the 8-bits-per-channel ones.
+    * On little endian systems the memory representation of each channel
+    * matches the DRM formats'. */
    case DRM_FORMAT_ABGR16161616:
       wsi_wl_display_add_vk_format_modifier(display, formats,
                                             VK_FORMAT_R16G16B16A16_UNORM,
@@ -574,6 +627,20 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
       break;
 #endif
 
+   /* Non-packed 8-bit formats have an inverted channel order compared to the
+    * little endian DRM formats, because the DRM channel ordering is high->low
+    * but the vulkan channel ordering is in memory byte order
+    *
+    * For all UNORM formats which have a SRGB variant, we must support both if
+    * we can. SRGB in this context means that rendering to it will result in a
+    * linear -> nonlinear SRGB colorspace conversion before the data is stored.
+    * The inverse function is applied when sampling from SRGB images.
+    * From Wayland's perspective nothing changes, the difference is just how
+    * Vulkan interprets the pixel data.
+    *
+    * For bonus points, 24bpp VkFormats may appear as 32bpp, depending on the
+    * driver.
+    */
    case DRM_FORMAT_BGR888:
       if (!wsi_device->emulate_24as32) {
          wsi_wl_display_add_vk_format_modifier(display, formats,
@@ -656,6 +723,7 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
 static uint32_t
 drm_format_for_wl_shm_format(enum wl_shm_format shm_format)
 {
+   /* wl_shm formats are identical to DRM, except ARGB8888 and XRGB8888 */
    switch (shm_format) {
    case WL_SHM_FORMAT_ARGB8888:
       return DRM_FORMAT_ARGB8888;
@@ -736,9 +804,11 @@ wl_shm_format_for_vk_format(struct wsi_device *wsi_device,
    uint32_t drm_format =
       wl_drm_format_for_vk_format(wsi_device, vk_format, alpha);
 
-   if (drm_format == DRM_FORMAT_INVALID)
+   if (drm_format == DRM_FORMAT_INVALID) {
       return 0;
+   }
 
+   /* wl_shm formats are identical to DRM, except ARGB8888 and XRGB8888 */
    switch (drm_format) {
    case DRM_FORMAT_ARGB8888:
       return WL_SHM_FORMAT_ARGB8888;
@@ -753,6 +823,8 @@ static void
 dmabuf_handle_format(void *data, struct zwp_linux_dmabuf_v1 *dmabuf,
                      uint32_t format)
 {
+   /* Formats are implicitly advertised by the modifier event, so we ignore
+    * them here. */
 }
 
 static void
@@ -763,6 +835,9 @@ dmabuf_handle_modifier(void *data, struct zwp_linux_dmabuf_v1 *dmabuf,
    struct wsi_wl_display *display = data;
    uint64_t modifier;
 
+   /* Ignore this if the compositor advertised dma-buf feedback. From version 4
+    * onwards (when dma-buf feedback was introduced), the compositor should not
+    * advertise this event anymore, but let's keep this for safety. */
    if (display->wl_dmabuf_feedback)
       return;
 
@@ -868,6 +943,7 @@ default_dmabuf_feedback_tranche_target_device(void *data,
                                               struct zwp_linux_dmabuf_feedback_v1 *dmabuf_feedback,
                                               struct wl_array *device)
 {
+   /* ignore this event */
 }
 
 static void
@@ -875,6 +951,7 @@ default_dmabuf_feedback_tranche_flags(void *data,
                                       struct zwp_linux_dmabuf_feedback_v1 *dmabuf_feedback,
                                       uint32_t flags)
 {
+   /* ignore this event */
 }
 
 static void
@@ -887,6 +964,8 @@ default_dmabuf_feedback_tranche_formats(void *data,
    uint64_t modifier;
    uint16_t *index;
 
+   /* We couldn't map the format table or the compositor didn't advertise it,
+    * so we have to ignore the feedback. */
    if (display->format_table.data == MAP_FAILED ||
        display->format_table.data == NULL)
       return;
@@ -903,12 +982,14 @@ static void
 default_dmabuf_feedback_tranche_done(void *data,
                                      struct zwp_linux_dmabuf_feedback_v1 *dmabuf_feedback)
 {
+   /* ignore this event */
 }
 
 static void
 default_dmabuf_feedback_done(void *data,
                              struct zwp_linux_dmabuf_feedback_v1 *dmabuf_feedback)
 {
+   /* ignore this event */
 }
 
 static const struct zwp_linux_dmabuf_feedback_v1_listener
@@ -953,7 +1034,6 @@ struct Colorspace {
    bool should_use_hdr_metadata;
    bool needs_extended_range;
 };
-
 struct Colorspace colorspace_mapping[] = {
    {
       .colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
@@ -1011,6 +1091,7 @@ struct Colorspace colorspace_mapping[] = {
       .should_use_hdr_metadata = true,
       .needs_extended_range = false,
    },
+   /* VK_COLOR_SPACE_DOLBYVISION_EXT is left out because it's deprecated */
    {
       .colorspace = VK_COLOR_SPACE_HDR10_HLG_EXT,
       .primaries = WP_COLOR_MANAGER_V1_PRIMARIES_BT2020,
@@ -1025,6 +1106,15 @@ struct Colorspace colorspace_mapping[] = {
       .should_use_hdr_metadata = false,
       .needs_extended_range = false,
    },
+   /* VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT is left out because there's no
+    * exactly matching transfer function in the Wayland protocol */
+   /* VK_COLOR_SPACE_PASS_THROUGH_EXT is handled elsewhere */
+   /* VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT is intentionally not added
+    * as it's a bit unclear how exactly it should be used
+    * and whether or not the transfer function should be gamma 2.2 or piece-wise */
+   /* VK_COLOR_SPACE_DISPLAY_NATIVE_AMD isn't supported */
+   /* VK_COLORSPACE_SRGB_NONLINEAR_KHR is just an alias */
+   /* VK_COLOR_SPACE_DCI_P3_LINEAR_EXT is just an alias */
 };
 
 static int
@@ -1034,11 +1124,13 @@ wsi_wl_display_determine_colorspaces(struct wsi_wl_display *display)
    if (!u_vector_init(&display->colorspaces, 8, sizeof(VkColorSpaceKHR)))
       return -1;
 
+   /* SRGB_NONLINEAR is always supported. */
    VkColorSpaceKHR *new_cs = u_vector_add(&display->colorspaces);
    if (!new_cs)
       return -1;
    *new_cs = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
+   /* as is PASS_THROUGH */
    new_cs = u_vector_add(&display->colorspaces);
    if (!new_cs)
       return -1;
@@ -1049,6 +1141,7 @@ wsi_wl_display_determine_colorspaces(struct wsi_wl_display *display)
 
    struct u_vector *tfs = &display->color_transfer_funcs;
    struct u_vector *primaries = &display->color_primaries;
+   /* Skip SRGB_NONLINEAR (i = 0), which has already been added above. */
    assert(colorspace_mapping[0].colorspace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
    for (int i = 1; i < ARRAY_SIZE(colorspace_mapping); i++) {
       if (!vector_contains(primaries, colorspace_mapping[i].primaries))
@@ -1071,6 +1164,7 @@ color_management_handle_supported_intent(void *data,
                                          struct wp_color_manager_v1 *color_manager,
                                          unsigned int intent)
 {
+   /* We only use the perceptual rendering intent, which is always supported. */
 }
 
 static void
@@ -1116,6 +1210,7 @@ color_management_handle_supported_primaries_named(void *data,
 static void
 color_management_handle_done(void *data, struct wp_color_manager_v1 *color_manager)
 {
+   /* Intentionally left blank */
 }
 
 static const struct wp_color_manager_v1_listener color_manager_listener = {
@@ -1160,6 +1255,8 @@ static bool
 needs_color_surface(struct wsi_wl_display *display, VkColorSpaceKHR colorspace)
 {
    if (colorspace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+      /* we want to use a color surface to set sRGB if possible, but
+       * only if the compositor actually supports sRGB */
       return vector_contains(&display->color_primaries, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB)
           && vector_contains(&display->color_transfer_funcs, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
    }
@@ -1194,6 +1291,10 @@ is_hdr_metadata_legal(struct wayland_hdr_metadata *l)
       }
    }
 
+   /* Be lenient here for a zero (=undefined) max_luminance and handle
+    * this in the calling code instead, by not sending min/max mastering
+    * luminance data to Wayland, thereby avoiding protocol errors.
+    */
    if (l->max_luminance == 0)
       return true;
 
@@ -1223,6 +1324,8 @@ wsi_wl_swapchain_update_colorspace(struct wsi_wl_swapchain *chain)
    struct wsi_wl_surface *surface = chain->wsi_wl_surface;
    struct wsi_wl_display *display = surface->display;
 
+   /* we need the color management extension for
+    * everything except sRGB and PASS_THROUGH */
    if (chain->color.colorspace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ||
        chain->color.colorspace == VK_COLOR_SPACE_PASS_THROUGH_EXT) {
       return VK_SUCCESS;
@@ -1250,12 +1353,15 @@ wsi_wl_swapchain_update_colorspace(struct wsi_wl_swapchain *chain)
       }
    }
 
+   /* the image description needs to be updated at least once even without metadata */
    if (chain->color.color_surface && chain->color.current.applied_colorspace &&
        chain->color.current.has_hdr_metadata == should_use_hdr_metadata &&
        compare_hdr_metadata(&chain->color.pending.hdr_metadata, &chain->color.current.hdr_metadata)) {
       return VK_SUCCESS;
    }
 
+   /* failure is fatal, so this potentially being wrong
+      in that case doesn't matter */
    chain->color.current.hdr_metadata = chain->color.pending.hdr_metadata;
    chain->color.current.has_hdr_metadata = should_use_hdr_metadata;
    if (!needs_color_surface(display, chain->color.colorspace))
@@ -1301,6 +1407,9 @@ wsi_wl_swapchain_update_colorspace(struct wsi_wl_swapchain *chain)
                                                                                 blue_x, blue_y,
                                                                                 white_x, white_y);
 
+         /* A max_luminance of 0 is legal by spec and means "undefined", but would cause a
+          * Wayland protocol error, so skip setting mastering luminance for zero value.
+          */
          if (wayland_hdr_metadata.max_luminance != 0) {
             wp_image_description_creator_params_v1_set_mastering_luminance(creator,
                                                                            wayland_hdr_metadata.min_luminance,
@@ -1327,6 +1436,8 @@ wsi_wl_swapchain_update_colorspace(struct wsi_wl_swapchain *chain)
    if (status == failed) {
       wp_image_description_v1_destroy(image_desc);
       if (!display->color_features.extended_target_volume && should_use_hdr_metadata) {
+         /* VK_EXT_hdr_metadata doesn't specify if or how the metadata is used,
+          * so it's fine to try again without it. */
          chain->color.pending.has_hdr_metadata = false;
          return wsi_wl_swapchain_update_colorspace(chain);
       } else {
@@ -1430,7 +1541,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
 static void
 registry_handle_global_remove(void *data, struct wl_registry *registry,
                               uint32_t name)
-{ }
+{ /* No-op */ }
 
 static const struct wl_registry_listener registry_listener = {
    registry_handle_global,
@@ -1487,7 +1598,7 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
    if (!u_vector_init(&display->formats, 8, sizeof(struct wsi_wl_format)))
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   display->presentation_clock_id = -1;
+   display->presentation_clock_id = -1; // 0 is a valid clock ID
    display->wsi_wl = wsi_wl;
    display->wl_display = wl_display;
    display->sw = sw;
@@ -1518,17 +1629,21 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
 
    wl_registry_add_listener(registry, &registry_listener, display);
 
+   /* Round-trip to get wl_shm and zwp_linux_dmabuf_v1 globals */
    wl_display_roundtrip_queue(display->wl_display, display->queue);
    if (!display->wl_dmabuf && !display->wl_shm) {
       result = VK_ERROR_SURFACE_LOST_KHR;
       goto fail_registry;
    }
 
+   /* Caller doesn't expect us to query formats/modifiers, so return */
    if (!get_format_list)
       goto out;
 
+   /* Default assumption */
    display->same_gpu = true;
 
+   /* Get the default dma-buf feedback */
    if (display->wl_dmabuf && zwp_linux_dmabuf_v1_get_version(display->wl_dmabuf) >=
                              ZWP_LINUX_DMABUF_V1_GET_DEFAULT_FEEDBACK_SINCE_VERSION) {
          dmabuf_feedback_format_table_init(&display->format_table);
@@ -1537,10 +1652,14 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
          zwp_linux_dmabuf_feedback_v1_add_listener(display->wl_dmabuf_feedback,
                                                    &dmabuf_feedback_listener, display);
 
+         /* Round-trip again to fetch dma-buf feedback */
          wl_display_roundtrip_queue(display->wl_display, display->queue);
 
          if (wsi_wl->wsi->drm_info.hasRender ||
              wsi_wl->wsi->drm_info.hasPrimary) {
+            /* Apparently some wayland compositor do not send the render
+             * device node but the primary, so test against both.
+             */
             display->same_gpu =
                (wsi_wl->wsi->drm_info.hasRender &&
                 major(display->main_device) == wsi_wl->wsi->drm_info.renderMajor &&
@@ -1551,6 +1670,7 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
          }
    }
 
+   /* Round-trip again to get formats, modifiers and color properties */
    wl_display_roundtrip_queue(display->wl_display, display->queue);
 
    if (wsi_wl_display_determine_colorspaces(display) < 0) {
@@ -1559,6 +1679,9 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
    }
 
    if (wsi_wl->wsi->force_bgra8_unorm_first) {
+      /* Find BGRA8_UNORM in the list and swap it to the first position if we
+       * can find it.  Some apps get confused if SRGB is first in the list.
+       */
       struct wsi_wl_format *first_fmt = u_vector_tail(&display->formats);
       struct wsi_wl_format *f, tmp_fmt;
       f = find_format(&display->formats, VK_FORMAT_B8G8R8A8_UNORM);
@@ -1570,12 +1693,14 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
    }
 
 out:
+   /* We don't need this anymore */
 #ifdef WL_FIXES_INTERFACE
    if (display->wl_fixes)
       wl_fixes_destroy_registry(display->wl_fixes, registry);
 #endif
    wl_registry_destroy(registry);
 
+   /* Destroy default dma-buf feedback object and format table */
    if (display->wl_dmabuf_feedback) {
       zwp_linux_dmabuf_feedback_v1_destroy(display->wl_dmabuf_feedback);
       display->wl_dmabuf_feedback = NULL;
@@ -1639,8 +1764,11 @@ wsi_GetPhysicalDeviceWaylandPresentationSupportKHR(VkPhysicalDevice physicalDevi
    struct wsi_wayland *wsi =
       (struct wsi_wayland *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WAYLAND];
 
+   /* These should overlap. */
    uint64_t effective_queues = wsi_device->queue_supports_blit & wsi_device->queue_supports_timestamps;
 
+   /* If there are no queues that support both blits and timestamps,
+    * don't report support for queue timestamps. */
    if (!effective_queues)
       effective_queues = wsi_device->queue_supports_blit;
 
@@ -1667,7 +1795,15 @@ wsi_wl_surface_get_support(VkIcdSurfaceBase *surface,
    return VK_SUCCESS;
 }
 
+/* For true mailbox mode, we need at least 4 images:
+ *  1) One to scan out from
+ *  2) One to have queued for scan-out
+ *  3) One to be currently held by the Wayland compositor
+ *  4) One to render to
+ */
 #define WSI_WL_BUMPED_NUM_IMAGES 4
+
+/* Catch-all. 3 images is a sound default for everything except MAILBOX. */
 #define WSI_WL_DEFAULT_NUM_IMAGES 3
 
 static uint32_t
@@ -1679,6 +1815,26 @@ wsi_wl_surface_get_min_image_count(struct wsi_wl_display *display,
              WSI_WL_BUMPED_NUM_IMAGES : WSI_WL_DEFAULT_NUM_IMAGES;
    }
 
+   /* If explicit present_mode is not being queried, we need to provide a safe "catch-all"
+    * which can work for any presentation mode. Implementations are allowed to bump the minImageCount
+    * on swapchain creation, so this limit should be the lowest value which can guarantee forward progress. */
+
+   /* When FIFO protocol is not supported, we always returned 4 here,
+    * despite it going against the spirit of minImageCount in the specification.
+    * To avoid any unforeseen breakage, just keep using the same values we always have.
+    * In this path, we also never consider bumping the image count in minImageCount in swapchain creation time. */
+
+   /* When FIFO protocol is supported, applications will no longer block
+    * in QueuePresentKHR due to frame callback, so returning 4 images
+    * for a FIFO swapchain is deeply problematic due to excessive latency.
+    * This latency can only be limited through means of presentWait which few applications use, and we cannot
+    * mandate that shipping applications are rewritten to avoid a regression.
+    * 2 images are enough for forward progress in FIFO, but 3 is used here as a pragmatic decision
+    * because 2 could result in waiting for the compositor to remove an
+    * old image from scanout when we'd like to be rendering,
+    * and we don't want naively written applications to head into poor performance territory by default.
+    * X11 backend has very similar logic and rationale here.
+    */
    return display->fifo_manager ? WSI_WL_DEFAULT_NUM_IMAGES : WSI_WL_BUMPED_NUM_IMAGES;
 }
 
@@ -1707,6 +1863,7 @@ wsi_wl_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
    if (!wsi_wl_surface->display)
       wsi_wl_display_finish(&temp_display);
 
+   /* There is no real maximum */
    caps->surfaceCapabilities.maxImageCount = 0;
 
    caps->surfaceCapabilities.currentExtent = (VkExtent2D) { UINT32_MAX, UINT32_MAX };
@@ -1785,6 +1942,8 @@ wsi_wl_surface_get_capabilities2(VkIcdSurfaceBase *surface,
 {
    assert(caps->sType == VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
 
+   struct wsi_wl_surface *wsi_wl_surface =
+      wl_container_of((VkIcdSurfaceWayland *)surface, wsi_wl_surface, base);
    const VkSurfacePresentModeKHR *present_mode = vk_find_struct_const(info_next, SURFACE_PRESENT_MODE_KHR);
 
    VkResult result =
@@ -1801,6 +1960,7 @@ wsi_wl_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
+         /* Unsupported. */
          VkSurfacePresentScalingCapabilitiesKHR *scaling = (void *)ext;
          scaling->supportedPresentScaling = 0;
          scaling->supportedPresentGravityX = 0;
@@ -1811,10 +1971,12 @@ wsi_wl_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
+         /* Can easily toggle between FIFO and MAILBOX on Wayland. */
          VkSurfacePresentModeCompatibilityKHR *compat = (void *)ext;
          if (compat->pPresentModes) {
             assert(present_mode);
             VK_OUTARRAY_MAKE_TYPED(VkPresentModeKHR, modes, compat->pPresentModes, &compat->presentModeCount);
+            /* Must always return queried present mode even when truncating. */
             vk_outarray_append_typed(VkPresentModeKHR, &modes, mode) {
                *mode = present_mode->presentMode;
             }
@@ -1900,17 +2062,31 @@ wsi_wl_surface_get_capabilities2(VkIcdSurfaceBase *surface,
          if (!has_feedback)
             break;
 
+         /* We could deal with esoteric clock domains by exposing VK_TIME_DOMAIN_SWAPCHAIN or PRESENT_STAGE_LOCAL,
+          * but that requires a lot more scaffolding, and there's no need to add extra complexity if we can
+          * get away with this. */
          if (clock_id != CLOCK_MONOTONIC && clock_id != CLOCK_MONOTONIC_RAW)
             break;
 
+         /* Presentation timing spec talks about the reported time targeting "pixel being visible".
+          * From presentation-time spec: "Note, that if the display path has a non-zero latency,
+          * the time instant specified by this counter may differ from the timestamp's."
+          * No compositor I know of reports where it takes display latency into account,
+          * so it's a little unclear if we should actually be reporting PIXEL_OUT or PIXEL_VISIBLE.
+          * Choose PIXEL_OUT for now since no known compositor out there actually implements
+          * PIXEL_VISIBLE as intended, and we don't want to promise something we cannot hold. */
          wait->presentTimingSupported = VK_TRUE;
          wait->presentStageQueries = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+
+         /* We cannot reliably implement FIFO guarantee + absolute time without the FIFO barrier.
+          * Presentation timing is only defined to work with FIFO (and its variants like RELAXED and LATEST_READY). */
          wait->presentAtAbsoluteTimeSupported = has_commit_timing && has_fifo;
 
          break;
       }
 
       default:
+         /* Ignored */
          break;
       }
    }
@@ -1925,6 +2101,8 @@ wsi_wl_surface_get_formats(VkIcdSurfaceBase *icd_surface,
                            VkSurfaceFormatKHR* pSurfaceFormats)
 {
    VkIcdSurfaceWayland *surface = (VkIcdSurfaceWayland *)icd_surface;
+   struct wsi_wl_surface *wsi_wl_surface =
+      wl_container_of((VkIcdSurfaceWayland *)icd_surface, wsi_wl_surface, base);
    struct wsi_wayland *wsi =
       (struct wsi_wayland *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WAYLAND];
 
@@ -1940,6 +2118,9 @@ wsi_wl_surface_get_formats(VkIcdSurfaceBase *icd_surface,
    u_vector_foreach(cs, &display.colorspaces) {
       struct wsi_wl_format *disp_fmt;
       u_vector_foreach(disp_fmt, &display.formats) {
+         /* Skip formats for which we can't support both alpha & opaque
+          * formats.
+          */
          if (!(disp_fmt->flags & WSI_WL_FMT_ALPHA) ||
             !(disp_fmt->flags & WSI_WL_FMT_OPAQUE)) {
             continue;
@@ -1965,6 +2146,8 @@ wsi_wl_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
                             VkSurfaceFormat2KHR* pSurfaceFormats)
 {
    VkIcdSurfaceWayland *surface = (VkIcdSurfaceWayland *)icd_surface;
+   struct wsi_wl_surface *wsi_wl_surface =
+      wl_container_of((VkIcdSurfaceWayland *)icd_surface, wsi_wl_surface, base);
    struct wsi_wayland *wsi =
       (struct wsi_wayland *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WAYLAND];
 
@@ -1980,6 +2163,9 @@ wsi_wl_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
    u_vector_foreach(cs, &display.colorspaces) {
       struct wsi_wl_format *disp_fmt;
       u_vector_foreach(disp_fmt, &display.formats) {
+         /* Skip formats for which we can't support both alpha & opaque
+          * formats.
+          */
          if (!(disp_fmt->flags & WSI_WL_FMT_ALPHA) ||
             !(disp_fmt->flags & WSI_WL_FMT_OPAQUE)) {
             continue;
@@ -2015,6 +2201,7 @@ wsi_wl_surface_get_present_modes(VkIcdSurfaceBase *icd_surface,
    VkPresentModeKHR present_modes[3];
    uint32_t present_modes_count = 0;
 
+   /* The following two modes are always supported */
    present_modes[present_modes_count++] = VK_PRESENT_MODE_MAILBOX_KHR;
    present_modes[present_modes_count++] = VK_PRESENT_MODE_FIFO_KHR;
 
@@ -2047,6 +2234,7 @@ wsi_wl_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
    VK_OUTARRAY_MAKE_TYPED(VkRect2D, out, pRects, pRectCount);
 
    vk_outarray_append_typed(VkRect2D, &out, rect) {
+      /* We don't know a size so just return the usual "I don't know." */
       *rect = (VkRect2D) {
          .offset = { 0, 0 },
          .extent = { UINT32_MAX, UINT32_MAX },
@@ -2084,6 +2272,7 @@ pick_format_from_surface_dmabuf_feedback(struct wsi_wl_surface *wsi_wl_surface,
 {
    struct wsi_wl_format *f = NULL;
 
+   /* If the main_device was not advertised, we don't have valid feedback */
    if (wsi_wl_surface->dmabuf_feedback.main_device == 0)
       return NULL;
 
@@ -2156,6 +2345,9 @@ surface_dmabuf_feedback_tranche_formats(void *data,
    uint64_t modifier;
    uint16_t *index;
 
+   /* Compositor may advertise or not a format table. If it does, we use it.
+    * Otherwise, we steal the most recent advertised format table. If we don't have
+    * a most recent advertised format table, compositor did something wrong. */
    if (feedback->format_table.data == NULL) {
       feedback->format_table = wsi_wl_surface->dmabuf_feedback.format_table;
       dmabuf_feedback_format_table_init(&wsi_wl_surface->dmabuf_feedback.format_table);
@@ -2181,6 +2373,7 @@ surface_dmabuf_feedback_tranche_done(void *data,
    struct wsi_wl_surface *wsi_wl_surface = data;
    struct dmabuf_feedback *feedback = &wsi_wl_surface->pending_dmabuf_feedback;
 
+   /* Add tranche to array of tranches. */
    util_dynarray_append(&feedback->tranches, feedback->pending_tranche);
 
    dmabuf_feedback_tranche_init(&feedback->pending_tranche);
@@ -2223,6 +2416,21 @@ surface_dmabuf_feedback_done(void *data,
    wsi_wl_surface->dmabuf_feedback = wsi_wl_surface->pending_dmabuf_feedback;
    dmabuf_feedback_init(&wsi_wl_surface->pending_dmabuf_feedback);
 
+   /* It's not just because we received dma-buf feedback that re-allocation is a
+    * good idea. In order to know if we should re-allocate or not, we must
+    * compare the most recent parameters that we used to allocate with the ones
+    * from the feedback we just received.
+    *
+    * The allocation parameters are: the format, its set of modifiers and the
+    * tranche flags. On WSI we are not using the tranche flags for anything, so
+    * we disconsider this. As we can't switch to another format (it is selected
+    * by the client), we just need to compare the set of modifiers.
+    *
+    * So we just look for the vk_format in the tranches (respecting their
+    * preferences), and compare its set of modifiers with the set of modifiers
+    * we've used to allocate previously. If they differ, we are using suboptimal
+    * parameters and should re-allocate.
+    */
    f = pick_format_from_surface_dmabuf_feedback(wsi_wl_surface, chain->vk_format);
    if (f && !sets_of_modifiers_are_the_same(u_vector_length(&f->modifiers),
                                             u_vector_tail(&f->modifiers),
@@ -2275,6 +2483,7 @@ static VkResult wsi_wl_surface_init(struct wsi_wl_surface *wsi_wl_surface,
       (struct wsi_wayland *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WAYLAND];
    VkResult result;
 
+   /* wsi_wl_surface has already been initialized. */
    if (wsi_wl_surface->display)
       return VK_SUCCESS;
 
@@ -2290,6 +2499,7 @@ static VkResult wsi_wl_surface_init(struct wsi_wl_surface *wsi_wl_surface,
       goto fail;
    }
 
+   /* Bind wsi_wl_surface to dma-buf feedback. */
    if (wsi_wl_surface->display->wl_dmabuf &&
        zwp_linux_dmabuf_v1_get_version(wsi_wl_surface->display->wl_dmabuf) >=
        ZWP_LINUX_DMABUF_V1_GET_SURFACE_FEEDBACK_SINCE_VERSION) {
@@ -2342,6 +2552,11 @@ wsi_CreateWaylandSurfaceKHR(VkInstance _instance,
 }
 
 struct wsi_wl_present_id {
+   /* Fallback when wp_presentation is not supported.
+    * Using frame callback is not the intended way to achieve
+    * this, but it is the best effort alternative when the proper interface is
+    * not available. This approach also matches Xwayland,
+    * which uses frame callback to signal DRI3 COMPLETE. */
    struct wl_callback *frame;
    uint64_t present_id;
    uint64_t timing_serial;
@@ -2391,6 +2606,7 @@ wsi_wl_swapchain_set_timing_request(struct wsi_swapchain *wsi_chain,
    struct wsi_wl_swapchain *chain = (struct wsi_wl_swapchain *)wsi_chain;
    chain->timing_request = *request;
 
+   /* Convert absolute target time from swapchain time domain to whatever Wayland natively expects. */
    if (!(chain->timing_request.flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT)) {
       chain->timing_request.time =
          wsi_wl_convert_wayland_to_swapchain_time(chain, chain->timing_request.time, true);
@@ -2402,15 +2618,26 @@ dispatch_present_id_queue(struct wsi_swapchain *wsi_chain, struct timespec *end_
 {
    struct wsi_wl_swapchain *chain = (struct wsi_wl_swapchain *)wsi_chain;
 
+   /* We might not own this surface if we're retired, but it is only used here to
+    * read events from the present ID queue. This queue is private to a given VkSwapchainKHR,
+    * so calling present wait on a retired swapchain cannot interfere with a non-retired swapchain. */
    struct wl_display *wl_display = chain->wsi_wl_surface->display->wl_display;
 
    VkResult ret;
    int err;
 
+   /* PresentWait can be called concurrently.
+    * If there is contention on this mutex, it means there is currently a dispatcher in flight holding the lock.
+    * The lock is only held while there is forward progress processing events from Wayland,
+    * so there should be no problem locking without timeout.
+    * We would like to be able to support timeout = 0 to query the current max_completed count.
+    * A timedlock with no timeout can be problematic in that scenario. */
    err = mtx_lock(&chain->present_ids.lock);
    if (err != thrd_success)
       return VK_ERROR_OUT_OF_DATE_KHR;
 
+   /* Someone else is dispatching events; wait for them to update the chain
+    * status and wake us up. */
    if (chain->present_ids.dispatch_in_progress) {
       err = u_cnd_monotonic_timedwait(&chain->present_ids.list_advanced,
                                       &chain->present_ids.lock, end_time);
@@ -2424,9 +2651,16 @@ dispatch_present_id_queue(struct wsi_swapchain *wsi_chain, struct timespec *end_
       return VK_SUCCESS;
    }
 
+   /* Whether or not we were dispatching the events before, we are now. */
    assert(!chain->present_ids.dispatch_in_progress);
    chain->present_ids.dispatch_in_progress = true;
 
+   /* We drop the lock now - we're still protected by dispatch_in_progress,
+    * and holding the lock while dispatch_queue_timeout waits in poll()
+    * might delay other threads unnecessarily.
+    *
+    * We'll pick up the lock again in the dispatched functions.
+    */
    mtx_unlock(&chain->present_ids.lock);
 
    ret = loader_wayland_dispatch(wl_display,
@@ -2435,6 +2669,8 @@ dispatch_present_id_queue(struct wsi_swapchain *wsi_chain, struct timespec *end_
 
    mtx_lock(&chain->present_ids.lock);
 
+   /* Wake up other waiters who may have been unblocked by the events
+    * we just read. */
    u_cnd_monotonic_broadcast(&chain->present_ids.list_advanced);
 
    assert(chain->present_ids.dispatch_in_progress);
@@ -2453,6 +2689,8 @@ dispatch_present_id_queue(struct wsi_swapchain *wsi_chain, struct timespec *end_
 static void
 wsi_wl_swapchain_poll_timing_request(struct wsi_swapchain *wsi_chain)
 {
+   /* Timing requests must complete in finite time, and if we're not calling present wait
+    * or queue present regularly, timing requests will never come back. */
    struct timespec instant = {0};
    dispatch_present_id_queue(wsi_chain, &instant);
 }
@@ -2482,10 +2720,27 @@ wsi_wl_swapchain_wait_for_present(struct wsi_swapchain *wsi_chain,
    else
       atimeout = os_time_get_absolute_timeout(timeout);
 
+   /* Need to observe that the swapchain semaphore has been unsignalled,
+    * as this is guaranteed when a present is complete. */
    VkResult result = wsi_swapchain_wait_for_present_semaphore(
          &chain->base, present_id, timeout);
    if (result != VK_SUCCESS)
       return result;
+
+   /* If using frame callback, guard against lack of forward progress
+    * of the frame callback in some situations,
+    * e.g. the surface might not be visible.
+    * If rendering has completed on GPU,
+    * and we still haven't received a callback after 100ms, unblock the application.
+    * 100ms is chosen arbitrarily.
+    * The queue depth in WL WSI is just one frame due to frame callback in FIFO mode,
+    * so from the time a frame has completed render to when it should be considered presented
+    * will not exceed 100ms except in contrived edge cases. */
+
+   /* For FIFO without commit-timing we have a similar concern, but only when waiting on the last presented ID that is pending.
+    * It is possible the last presentation is held back due to being occluded, but this scenario is very rare
+    * in practice. An application blocking on the last presentation implies zero CPU and GPU overlap,
+    * and is likely only going to happen at swapchain destruction or similar. */
 
    uint64_t assumed_success_at = UINT64_MAX;
    if (chain->present_ids.frame_fallback) {
@@ -2495,13 +2750,19 @@ wsi_wl_swapchain_wait_for_present(struct wsi_swapchain *wsi_chain,
       if (err != thrd_success)
          return VK_ERROR_OUT_OF_DATE_KHR;
 
+      /* If we're waiting for the very last commit made for whatever reason,
+       * we're not necessarily guaranteed forward progress until a subsequent commit is made.
+       * Add a timeout post GPU rendering completion to unblock any waiter in reasonable time. */
       if (!wsi_wl_swapchain_present_id_completes_in_finite_time_locked(chain, present_id)) {
+         /* The queue depth could be larger, so just make a heuristic decision here to bump the timeout. */
          uint32_t num_pending_cycles = chain->present_ids.outstanding_count + 1;
          assumed_success_at = os_time_get_absolute_timeout(100ull * 1000 * 1000 * num_pending_cycles);
       }
       mtx_unlock(&chain->present_ids.lock);
    }
 
+   /* If app timeout is beyond the deadline we set for reply,
+    * always treat the timeout as successful. */
    VkResult timeout_result = assumed_success_at < atimeout ? VK_SUCCESS : VK_TIMEOUT;
    timespec_from_nsec(&end_time, MIN2(atimeout, assumed_success_at));
 
@@ -2520,6 +2781,8 @@ retry:
       ret = dispatch_present_id_queue(wsi_chain, &end_time);
       if (ret == VK_TIMEOUT) {
          if (timeout_result == VK_SUCCESS && chain->fifo && !chain->present_ids.frame_fallback) {
+            /* If there have been subsequent commits since when we made the decision to add a timeout,
+             * we can drop that timeout condition and rely on forward progress instead. */
             err = mtx_lock(&chain->present_ids.lock);
             if (err != thrd_success)
                return VK_ERROR_OUT_OF_DATE_KHR;
@@ -2530,6 +2793,7 @@ retry:
             }
             mtx_unlock(&chain->present_ids.lock);
 
+            /* Retry the wait, but now without any workaround. */
             if (timeout_result == VK_TIMEOUT)
                goto retry;
          }
@@ -2556,6 +2820,9 @@ wsi_wl_swapchain_ensure_dispatch(struct wsi_wl_swapchain *chain)
    chain->present_ids.dispatch_in_progress = true;
    mtx_unlock(&chain->present_ids.lock);
 
+   /* Use a dispatch with an instant timeout because dispatch_pending
+    * won't read any events in the pipe.
+    */
    ret = wl_display_dispatch_queue_timeout(display,
                                            chain->present_ids.queue,
                                            &timeout);
@@ -2588,6 +2855,8 @@ wsi_wl_swapchain_wait_for_present2(struct wsi_swapchain *wsi_chain,
       atimeout = os_time_get_absolute_timeout(timeout);
    timespec_from_nsec(&end_time, atimeout);
 
+   /* Need to observe that the swapchain semaphore has been unsignalled,
+    * as this is guaranteed when a present is complete. */
    VkResult result = wsi_swapchain_wait_for_present_semaphore(
          &chain->base, present_id, timeout);
    if (result != VK_SUCCESS)
@@ -2620,6 +2889,7 @@ wsi_wl_swapchain_acquire_next_image_explicit(struct wsi_swapchain *wsi_chain,
 
    MESA_TRACE_FUNC_FLOW(&flow);
 
+   /* See comments in queue_present() */
    if (chain->retired)
       return VK_ERROR_OUT_OF_DATE_KHR;
 
@@ -2660,6 +2930,7 @@ wsi_wl_swapchain_acquire_next_image_implicit(struct wsi_swapchain *wsi_chain,
 
    MESA_TRACE_FUNC_FLOW(&flow);
 
+   /* See comments in queue_present() */
    if (chain->retired)
       return VK_ERROR_OUT_OF_DATE_KHR;
 
@@ -2670,12 +2941,19 @@ wsi_wl_swapchain_acquire_next_image_implicit(struct wsi_swapchain *wsi_chain,
    timespec_add(&end_time, &rel_timeout, &start_time);
 
    while (1) {
+      /* If we can use timestamps, we want to make sure the queue feedback
+       * events are in is dispatched so we eventually get a refresh rate
+       * and a vsync time to phase lock to. We don't need to wait for it
+       * now.
+        */
       if (chain->commit_timer) {
          if (wsi_wl_swapchain_ensure_dispatch(chain) == -1)
             return VK_ERROR_OUT_OF_DATE_KHR;
       }
+      /* Try to find a free image. */
       for (uint32_t i = 0; i < chain->base.image_count; i++) {
          if (!chain->images[i].busy) {
+            /* We found a non-busy image */
             *image_index = i;
             chain->images[i].busy = true;
             loader_wayland_buffer_set_flow(&chain->images[i].wayland_buffer, &flow);
@@ -2683,12 +2961,14 @@ wsi_wl_swapchain_acquire_next_image_implicit(struct wsi_swapchain *wsi_chain,
          }
       }
 
+      /* Try to dispatch potential events. */
       int ret = loader_wayland_dispatch(wsi_wl_surface->display->wl_display,
                                         wsi_wl_surface->display->queue,
                                         &end_time);
       if (ret == -1)
          return VK_ERROR_OUT_OF_DATE_KHR;
 
+      /* Check for timeout. */
       if (ret == 0)
          return (info->timeout ? VK_TIMEOUT : VK_NOT_READY);
    }
@@ -2713,10 +2993,20 @@ presentation_handle_presented(void *data,
    struct wsi_wl_swapchain *chain = id->chain;
    uint64_t target_time = id->target_time;
 
+   /* In v1 of presentation time, we can know if we're likely running VRR, given refresh is 0.
+    * However, we cannot know what the base refresh rate is without some kind of external information.
+    * We also cannot know if we're actually driving the display in a VRR fashion.
+    * In v2, we should always know the "base refresh" rate, but that means we cannot know if we're driving
+    * the display VRR or FRR. We could try to deduce it based on timestamps, but that is too brittle.
+    * There is a v3 proposal that adds this information more formally so we don't have to guess.
+    * Knowing VRR or FRR is not mission critical for most use cases, so just report "Unknown" for now. */
    wsi_swapchain_present_timing_update_refresh_rate(&chain->base, refresh, 0, 0);
 
+   /* Convert whatever Wayland provides to swapchain time domain. */
    presentation_time = wsi_wl_convert_wayland_to_swapchain_time(chain, presentation_time, false);
 
+   /* Notify this before present wait to reduce latency of presentation timing requests
+    * if the application is driving its queries based off present waits. */
    if (id->timing_serial)
       wsi_swapchain_present_timing_notify_completion(&chain->base, id->timing_serial, presentation_time, id->img);
 
@@ -2731,6 +3021,8 @@ presentation_handle_presented(void *data,
    if (presentation_time > chain->present_ids.displayed_time)
       chain->present_ids.displayed_time = presentation_time;
 
+   /* If we have user-defined target time it can be arbitrarily early, and we don't
+    * want to start compensating for that error if application stops requesting specific time. */
    if (!id->user_target_time && target_time && presentation_time > target_time)
       chain->present_ids.display_time_error = presentation_time - target_time;
    else
@@ -2747,11 +3039,18 @@ presentation_handle_discarded(void *data)
    struct wsi_wl_present_id *id = data;
    struct wsi_wl_swapchain *chain = id->chain;
 
+   /* From Vulkan spec:
+    * "Timing information for some present stages may have a time value of 0,
+    * indicating that results for that present stage are not available."
+    * Worst case we can simply take a timestamp of clock_id and pretend, but
+    * applications may start to latch onto that timestamp as ground truth, which
+    * is obviously not correct. */
    if (id->timing_serial)
       wsi_swapchain_present_timing_notify_completion(&chain->base, id->timing_serial, 0, id->img);
 
    mtx_lock(&chain->present_ids.lock);
    if (!chain->present_ids.valid_refresh_nsec) {
+      /* We've started occluded, so make up some safe values to throttle us */
       chain->present_ids.displayed_time = os_time_get_nano();
       chain->present_ids.last_target_time = chain->present_ids.displayed_time;
       chain->present_ids.refresh_nsec = 16666666;
@@ -2811,6 +3110,9 @@ set_application_driven_timestamp(struct wsi_wl_swapchain *chain,
                                  uint64_t *correction)
 {
    if (chain->timing_request.serial && chain->timing_request.time) {
+      /* Absolute time is requested before we have been able to report a reasonable refresh rate
+       * to application. This is valid, but we should not try to perform any rounding.
+       * NEAREST_REFRESH_CYCLE flag cannot be honored because it's impossible to know at this time. */
       struct timespec target_ts;
       timespec_from_nsec(&target_ts, chain->timing_request.time);
       wp_commit_timer_v1_set_timestamp(chain->commit_timer,
@@ -2825,6 +3127,7 @@ set_application_driven_timestamp(struct wsi_wl_swapchain *chain,
    }
 }
 
+/* The present_ids lock must be held */
 static bool
 set_timestamp(struct wsi_wl_swapchain *chain,
               uint64_t *timestamp,
@@ -2842,13 +3145,33 @@ set_timestamp(struct wsi_wl_swapchain *chain,
    displayed_time = chain->present_ids.displayed_time;
    refresh = chain->present_ids.refresh_nsec;
 
+   /* If refresh is 0, presentation feedback has informed us we have no
+    * fixed refresh cycle. In that case we can't generate sensible
+    * timestamps at all, so bail out.
+    */
    if (!refresh)
       return set_application_driven_timestamp(chain, timestamp, correction);
 
+   /* We assume we're being fed at the display's refresh rate, but
+    * if that doesn't happen our timestamps fall into the past.
+    *
+    * This would result in an offscreen surface being unthrottled until
+    * it "catches up" on missed frames. Instead, correct for missed
+    * frame opportunities by jumping forward if our display time
+    * didn't match our target time.
+    *
+    * Since we might have a few frames in flight, we need to keep a
+    * running tally of how much correction we're applying and remove
+    * it as corrected frames are retired.
+    */
    if (chain->present_ids.display_time_error > chain->present_ids.display_time_correction)
       error = chain->present_ids.display_time_error -
               chain->present_ids.display_time_correction;
 
+   /* If we're driving timestamps from application, this is somewhat redundant
+    * but it will drain out any accumulated display_time_error over time.
+    * Accumulated errors are expected since application might not
+    * align the target time perfectly against a refresh cycle. */
    target = chain->present_ids.last_target_time;
    if (error > 0)  {
       target += (error / refresh) * refresh;
@@ -2867,7 +3190,14 @@ set_timestamp(struct wsi_wl_swapchain *chain,
       if (chain->timing_request.flags & VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT)
          target -= chain->present_ids.refresh_nsec / 2;
 
+      /* Without the flag, the application is supposed to deal with any safety margins on its own. */
       timespec_from_nsec(&target_ts, target);
+
+      /* If we're using commit timing path, we always have FIFO protocol, so we don't have to
+       * consider scenarios where application is passing a very low present time.
+       * I.e., there is no need to max() the application timestamp against our estimated next refresh cycle.
+       * If the surface is occluded, it's possible to render at a higher rate than display refresh rate,
+       * but that's okay. Those presents will be discarded anyway, and we won't report odd timestamps to application. */
    } else {
       target = next_phase_locked_time(displayed_time,
                                       refresh,
@@ -2876,6 +3206,9 @@ set_timestamp(struct wsi_wl_swapchain *chain,
       chain->present_ids.last_target_time = target;
       *timestamp = target;
 
+      /* Take back 500 us as a safety margin, to ensure we don't miss our
+       * target due to round-off error.
+       */
       timespec_from_nsec(&target_ts, target - 500000);
    }
 
@@ -2898,10 +3231,23 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 
    MESA_TRACE_FUNC_FLOW(&chain->images[image_index].wayland_buffer.flow);
 
+   /* In case we're sending presentation feedback requests, make sure the
+    * queue their events are in is dispatched.
+    */
    struct timespec instant = {0};
    if (dispatch_present_id_queue(wsi_chain, &instant) == VK_ERROR_OUT_OF_DATE_KHR)
       return VK_ERROR_OUT_OF_DATE_KHR;
 
+   /* While the specification suggests we can keep presenting already acquired
+    * images on a retired swapchain, there is no requirement to support that.
+    * From spec 1.3.278:
+    *
+    * After oldSwapchain is retired, the application can pass to vkQueuePresentKHR
+    * any images it had already acquired from oldSwapchain.
+    * E.g., an application may present an image from the old swapchain
+    * before an image from the new swapchain is ready to be presented.
+    * As usual, vkQueuePresentKHR may fail if oldSwapchain has entered a state
+    * that causes VK_ERROR_OUT_OF_DATE_KHR to be returned. */
    if (chain->retired)
       return VK_ERROR_OUT_OF_DATE_KHR;
 
@@ -2918,6 +3264,8 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
    if (ret != VK_SUCCESS)
       return ret;
 
+   /* For KHR_swapchain_maintenance1. We might have transitioned from FIFO to MAILBOX.
+    * In this case we need to let the FIFO request complete, before presenting MAILBOX. */
    while (!chain->legacy_fifo_ready) {
       int ret = wl_display_dispatch_queue(wsi_wl_surface->display->wl_display,
                                           wsi_wl_surface->display->queue);
@@ -2929,6 +3277,7 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 
    if (chain->base.image_info.explicit_sync) {
       struct wsi_wl_image *image = &chain->images[image_index];
+      /* Incremented by signal in base queue_present. */
       uint64_t acquire_point = image->base.explicit_sync[WSI_ES_ACQUIRE].timeline;
       uint64_t release_point = image->base.explicit_sync[WSI_ES_RELEASE].timeline;
       wp_linux_drm_syncobj_surface_v1_set_acquire_point(chain->wl_syncobj_surface,
@@ -2959,6 +3308,10 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 				  0, 0, INT32_MAX, INT32_MAX);
       }
    } else {
+      /* If the compositor doesn't support damage_buffer, we deliberately
+       * ignore the damage region and post maximum damage, because
+       * we are unaware how to map the damage region from the buffer local
+       * coordinate space to the surface local coordinate space */
       wl_surface_damage(wsi_wl_surface->wayland_surface.wrapper,
 			0, 0, INT32_MAX, INT32_MAX);
    }
@@ -2995,8 +3348,12 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
          chain->present_ids.max_present_id = present_id;
 
       if (timestamped || !present_id) {
+         /* In this case there is at least one commit that will replace the previous present in finite time. */
          chain->present_ids.max_forward_progress_present_id = chain->present_ids.max_present_id;
       } else if (chain->present_ids.prev_max_present_id > chain->present_ids.max_forward_progress_present_id) {
+         /* The previous commit will complete in finite time now.
+          * We need to keep track of this since it's possible for application to signal e.g. 2, 4, 6, 8, but wait for 7.
+          * A naive presentID - 1 is not correct. */
          chain->present_ids.max_forward_progress_present_id = chain->present_ids.prev_max_present_id;
       }
 
@@ -3007,10 +3364,12 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
    chain->images[image_index].busy = true;
 
    if (mode_fifo && !chain->fifo) {
+      /* If we don't have FIFO protocol, we must fall back to legacy mechanism for throttling. */
       chain->frame = wl_surface_frame(wsi_wl_surface->wayland_surface.wrapper);
       wl_callback_add_listener(chain->frame, &frame_listener, chain);
       chain->legacy_fifo_ready = false;
    } else {
+      /* If we present MAILBOX, any subsequent presentation in FIFO can replace this image. */
       chain->legacy_fifo_ready = true;
    }
 
@@ -3018,13 +3377,72 @@ wsi_wl_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
       wp_fifo_v1_set_barrier(chain->fifo);
       wp_fifo_v1_wait_barrier(chain->fifo);
 
+      /* If our surface is occluded and we're using vkWaitForPresentKHR,
+       * we can end up waiting forever. The FIFO condition and the time
+       * constraint are met, but the image hasn't been presented because
+       * we're occluded - but the image isn't discarded because there
+       * are no further content updates for the compositor to process.
+       *
+       * This extra commit gives us the second content update to move
+       * things along. If we're occluded the FIFO constraint is
+       * satisfied immediately after the time constraint is, pushing
+       * out a discard. If we're visible, the timed content update
+       * receives presented feedback and the FIFO one blocks further
+       * updates until the next refresh.
+       */
+
+      /* If the compositor supports FIFO, but not commit-timing, skip this.
+       * In this scenario, we have to consider best-effort implementation instead.
+       *
+       * We have to make the assumption that presentation events come through eventually.
+       * The FIFO protocol allows clearing the FIFO barrier earlier for forward progress guarantee purposes,
+       * and there's nothing stopping a compositor from signalling a presentation complete for an occluded surface.
+       * There are potential hazards with this approach,
+       * but none of these are worse than the code paths before FIFO was introduced:
+       * - Calling WaitPresentKHR on the last presented ID on a surface that starts occluded may hang until not occluded.
+       *   A compositor that exposes FIFO and not commit-timing would likely not exhibit indefinite blocking behavior,
+       *   i.e. it may not have special considerations to hold back frame callbacks for occluded surfaces.
+       * - Occluded surfaces may run un-throttled. This is objectively better than blocking indefinitely (frame callback)
+       *   as it breaks forward progress guarantees, but worse for power consumption.
+       *   We add a pragmatic workaround to deal with this scenario similar to frame-callback based present wait.
+       *   A compositor that exposes FIFO and not commit-timing would likely do throttling on its own,
+       *   either to refresh rate or some fixed value. */
+
       if (timestamped) {
          wl_surface_commit(wsi_wl_surface->wayland_surface.wrapper);
+         /* Once we're in a steady state, we'd only need one of these
+          * barrier waits. However, the first time we use a timestamp
+          * we need both of our content updates to wait. The first
+          * needs to wait to avoid potentially provoking a feedback
+          * discarded event for the previous untimed content update,
+          * the second to prevent provoking a discard event for the
+          * timed update we've just made.
+          *
+          * Before the transition, we would only have a single content
+          * update per call, which would contain a barrier wait. After
+          * that, we would only need a barrier wait in the empty content
+          * update.
+          *
+          * Instead of statefully tracking the transition across calls to
+          * this function, just put a barrier wait in every content update.
+          */
          wp_fifo_v1_wait_barrier(chain->fifo);
       }
 
+      /* If the next frame transitions into MAILBOX mode make sure it observes the wait barrier.
+       * When using timestamps, we already emit a dummy commit with the wait barrier anyway. */
       chain->next_present_force_wait_barrier = !timestamped;
    } else if (chain->fifo && chain->next_present_force_wait_barrier) {
+      /* If we're using KHR_swapchain_maintenance1 to transition from FIFO to something non-FIFO
+       * the previous frame's FIFO must persist for a refresh cycle, i.e. it cannot be replaced by a MAILBOX presentation.
+       * From 1.4.303 spec:
+       * "Transition from VK_PRESENT_MODE_FIFO_KHR or VK_PRESENT_MODE_FIFO_RELAXED_KHR or VK_PRESENT_MODE_FIFO_LATEST_READY_EXT to
+       * VK_PRESENT_MODE_IMMEDIATE_KHR or VK_PRESENT_MODE_MAILBOX_KHR:
+       * If the FIFO queue is empty, presentation is done according to the behavior of the new mode.
+       * If there are present operations in the FIFO queue,
+       * once the last present operation is performed based on the respective vertical blanking period,
+       * the current and subsequent updates are applied according to the new mode"
+       * Ensure we have used a wait barrier if the previous commit did not do that already. */
       wp_fifo_v1_wait_barrier(chain->fifo);
       chain->next_present_force_wait_barrier = false;
    }
@@ -3060,6 +3478,7 @@ wsi_wl_alloc_image_shm(struct wsi_image *imagew, unsigned size)
 {
    struct wsi_wl_image *image = (struct wsi_wl_image *)imagew;
 
+   /* Create a shareable buffer */
    int fd = os_create_anonymous_file(size, NULL);
    if (fd < 0)
       return NULL;
@@ -3100,6 +3519,7 @@ wsi_wl_image_init(struct wsi_wl_swapchain *chain,
       }
       assert(image->shm_ptr != NULL);
 
+      /* Share it in a wl_buffer */
       struct wl_shm_pool *pool = wl_shm_create_pool(display->wl_shm,
                                                     image->shm_fd,
                                                     image->shm_size);
@@ -3155,12 +3575,13 @@ wsi_wl_image_init(struct wsi_wl_swapchain *chain,
    }
 
    default:
-      unreachable("Invalid buffer type");
+      UNREACHABLE("Invalid buffer type");
    }
 
    if (!image->wayland_buffer.buffer)
       goto fail_image;
 
+   /* No need to listen for release if we are explicit sync. */
    if (!chain->base.image_info.explicit_sync)
       wl_buffer_add_listener(image->wayland_buffer.buffer, &buffer_listener, image);
 
@@ -3199,6 +3620,10 @@ static void
 wsi_wl_swapchain_chain_free(struct wsi_wl_swapchain *chain,
                             const VkAllocationCallbacks *pAllocator)
 {
+   /* Force wayland-client to release fd sent during the swapchain
+    * creation (see MAX_FDS_OUT) to avoid filling up VRAM with
+    * released buffers.
+    */
    struct wsi_wl_surface *wsi_wl_surface = chain->wsi_wl_surface;
    if (!chain->retired)
       wl_display_roundtrip_queue(wsi_wl_surface->display->wl_display,
@@ -3213,11 +3638,17 @@ wsi_wl_swapchain_chain_free(struct wsi_wl_swapchain *chain,
    if (chain->color.color_surface)
       wp_color_management_surface_v1_destroy(chain->color.color_surface);
 
+   /* Only unregister if we are the non-retired swapchain, or
+    * we are a retired swapchain and memory allocation failed,
+    * in which case there are only retired swapchains. */
    if (wsi_wl_surface->chain == chain)
       wsi_wl_surface->chain = NULL;
 
    assert(!chain->present_ids.dispatch_in_progress);
 
+   /* In VK_KHR_swapchain_maintenance1 there is no requirement to wait for all present IDs to be complete.
+    * Waiting for the swapchain fence is enough.
+    * Just clean up anything user did not wait for. */
    struct wsi_wl_present_id *id, *tmp;
    wl_list_for_each_safe(id, tmp, &chain->present_ids.fallback_frame_list, link) {
       wl_callback_destroy(id->frame);
@@ -3275,11 +3706,20 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
 
+   /* From spec 1.3.278:
+    * Upon calling vkCreateSwapchainKHR with an oldSwapchain that is not VK_NULL_HANDLE,
+    * oldSwapchain is retired - even if creation of the new swapchain fails. */
    if (pCreateInfo->oldSwapchain) {
       VK_FROM_HANDLE(wsi_wl_swapchain, old_chain, pCreateInfo->oldSwapchain);
+      /* oldSwapchain is extern-sync, so it is not possible to call AcquireNextImage or QueuePresent
+       * concurrently with this function. Next call to acquire or present will immediately
+       * return OUT_OF_DATE. */
       old_chain->retired = true;
    }
 
+   /* We need to allocate the chain handle early, since display initialization code relies on it.
+    * We do not know the actual image count until we have initialized the display handle,
+    * so allocate conservatively in case we need to bump the image count. */
    size_t size = sizeof(*chain) + MAX2(WSI_WL_BUMPED_NUM_IMAGES, pCreateInfo->minImageCount) * sizeof(chain->images[0]);
    chain = vk_zalloc(pAllocator, size, 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (chain == NULL)
@@ -3287,6 +3727,10 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    wl_list_init(&chain->present_ids.fallback_frame_list);
 
+   /* We are taking ownership of the wsi_wl_surface, so remove ownership from
+    * oldSwapchain. If the surface is currently owned by a swapchain that is
+    * not oldSwapchain we return an error.
+    */
    if (wsi_wl_surface->chain &&
        wsi_swapchain_to_handle(&wsi_wl_surface->chain->base) != pCreateInfo->oldSwapchain) {
       result = VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
@@ -3314,12 +3758,14 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          wp_color_management_surface_v1_destroy(old_chain->color.color_surface);
          old_chain->color.color_surface = NULL;
       }
+      /* the old swapchain may have a different wsi_wl_surface for the same app provided wl_surface */
       if (old_chain->wsi_wl_surface) {
          struct wsi_wl_display *dpy = old_chain->wsi_wl_surface->display;
          wl_display_roundtrip_queue(dpy->wl_display, dpy->queue);
       }
    }
 
+   /* Take ownership of the wsi_wl_surface */
    chain->wsi_wl_surface = wsi_wl_surface;
    wsi_wl_surface->chain = chain;
 
@@ -3329,10 +3775,20 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    uint32_t num_images = pCreateInfo->minImageCount;
 
+   /* If app provides a present mode list from KHR_swapchain_maintenance1,
+    * we don't know which present mode will be used.
+    * Application is assumed to be well-behaved and be spec-compliant.
+    * It needs to query all per-present mode minImageCounts individually and use the max() of those modes,
+    * so there should never be any need to bump image counts. */
    bool uses_present_mode_group = vk_find_struct_const(
          pCreateInfo->pNext, SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR) != NULL;
 
+   /* If FIFO manager is not used, minImageCount is already the bumped value for reasons outlined in
+    * wsi_wl_surface_get_min_image_count(), so skip any attempt to bump the counts. */
    if (wsi_wl_surface->display->fifo_manager && !uses_present_mode_group) {
+      /* With proper FIFO, we return a lower minImageCount to make FIFO viable without requiring the use of KHR_present_wait.
+       * The image count for MAILBOX should be bumped for performance reasons in this case.
+       * This matches strategy for X11. */
       const VkSurfacePresentModeKHR mode =
             { VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR, NULL, pCreateInfo->presentMode };
 
@@ -3370,8 +3826,14 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          .same_gpu = wsi_wl_surface->display->same_gpu,
          .explicit_sync = wsi_wl_use_explicit_sync(wsi_wl_surface->display, wsi_device),
       };
+      /* Use explicit DRM format modifiers when both the server and the driver
+       * support them.
+       */
       if (wsi_wl_surface->display->wl_dmabuf && wsi_device->supports_modifiers) {
          struct wsi_wl_format *f = NULL;
+         /* Try to select modifiers for our vk_format from surface dma-buf
+          * feedback. If that doesn't work, fallback to the list of supported
+          * formats/modifiers by the display. */
          if (wsi_wl_surface->wl_dmabuf_feedback)
             f = pick_format_from_surface_dmabuf_feedback(wsi_wl_surface,
                                                          pCreateInfo->imageFormat);
@@ -3413,8 +3875,10 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.poll_timing_request = wsi_wl_swapchain_poll_timing_request;
 
    if (pCreateInfo->flags & VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT) {
+      /* VK_EXT_present_timing takes whatever Wayland gives us. */
       chain->base.present_timing.time_domain = clock_id_to_vk_time_domain(wsi_wl_surface->display->presentation_clock_id);
    } else {
+      /* VK_GOOGLE_display_timing always wants VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR. */
       chain->base.present_timing.time_domain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
    }
 
@@ -3474,6 +3938,10 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
                                        presentation_handle_discarded,
                                        presentation_handle_teardown);
    } else {
+      /* Fallback to frame callbacks when presentation protocol is not available.
+       * We already have a proxy for the surface, but need another since
+       * presentID is pumped through a different queue to not disrupt
+       * QueuePresentKHR frame callback's queue. */
       chain->present_ids.frame_fallback = true;
       chain->present_ids.surface = wl_proxy_create_wrapper(wsi_wl_surface->base.surface);
       wl_proxy_set_queue((struct wl_proxy *) chain->present_ids.surface,
@@ -3516,7 +3984,7 @@ wsi_wl_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    if (needs_color_surface(dpy, chain->color.colorspace)) {
       chain->color.color_surface =
-         wp_color_management_surface_v1_get_surface(dpy->color_manager,
+         wp_color_manager_v1_get_surface(dpy->color_manager,
                                          chain->wsi_wl_surface->wayland_surface.wrapper);
       if (!chain->color.color_surface) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
