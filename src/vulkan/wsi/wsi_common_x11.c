@@ -774,7 +774,7 @@ x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
    if (surface_caps && pdevice->supported_extensions.EXT_multisampled_render_to_swapchain)
       surface_caps->swapchainSupportedFlags |= VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
 
-   VkImageUsageFLAGS2CreateInfoKHR *usage2 =
+   VkImageUsageFlags2CreateInfoKHR *usage2 =
       vk_find_struct(caps->pNext, IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR);
    if (usage2) {
       usage2->usage = image_usage;
