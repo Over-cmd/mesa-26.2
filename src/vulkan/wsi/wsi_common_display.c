@@ -1,6 +1,5 @@
 /*
  * Copyright © 2017 Keith Packard
- * Copyright © 2021-2022 Collabora, Ltd.
  *
  * Permission to use, copy, modify, distribute, and sell this software and its
  * documentation for any purpose is hereby granted without fee, provided that
@@ -21,6 +20,35 @@
  * OF THIS SOFTWARE.
  */
 
+/*
+ * Colorimetry helper functions (color_xy_to_u16, nits_to_u16, nits_to_u16_dark),
+ * kindly taken from Weston:
+ * https://gitlab.freedesktop.org/wayland/weston/-/blob/main/libweston/backend-drm/kms-color.c
+ *
+ * Copyright 2021-2022 Collabora, Ltd.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 #include "util/u_atomic.h"
 #include "util/macros.h"
 #include <stdlib.h>
@@ -33,7 +61,6 @@
 #include <poll.h>
 #include <stdbool.h>
 #include <math.h>
-#include <inttypes.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #ifdef HAVE_LIBUDEV
@@ -50,7 +77,6 @@
 #include "util/os_time.h"
 #include "util/u_overflow.h"
 #include "util/timespec.h"
-#include "util/log.h"
 
 #include "vk_device.h"
 #include "vk_fence.h"
@@ -78,10 +104,14 @@
 #define wsi_display_debug_code(...)
 #endif
 
+/* These have lifetime equal to the instance, so they effectively
+ * never go away. This means we must keep track of them separately
+ * from all other resources.
+ */
 typedef struct wsi_display_mode {
    struct list_head             list;
    struct wsi_display_connector *connector;
-   bool                         valid;
+   bool                         valid; /* was found in most recent poll */
    bool                         preferred;
    uint32_t                     clock; /* in kHz */
    uint16_t                     hdisplay, hsync_start, hsync_end, htotal, hskew;
@@ -149,7 +179,7 @@ typedef struct wsi_display_connector {
    bool                         connected;
    bool                         active;
    bool                         imported;
-   int                          refcount;
+   int                          refcount; /* swapchains using this connector */
    struct list_head             display_modes;
    wsi_display_mode             *current_mode;
    drmModeModeInfo              current_drm_mode;
@@ -173,11 +203,20 @@ typedef struct wsi_display_connector {
 
 struct wsi_display {
    struct wsi_interface         base;
+
    const VkAllocationCallbacks  *alloc;
 
+   /* fd currently in use for KHR_display, provided by vkAcquireDrmDisplayEXT()
+    * or vkAcquireXlibDisplayEXT().  When none is active, it's set to device_fd
+    * for connector enumeration.
+    */
    int                          fd;
+   /* fd that was passed to wsi_display_init_wsi */
    int                          device_fd;
+   /* Refcount for DRM master on device_fd. */
    uint32_t                     master_refcount;
+
+   /* Used with syncobj imported from driver side. */
    int                          syncobj_fd;
 
    mtx_t                        wait_mutex;
@@ -187,95 +226,18 @@ struct wsi_display {
    struct u_cnd_monotonic       hotplug_cond;
    pthread_t                    hotplug_thread;
 
-   struct list_head             connectors;
+   struct list_head             connectors; /* list of all discovered connectors */
+   /* Flag that we've called wsi_get_connectors() with the current fd.
+    */
    bool                         get_connectors_current;
    mtx_t                        connectors_mutex;
 
+   /* A unique monotonically increasing value to associate with an individual
+    * colorimetry outcome on the output. This is used to avoid propagating
+    * dirty tracking flags across large numbers of objects.
+    */
    uint64_t                     color_outcome_serial_counter;
 };
-
-#define wsi_for_each_display_mode(_mode, _conn)                 \
-   list_for_each_entry_safe(struct wsi_display_mode, _mode,     \
-                            &(_conn)->display_modes, list)
-
-#define wsi_for_each_connector(_conn, _dev)                             \
-   list_for_each_entry_safe(struct wsi_display_connector, _conn,        \
-                            &(_dev)->connectors, list)
-
-enum wsi_image_state {
-   WSI_IMAGE_IDLE,
-   WSI_IMAGE_DRAWING,
-   WSI_IMAGE_WAITING,
-   WSI_IMAGE_QUEUED_AFTER_WAIT,
-   WSI_IMAGE_QUEUED,
-   WSI_IMAGE_FLIPPING,
-   WSI_IMAGE_DISPLAYING
-};
-
-struct wsi_display_image {
-   struct wsi_image                base;
-   struct wsi_display_swapchain    *chain;
-   enum wsi_image_state            state;
-   uint32_t                        fb_id;
-   uint32_t                        buffer[4];
-   uint64_t                        flip_sequence;
-   uint64_t                        present_id;
-   struct wsi_image_timing_request timing_request;
-   struct wsi_display_fence        *fence;
-   uint64_t                        minimum_ns;
-};
-
-struct wsi_display_swapchain {
-   struct wsi_swapchain            base;
-   struct wsi_display              *wsi;
-   VkIcdSurfaceDisplay             *surface;
-   uint64_t                        flip_sequence;
-   VkResult                        status;
-
-   mtx_t                           present_id_mutex;
-   struct u_cnd_monotonic          present_id_cond;
-   uint64_t                        present_id;
-   VkResult                        present_id_error;
-
-   uint64_t                        color_outcome_serial;
-   VkHdrMetadataEXT                hdr_metadata;
-
-   struct wsi_image_timing_request timing_request;
-   uint64_t                        last_presented_vblank;
-   uint64_t                        last_presented_nsec;
-
-   struct wsi_display_image        images[0];
-};
-
-struct wsi_display_fence {
-   struct list_head             link;
-   struct wsi_display           *wsi;
-   bool                         event_received;
-   bool                         destroyed;
-   uint32_t                     syncobj;
-   uint64_t                     sequence;
-   bool                         device_event;
-   struct wsi_display_connector *connector;
-   struct wsi_display_image     *image;
-};
-
-struct wsi_display_sync {
-   struct vk_sync               sync;
-   struct wsi_display_fence     *fence;
-};
-
-static uint64_t fence_sequence;
-
-static void _wsi_display_cleanup_state(struct wsi_display_swapchain *chain);
-
-#ifdef __ANDROID__
-static void thread_signal_handler(int signum) {
-   pthread_exit(0);
-}
-#endif
-
-ICD_DEFINE_NONDISP_HANDLE_CASTS(wsi_display_mode, VkDisplayModeKHR)
-ICD_DEFINE_NONDISP_HANDLE_CASTS(wsi_display_connector, VkDisplayKHR)
 
 static void
 wsi_display_parse_edid(struct wsi_display_connector *connector, drmModePropertyBlobRes *blob)
@@ -285,11 +247,12 @@ wsi_display_parse_edid(struct wsi_display_connector *connector, drmModePropertyB
    struct di_info *info = di_info_parse_edid(blob->data, blob->length);
 
    if (!info) {
-      mesa_logd("wsi_display_parse_edid: Failed to parse edid: %s", di_info_get_failure_msg(info));
+      fprintf(stderr, "wsi_display_parse_edid: Failed to parse edid. Reason: %s\n", di_info_get_failure_msg(info));
       return;
    }
 
    const struct di_edid *edid = di_info_get_edid(info);
+
    const struct di_edid_chromaticity_coords *chroma = di_edid_get_chromaticity_coords(edid);
    const struct di_cta_hdr_static_metadata_block *hdr_static_metadata = NULL;
    const struct di_cta_colorimetry_block *colorimetry = NULL;
@@ -322,6 +285,7 @@ wsi_display_parse_edid(struct wsi_display_connector *connector, drmModePropertyB
       metadata->hdr_metadata.maxFrameAverageLightLevel = hdr_static_metadata->desired_content_max_frame_avg_luminance;
       metadata->hdr_metadata.minLuminance = hdr_static_metadata->desired_content_min_luminance;
       metadata->hdr_metadata.maxLuminance = hdr_static_metadata->desired_content_max_luminance;
+      /* To be filled in by the app based on the scene, default to desired_content_max_luminance. */
       metadata->hdr_metadata.maxContentLightLevel = hdr_static_metadata->desired_content_max_luminance;
    }
 
@@ -333,7 +297,9 @@ wsi_display_parse_edid(struct wsi_display_connector *connector, drmModePropertyB
    char *make = di_info_get_make(info);
    char *model = di_info_get_model(info);
    if (make && model) {
+      /* make + space + model + null terminator */
       int display_name_size = strlen(make) + strlen(model) + 2;
+      /* Per the spec, this string remains valid for the lifetime of the VkDisplayKHR. */
       metadata->display_name = vk_zalloc(connector->wsi->alloc,
             display_name_size, 8,
             VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
@@ -352,6 +318,10 @@ wsi_display_parse_edid(struct wsi_display_connector *connector, drmModePropertyB
 #endif
 }
 
+/**
+ * Creates the mapping from our property enums to the KMS property ID for that
+ * property associated with the object.
+ */
 static bool
 find_properties(struct wsi_display_connector *connector, uint32_t count_props, uint32_t *props, uint64_t *prop_values, int fd, uint32_t type)
 {
@@ -376,6 +346,9 @@ find_properties(struct wsi_display_connector *connector, uint32_t count_props, u
 
    memset(prop_id, 0, prop_count * sizeof(*prop_id));
 
+   /* Mark these properties as optional, causing them to be skipped in the
+    * verification at the bottom.
+    */
    if (type == DRM_MODE_OBJECT_CRTC) {
       prop_id[GAMMA_LUT] = -1;
       prop_id[DEGAMMA_LUT] = -1;
@@ -385,6 +358,9 @@ find_properties(struct wsi_display_connector *connector, uint32_t count_props, u
       prop_id[Colorspace] = -1;
    }
 
+   /* Walk the list of properties seeing if their names match one of the
+    * properties we care about controlling.
+    */
    for (int p = 0; p < count_props; p++) {
       drmModePropertyPtr prop = drmModeGetProperty(fd, props[p]);
       if (!prop)
@@ -448,6 +424,7 @@ find_properties(struct wsi_display_connector *connector, uint32_t count_props, u
       drmModeFreeProperty(prop);
    }
 
+   /* verify that all required properties were found */
    for (int i = 0; i < prop_count; i++) {
       if (!prop_id[i]) {
          mesa_logd("Failed to find required property %d for object type 0x%08x", i, type);
@@ -493,6 +470,92 @@ find_connector_properties(struct wsi_display_connector *connector, drmModeConnec
 {
    return find_properties(connector, drm_connector->count_props, drm_connector->props, drm_connector->prop_values, fd, DRM_MODE_OBJECT_CONNECTOR);
 }
+
+#define wsi_for_each_display_mode(_mode, _conn)                 \
+   list_for_each_entry_safe(struct wsi_display_mode, _mode,     \
+                            &(_conn)->display_modes, list)
+
+#define wsi_for_each_connector(_conn, _dev)                             \
+   list_for_each_entry_safe(struct wsi_display_connector, _conn,        \
+                            &(_dev)->connectors, list)
+
+enum wsi_image_state {
+   WSI_IMAGE_IDLE,
+   WSI_IMAGE_DRAWING,
+   WSI_IMAGE_WAITING,
+   WSI_IMAGE_QUEUED_AFTER_WAIT,
+   WSI_IMAGE_QUEUED,
+   WSI_IMAGE_FLIPPING,
+   WSI_IMAGE_DISPLAYING
+};
+
+struct wsi_display_image {
+   struct wsi_image                base;
+   struct wsi_display_swapchain    *chain;
+   enum wsi_image_state            state;
+   uint32_t                        fb_id;
+   uint32_t                        buffer[4];
+   uint64_t                        flip_sequence;
+   uint64_t                        present_id;
+   struct wsi_image_timing_request timing_request;
+   struct wsi_display_fence        *fence;
+   uint64_t                        minimum_ns;
+};
+
+struct wsi_display_swapchain {
+   struct wsi_swapchain            base;
+   struct wsi_display              *wsi;
+   VkIcdSurfaceDisplay             *surface;
+   uint64_t                        flip_sequence;
+   VkResult                        status;
+
+   mtx_t                           present_id_mutex;
+   struct u_cnd_monotonic          present_id_cond;
+   uint64_t                        present_id;
+   VkResult                        present_id_error;
+
+   /* A unique ID for the color outcome of the swapchain. A serial of 0 means unset/default. */
+   uint64_t                        color_outcome_serial;
+   VkHdrMetadataEXT                hdr_metadata;
+
+   struct wsi_image_timing_request timing_request;
+   uint64_t                        last_presented_vblank;
+   uint64_t                        last_presented_nsec;
+
+   struct wsi_display_image        images[0];
+};
+
+struct wsi_display_fence {
+   struct list_head             link;
+   struct wsi_display           *wsi;
+   bool                         event_received;
+   bool                         destroyed;
+   uint32_t                     syncobj; /* syncobj to signal on event */
+   uint64_t                     sequence;
+   bool                         device_event; /* fence is used for device events */
+   struct wsi_display_connector *connector;
+   /* Image to be flipped, if this fence is for an image in the WSI_IMAGE_WAITING state that will need to move to QUEUED. */
+   struct wsi_display_image     *image;
+};
+
+struct wsi_display_sync {
+   struct vk_sync               sync;
+   struct wsi_display_fence     *fence;
+};
+
+static uint64_t fence_sequence;
+
+static void
+_wsi_display_cleanup_state(struct wsi_display_swapchain *chain);
+
+#ifdef __ANDROID__
+static void thread_signal_handler (int signum) {
+   pthread_exit (0);
+}
+#endif
+
+ICD_DEFINE_NONDISP_HANDLE_CASTS(wsi_display_mode, VkDisplayModeKHR)
+ICD_DEFINE_NONDISP_HANDLE_CASTS(wsi_display_connector, VkDisplayKHR)
 
 static bool
 wsi_display_mode_matches_drm(wsi_display_mode *wsi,
@@ -573,7 +636,7 @@ wsi_display_register_drm_mode(struct wsi_device *wsi_device,
    display_mode->connector = connector;
    display_mode->valid = true;
    display_mode->preferred = (drm_mode->type & DRM_MODE_TYPE_PREFERRED) != 0;
-   display_mode->clock = drm_mode->clock;
+   display_mode->clock = drm_mode->clock; /* kHz */
    display_mode->hdisplay = drm_mode->hdisplay;
    display_mode->hsync_start = drm_mode->hsync_start;
    display_mode->hsync_end = drm_mode->hsync_end;
@@ -590,6 +653,10 @@ wsi_display_register_drm_mode(struct wsi_device *wsi_device,
    return VK_SUCCESS;
 }
 
+/*
+ * Update our information about a specific connector
+ */
+
 static struct wsi_display_connector *
 wsi_display_find_connector(struct wsi_device *wsi_device,
                           uint32_t connector_id)
@@ -604,6 +671,7 @@ wsi_display_find_connector(struct wsi_device *wsi_device,
 
    return NULL;
 }
+
 
 static uint32_t
 wsi_display_is_crtc_available(const struct wsi_display * const wsi,
@@ -686,8 +754,13 @@ wsi_display_get_connector(struct wsi_device *wsi_device,
 
    connector->connected = drm_connector->connection != DRM_MODE_DISCONNECTED;
 
+   /* Mark all connector modes as invalid */
    wsi_display_invalidate_connector_modes(connector);
 
+   /*
+    * List current modes, adding new ones and marking existing ones as
+    * valid
+    */
    for (int m = 0; m < drm_connector->count_modes; m++) {
       VkResult result = wsi_display_register_drm_mode(wsi_device,
                                                       connector,
@@ -708,6 +781,7 @@ wsi_display_get_connector(struct wsi_device *wsi_device,
 static uint32_t
 mode_size(struct wsi_display_mode *mode)
 {
+   /* fortunately, these are both uint16_t, so this is easy */
    return (uint32_t) mode->hdisplay * (uint32_t) mode->vdisplay;
 }
 
@@ -720,7 +794,13 @@ wsi_display_fill_in_display_properties(struct wsi_display_connector *connector,
    const struct wsi_display_connector_metadata *metadata = &connector->metadata;
 
    properties->display = wsi_display_connector_to_handle(connector);
+   /* Return product name from EDID if available, otherwise NULL. */
    properties->displayName = metadata->display_name;
+
+   /* Find the first preferred mode and assume that's the physical
+    * resolution. If there isn't a preferred mode, find the largest mode and
+    * use that.
+    */
 
    struct wsi_display_mode *preferred_mode = NULL, *largest_mode = NULL;
    wsi_for_each_display_mode(display_mode, connector) {
@@ -748,6 +828,9 @@ wsi_display_fill_in_display_properties(struct wsi_display_connector *connector,
       properties->physicalResolution.height = 768;
    }
 
+   /* Use physical size from EDID if available,
+    * otherwise make up physical size based on 96dpi.
+    */
    properties->physicalDimensions.width =
       metadata->physical_width_cm ?
       metadata->physical_width_cm * 10 :
@@ -777,6 +860,13 @@ wsi_GetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice,
                                                         pPropertyCount,
                                                         NULL);
    } else {
+      /* If we're actually returning properties, allocate a temporary array of
+       * VkDisplayProperties2KHR structs, call properties2 to fill them out,
+       * and then copy them to the client.  This seems a bit expensive but
+       * wsi_display_get_physical_device_display_properties2() calls
+       * drmModeGetResources() which does an ioctl and then a bunch of
+       * allocations so this should get lost in the noise.
+       */
       VkDisplayProperties2KHR *props2 =
          vk_zalloc(wsi->alloc, sizeof(*props2) * *pPropertyCount, 8,
                    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -822,6 +912,7 @@ wsi_get_connectors(VkPhysicalDevice physicalDevice)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
 
+   /* Get current information */
    for (int c = 0; c < mode_res->count_connectors; c++) {
       struct wsi_display_connector *connector =
          wsi_display_get_connector(wsi_device, wsi->fd,
@@ -850,6 +941,7 @@ wsi_GetPhysicalDeviceDisplayProperties2KHR(VkPhysicalDevice physicalDevice,
    struct wsi_display *wsi =
       (struct wsi_display *) wsi_device->wsi[VK_ICD_WSI_PLATFORM_DISPLAY];
 
+   /* Get current information */
    VkResult result = wsi_get_connectors(physicalDevice);
    if (result != VK_SUCCESS)
       goto bail;
@@ -872,6 +964,9 @@ bail:
    return result;
 }
 
+/*
+ * Implement vkGetPhysicalDeviceDisplayPlanePropertiesKHR (VK_KHR_display
+ */
 static void
 wsi_display_fill_in_display_plane_properties(
    struct wsi_display_connector *connector,
@@ -932,6 +1027,7 @@ wsi_GetPhysicalDeviceDisplayPlaneProperties2KHR(VkPhysicalDevice physicalDevice,
    struct wsi_display *wsi =
       (struct wsi_display *) wsi_device->wsi[VK_ICD_WSI_PLATFORM_DISPLAY];
 
+   /* Get current information */
    VkResult result = wsi_get_connectors(physicalDevice);
    if (result != VK_SUCCESS)
       goto bail;
@@ -950,6 +1046,10 @@ bail:
    *pPropertyCount = 0;
    return result;
 }
+
+/*
+ * Implement vkGetDisplayPlaneSupportedDisplaysKHR (VK_KHR_display)
+ */
 
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_GetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice,
@@ -976,6 +1076,10 @@ wsi_GetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice,
    }
    return vk_outarray_status(&conn);
 }
+
+/*
+ * Implement vkGetDisplayModePropertiesKHR (VK_KHR_display)
+ */
 
 static void
 wsi_display_fill_in_display_mode_properties(
@@ -1051,6 +1155,9 @@ wsi_display_mode_matches_vk(wsi_display_mode *wsi,
            fabs(wsi_display_mode_refresh(wsi) * 1000.0 - vk->refreshRate) < 10);
 }
 
+/*
+ * Implement vkCreateDisplayModeKHR (VK_KHR_display)
+ */
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_CreateDisplayModeKHR(VkPhysicalDevice physicalDevice,
                          VkDisplayKHR display,
@@ -1064,6 +1171,11 @@ wsi_CreateDisplayModeKHR(VkPhysicalDevice physicalDevice,
    if (pCreateInfo->flags != 0)
       return VK_ERROR_INITIALIZATION_FAILED;
 
+   /* Check and see if the requested mode happens to match an existing one and
+    * return that. This makes the conformance suite happy. Doing more than
+    * this would involve embedding the CVT function into the driver, which seems
+    * excessive.
+    */
    wsi_for_each_display_mode(display_mode, connector) {
       if (display_mode->valid) {
          if (wsi_display_mode_matches_vk(display_mode, &pCreateInfo->parameters)) {
@@ -1075,6 +1187,9 @@ wsi_CreateDisplayModeKHR(VkPhysicalDevice physicalDevice,
    return VK_ERROR_INITIALIZATION_FAILED;
 }
 
+/*
+ * Implement vkGetDisplayPlaneCapabilities
+ */
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_GetDisplayPlaneCapabilitiesKHR(VkPhysicalDevice physicalDevice,
                                    VkDisplayModeKHR _mode,
@@ -1083,6 +1198,7 @@ wsi_GetDisplayPlaneCapabilitiesKHR(VkPhysicalDevice physicalDevice,
 {
    struct wsi_display_mode *mode = wsi_display_mode_from_handle(_mode);
 
+   /* XXX use actual values */
    pCapabilities->supportedAlpha = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
    pCapabilities->minSrcPosition.x = 0;
    pCapabilities->minSrcPosition.y = 0;
@@ -1130,6 +1246,7 @@ wsi_GetDisplayPlaneCapabilities2KHR(VkPhysicalDevice physicalDevice,
       }
 
       default:
+         /* Ignored */
          break;
       }
    }
@@ -1266,6 +1383,7 @@ wsi_display_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
+         /* Unsupported. */
          VkSurfacePresentScalingCapabilitiesKHR *scaling = (void *)ext;
          scaling->supportedPresentScaling = 0;
          scaling->supportedPresentGravityX = 0;
@@ -1276,6 +1394,7 @@ wsi_display_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
+         /* We only support FIFO. */
          VkSurfacePresentModeCompatibilityKHR *compat = (void *)ext;
          if (compat->pPresentModes) {
             if (compat->presentModeCount) {
@@ -1291,18 +1410,21 @@ wsi_display_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
 
       case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR: {
          VkSurfaceCapabilitiesPresentId2KHR *pid2 = (void *)ext;
+
          pid2->presentId2Supported = VK_TRUE;
          break;
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR: {
          VkSurfaceCapabilitiesPresentWait2KHR *pwait2 = (void *)ext;
+
          pwait2->presentWait2Supported = VK_TRUE;
          break;
       }
 
       case VK_STRUCTURE_TYPE_PRESENT_TIMING_SURFACE_CAPABILITIES_EXT: {
          VkPresentTimingSurfaceCapabilitiesEXT *wait = (void *)ext;
+
          wait->presentStageQueries = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
          wait->presentTimingSupported = VK_TRUE;
          wait->presentAtAbsoluteTimeSupported = VK_TRUE;
@@ -1311,6 +1433,7 @@ wsi_display_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
       }
 
       default:
+         /* Ignored */
          break;
       }
    }
@@ -1415,7 +1538,8 @@ get_sorted_vk_formats(struct wsi_device *wsi_device, VkSurfaceFormatKHR *sorted_
    }
 }
 
-static bool wsi_display_setup_crtc(wsi_display_connector *connector);
+static bool
+wsi_display_setup_crtc(wsi_display_connector *connector);
 
 static bool
 surface_format_supported(VkIcdSurfaceBase *icd_surface, VkSurfaceFormatKHR surface_format)
@@ -1553,8 +1677,12 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
                              const uint32_t drm_format,
                              uint32_t * const modifiers_count)
 {
+   /* wsi_display_setup_connector() must already have been called.  KMS objects
+    * are non-zero IDs.
+    */
    assert(plane_id != 0);
 
+   /* Get the properties of the plane */
    drmModeObjectProperties *props =
       drmModeObjectGetProperties(wsi->fd, plane_id,
                                  DRM_MODE_OBJECT_PLANE);
@@ -1563,6 +1691,7 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
       return NULL;
    }
 
+   /* Find the blob that contains the formats and their modifiers */
    uint32_t blob_id = 0;
    for (size_t i = 0; i< props->count_props; i++) {
       const drmModePropertyPtr prop =
@@ -1577,17 +1706,18 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
       drmModeFreeProperty(prop);
    }
 
-   if (blob_id == 0) {
-      drmModeFreeObjectProperties(props);
+   /* Property not found, which means an old kernel, so definitely no modifiers
+    * support.
+    */
+   if (blob_id == 0)
       return NULL;
-   }
 
+   /* Grab the IN_FORMATS blob */
    drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(wsi->fd, blob_id);
-   if (!blob) {
-      drmModeFreeObjectProperties(props);
+   if (!blob)
       return NULL;
-   }
 
+   /* Get the formats and modifiers out of the blob */
    struct drm_format_modifier_blob *fmt_mod_blob = blob->data;
    uint32_t *blob_formats = (uint32_t*)((char*)fmt_mod_blob +
                                         fmt_mod_blob->formats_offset);
@@ -1595,6 +1725,7 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
       (struct drm_format_modifier *)((char*)fmt_mod_blob +
                                      fmt_mod_blob->modifiers_offset);
 
+   /* Find the format we care about in the list */
    size_t format_index = 0;
    for (size_t i = 0; i < fmt_mod_blob->count_formats; i++) {
       if (blob_formats[i] == drm_format) {
@@ -1603,6 +1734,7 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
       }
    }
 
+   /* Get the list of modifiers supported by that format */
    uint32_t count_modifiers = 0;
    uint64_t *modifiers = NULL;
    for (size_t i = 0; i < fmt_mod_blob->count_modifiers; i++) {
@@ -1627,6 +1759,7 @@ wsi_get_modifiers_for_format(const struct wsi_display * const wsi,
    }
 
    drmModeFreePropertyBlob(blob);
+
    drmModeFreeObjectProperties(props);
 
    *modifiers_count = count_modifiers;
@@ -1650,6 +1783,9 @@ wsi_display_image_init(struct wsi_swapchain *drv_chain,
 
    memset(image->buffer, 0, sizeof (image->buffer));
 
+   /* The kernel expects a modifier for each plane for historical reasons, but
+    * they all have to be the same.
+    */
    uint64_t drm_modifier[4] = {};
    for (unsigned int i = 0; i < image->base.num_planes; i++) {
       int ret = drmPrimeFDToHandle(wsi->fd, image->base.dma_buf_fd,
@@ -1714,6 +1850,11 @@ wsi_display_image_finish(struct wsi_swapchain *drv_chain,
    wsi_destroy_image(&chain->base, &image->base);
 }
 
+/** Re-acquires DRM master privileges for the device_fd as necessary.
+ *
+ * We have to refcount, because an oldSwapchain can be freed after a new
+ * swapchain is created.
+ */
 static int
 wsi_display_get_master(struct wsi_display *wsi)
 {
@@ -1789,6 +1930,11 @@ wsi_display_get_wsi_image(struct wsi_swapchain *drv_chain,
    return &chain->images[image_index].base;
 }
 
+/**
+ * Marks the old image as idle after a pageflip event has indicated that we've
+ * flipped to the new image and are no longer scanning out from the previous
+ * image.
+ */
 static void
 wsi_display_idle_old_displaying(struct wsi_display_image *active_image)
 {
@@ -1814,6 +1960,10 @@ widen_32_to_64(uint32_t narrow, uint64_t near)
    return near + (int32_t)(narrow - near);
 }
 
+/**
+ * Wakes up any vkWaitForPresentKHR() waiters on the last present to this
+ * image.
+ */
 static void
 wsi_display_present_complete(struct wsi_display_swapchain *swapchain,
                              struct wsi_display_image *image)
@@ -1838,6 +1988,17 @@ wsi_display_surface_error(struct wsi_display_swapchain *swapchain, VkResult resu
    mtx_unlock(&swapchain->present_id_mutex);
 }
 
+/**
+ * libdrm callback for when we get a DRM_EVENT_PAGE_FLIP in response to our
+ * atomic commit with DRM_MODE_PAGE_FLIP_EVENT.  That event can happen at any
+ * point after vblank, when the old image is no longer being scanned out and
+ * that commit is set up to be scanned out next.
+ *
+ * This means that we can queue up a new atomic commit, if there were presents
+ * that we hadn't submitted yet (the event queue is driven by
+ * wsi_display_wait_thread(), so that's what ends up submitting atomic commits
+ * most of the time).
+ **/
 static void
 wsi_display_page_flip_handler2(int fd,
                                unsigned int frame,
@@ -1856,21 +2017,39 @@ wsi_display_page_flip_handler2(int fd,
 
    uint64_t nsec = 1000000000ull * sec + 1000ull * usec;
 
+   /* Pageflip event with invalid frame and timestamp received? */
    if (nsec == 0 && frame == 0) {
+      /* This happens on amdgpu driven AMD gpu's on the first (full modesetting) atomic commit
+       * if the output was turned off before, and the modeset activates the display engine.
+       * It doesn't happen for other modesets, only if the output was completely off before.
+       * The driver sends a fake pageflip event after hw and flip programming for this case,
+       * with all zero vblank count and timestamp, whereas the regular pageflip completion handler
+       * no-ops. The following heuristic allows to get a good enough vblank timestamp back for this
+       * special case, as vblank counts and timestamps of the vblank of flip completion must always
+       * be identical to the ones reported by the corresponding pageflip event.
+       */
       uint64_t last_vblank_frame;
 
       if (!drmCrtcGetSequence(chain->wsi->fd, connector->crtc_id, &last_vblank_frame, &nsec) &&
           (nsec > image->minimum_ns) && (nsec > connector->last_nsec)) {
          frame = (unsigned int) last_vblank_frame;
-         wsi_display_debug("pf-workaround: use last vblank frame %u %lu nsec\n", frame, nsec);
+         wsi_display_debug("pf-workaround: use last vblank frame %u %lu nsec [delta to now %f msecs, to commit %f msecs]\n",
+                           frame, nsec, (nsec - (double) os_time_get_nano()) / 1e6, (nsec - (double) image->minimum_ns) / 1e6);
       } else {
+         /* Fallback for the fallback. Use now time as at least some noisy baseline. */
          frame = (unsigned int) connector->last_frame;
          nsec = os_time_get_nano();
-         wsi_display_debug("pf-workaround: fallback now time %lu nsec\n", nsec);
+         wsi_display_debug("pf-workaround: use vblank frame %u and now time %lu nsec\n", frame, nsec);
       }
    }
 
+   /* If we're on VRR timing path, ensure we get a stable pace. */
    nsec = MAX2(nsec, image->minimum_ns);
+
+   /* Don't let time go backwards because this function has lower resolution
+    * (1 usec = 1000 nsec increments) than last_nsec 1 nsec increments from
+    * drmCrtcGetSequence calls.
+    */
    nsec = MAX2(nsec, connector->last_nsec);
 
    uint64_t frame64 = widen_32_to_64(frame, connector->last_frame);
@@ -1879,6 +2058,9 @@ wsi_display_page_flip_handler2(int fd,
    chain->last_presented_nsec = nsec;
    connector->last_nsec = nsec;
 
+   /* Never update the refresh rate estimate. It's static based on the mode.
+    * Update this before we signal present wait so that applications
+    * get lowest possible latency for present time. */
    if (image->timing_request.serial) {
       wsi_swapchain_present_timing_notify_completion(
             &chain->base, image->timing_request.serial,
@@ -1892,6 +2074,7 @@ wsi_display_page_flip_handler2(int fd,
 
    wsi_display_idle_old_displaying(image);
 
+   /* Send the next queued atomic commit now that one has completed. */
    VkResult result = _wsi_display_queue_next(&(chain->base));
    if (result != VK_SUCCESS)
       chain->status = result;
@@ -1901,6 +2084,11 @@ static void wsi_display_fence_event_handler(struct wsi_display_fence *fence,
                                             uint64_t nsec,
                                             uint64_t frame);
 
+/**
+ * libdrm callback for when we get a DRM_EVENT_CRTC_SEQUENCE in response to a
+ * drmCrtcQueueSequence(), indicating that the first pixel of a new frame is
+ * being scanned out.
+ **/
 static void wsi_display_sequence_handler(int fd, uint64_t frame,
                                          uint64_t nsec, uint64_t user_data)
 {
@@ -1994,6 +2182,10 @@ cond_timedwait_ns(struct u_cnd_monotonic *cond,
    return ret;
 }
 
+/*
+ * Wait for at least one event from the kernel to be processed.
+ * Call with wait_mutex held
+ */
 static int
 wsi_display_wait_for_event(struct wsi_display *wsi,
                            uint64_t timeout_ns)
@@ -2006,6 +2198,9 @@ wsi_display_wait_for_event(struct wsi_display *wsi,
    return cond_timedwait_ns(&wsi->wait_cond, &wsi->wait_mutex, timeout_ns);
 }
 
+/* Wait for device event to be processed.
+ * Call with wait_mutex held
+ */
 static int
 wsi_device_wait_for_event(struct wsi_display *wsi,
                           uint64_t timeout_ns)
@@ -2042,6 +2237,7 @@ wsi_display_acquire_next_image(struct wsi_swapchain *drv_chain,
    int ret = 0;
    VkResult result = VK_SUCCESS;
 
+   /* Bail early if the swapchain is broken */
    if (chain->status != VK_SUCCESS)
       return chain->status;
 
@@ -2084,12 +2280,16 @@ done:
    return chain->status;
 }
 
+/*
+ * Check whether there are any other connectors driven by this crtc
+ */
 static bool
 wsi_display_crtc_solo(struct wsi_display *wsi,
                       drmModeResPtr mode_res,
                       drmModeConnectorPtr connector,
                       uint32_t crtc_id)
 {
+   /* See if any other connectors share the same encoder */
    for (int c = 0; c < mode_res->count_connectors; c++) {
       if (mode_res->connectors[c] == connector->connector_id)
          continue;
@@ -2105,6 +2305,7 @@ wsi_display_crtc_solo(struct wsi_display *wsi,
       }
    }
 
+   /* See if any other encoders share the same crtc */
    for (int e = 0; e < mode_res->count_encoders; e++) {
       if (mode_res->encoders[e] == connector->encoder_id)
          continue;
@@ -2122,6 +2323,11 @@ wsi_display_crtc_solo(struct wsi_display *wsi,
    return true;
 }
 
+/*
+ * Pick a suitable CRTC to drive this connector. Prefer a CRTC which is
+ * currently driving this connector and not any others. Settle for a CRTC
+ * which is currently idle.
+ */
 static uint32_t
 wsi_display_select_crtc(const struct wsi_display_connector *connector,
                         drmModeResPtr mode_res,
@@ -2129,6 +2335,7 @@ wsi_display_select_crtc(const struct wsi_display_connector *connector,
 {
    struct wsi_display *wsi = connector->wsi;
 
+   /* See what CRTC is currently driving this connector */
    if (drm_connector->encoder_id) {
       drmModeEncoderPtr encoder =
          drmModeGetEncoder(wsi->fd, drm_connector->encoder_id);
@@ -2179,6 +2386,12 @@ wsi_display_plane_type(int dev_fd, uint32_t plane_id)
    return type;
 }
 
+/*
+ * Pick a suitable primary plane for the current CRTC. Prefer a plane
+ * currently active on the CRTC. Settle for a plane which is currently
+ * idle but is compatible with the CRTC. Fall back to the first idle
+ * plane found.
+ */
 static uint32_t
 wsi_display_select_plane(const struct wsi_display_connector *connector,
                          drmModeResPtr mode_res)
@@ -2192,6 +2405,7 @@ wsi_display_select_plane(const struct wsi_display_connector *connector,
    if (plane_id)
       return plane_id;
 
+   /* possible_crtcs uses the crtc index and not the object id */
    for (int i = 0; i < mode_res->count_crtcs; i++) {
       if (mode_res->crtcs[i] == connector->crtc_id)
          crtc_index = i;
@@ -2208,16 +2422,20 @@ wsi_display_select_plane(const struct wsi_display_connector *connector,
       if (!plane)
          continue;
 
+      /* only select primary planes */
       int plane_type = wsi_display_plane_type(wsi->fd, plane->plane_id);
       if (plane_type != DRM_PLANE_TYPE_PRIMARY) {
          drmModeFreePlane(plane);
          continue;
       }
 
+      /* if there's a plane is active on the connector's crtc, pick it */
       if (plane->crtc_id == connector->crtc_id) {
          active_plane = plane->plane_id;
       }
 
+      /* if a plane is not active on any crtc but the connector's crtc is
+       * in the plane's possible_crtcs, pick it */
       if (plane->possible_crtcs & (1u << crtc_index)) {
          possible_plane = plane->plane_id;
       }
@@ -2257,6 +2475,8 @@ wsi_display_setup_crtc(wsi_display_connector *connector)
        !find_object_properties(connector, wsi->fd, DRM_MODE_OBJECT_CRTC))
       goto bail;
 
+   /* Select the primary plane of that CRTC, and populate the
+    * format/modifier lists for that plane */
    connector->plane_id = wsi_display_select_plane(connector, mode_res);
    if (!connector->plane_id ||
        !find_object_properties(connector, wsi->fd, DRM_MODE_OBJECT_PLANE))
@@ -2315,12 +2535,15 @@ wsi_display_setup_connector(wsi_display_connector *connector,
       goto bail_mode_res;
    }
 
+   /* Pick a CRTC if we don't have one */
    if (!wsi_display_setup_crtc(connector)) {
       result = VK_ERROR_SURFACE_LOST_KHR;
       goto bail_connector;
    }
 
    if (connector->current_mode != display_mode) {
+
+      /* Find the drm mode corresponding to the requested VkDisplayMode */
       drmModeModeInfoPtr drm_mode = NULL;
 
       for (int m = 0; m < drm_connector->count_modes; m++) {
@@ -2345,6 +2568,7 @@ bail_mode_res:
    drmModeFreeResources(mode_res);
 bail:
    return result;
+
 }
 
 static VkResult
@@ -2417,6 +2641,7 @@ static void wsi_display_fence_event_handler(struct wsi_display_fence *fence,
    }
 
    if (image && image->state == WSI_IMAGE_WAITING) {
+      /* We may need to do the final sleep on CPU to resolve VRR timings. */
       image->state = WSI_IMAGE_QUEUED_AFTER_WAIT;
       VkResult result = _wsi_display_queue_next(&image->chain->base);
       if (result != VK_SUCCESS)
@@ -2430,6 +2655,7 @@ static void wsi_display_fence_event_handler(struct wsi_display_fence *fence,
 static void
 wsi_display_fence_destroy(struct wsi_display_fence *fence)
 {
+   /* Destroy hotplug fence list. */
    if (fence->device_event) {
       mtx_lock(&fence->wsi->wait_mutex);
       list_del(&fence->link);
@@ -2518,7 +2744,8 @@ wsi_display_sync_create(struct vk_device *device,
                         struct vk_sync **sync_out)
 {
    VkResult result = vk_sync_create(device, &wsi_display_sync_type,
-                                    0, 0, sync_out);
+                                    0 /* flags */,
+                                    0 /* initial_value */, sync_out);
    if (result != VK_SUCCESS)
       return result;
 
@@ -2546,6 +2773,10 @@ wsi_register_vblank_event(struct wsi_display_fence *fence,
    if (wsi->fd < 0)
       return VK_ERROR_INITIALIZATION_FAILED;
 
+   /* A display event may be registered before the first page flip at which
+    * point crtc_id will be 0. If this is the case we setup the connector
+    * here to allow drmCrtcQueueSequence to succeed.
+    */
    if (!connector->crtc_id) {
       VkResult ret = wsi_display_setup_connector(connector,
                                                  connector->current_mode);
@@ -2564,6 +2795,11 @@ wsi_register_vblank_event(struct wsi_display_fence *fence,
          return VK_SUCCESS;
 
       if (errno != ENOMEM) {
+
+         /* Something unexpected happened. Pause for a moment so the
+          * application doesn't just spin and then return a failure indication
+          */
+
          wsi_display_debug("queue vblank event %lu failed\n", fence->sequence);
          struct timespec delay = {
             .tv_sec = 0,
@@ -2572,6 +2808,10 @@ wsi_register_vblank_event(struct wsi_display_fence *fence,
          nanosleep(&delay, NULL);
          return VK_ERROR_OUT_OF_HOST_MEMORY;
       }
+
+      /* The kernel event queue is full. Wait for some events to be
+       * processed and try again
+       */
 
       mtx_lock(&wsi->wait_mutex);
       ret = wsi_display_wait_for_event(wsi, wsi_rel_to_abs_time(100000000ull));
@@ -2589,6 +2829,11 @@ color_xy_to_u16(float v)
 {
    assert(v >= 0.0f);
    assert(v <= 1.0f);
+   /*
+    * CTA-861-G
+    * 6.9.1 Static Metadata Type 1
+    * chromaticity coordinate encoding
+    */
    return (uint16_t)round(v * 50000.0);
 }
 
@@ -2597,6 +2842,12 @@ nits_to_u16(float nits)
 {
    assert(nits >= 0.0f);
    assert(nits <= 65535.0f);
+   /*
+    * CTA-861-G
+    * 6.9.1 Static Metadata Type 1
+    * max display mastering luminance, max content light level,
+    * max frame-average light level
+    */
    return (uint16_t)round(nits);
 }
 
@@ -2605,9 +2856,15 @@ nits_to_u16_dark(float nits)
 {
    assert(nits >= 0.0000f);
    assert(nits <= 6.5535f);
+   /*
+    * CTA-861-G
+    * 6.9.1 Static Metadata Type 1
+    * min display mastering luminance
+    */
    return (uint16_t)round(nits * 10000.0);
 }
 
+/* from CTA-861-G */
 #define HDMI_EOTF_SDR 0
 #define HDMI_EOTF_TRADITIONAL_HDR 1
 #define HDMI_EOTF_ST2084 2
@@ -2634,7 +2891,7 @@ vk_colorspace_to_drm_colorspace(VkColorSpaceKHR color_space)
 {
    switch (color_space) {
    default:
-   case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
+   case VK_COLORSPACE_SRGB_NONLINEAR_KHR:
       return COLORSPACE_Default;
    case VK_COLOR_SPACE_HDR10_ST2084_EXT:
       return COLORSPACE_BT2020_RGB;
@@ -2648,7 +2905,7 @@ _wsi_display_convert_hdr_metadata(VkHdrMetadataEXT *pMetadata, uint8_t hdmi_eotf
 
    drm_metadata->metadata_type = 0;
    drm_metadata->hdmi_metadata_type1.eotf = hdmi_eotf;
-   drm_metadata->hdmi_metadata_type1.metadata_type = drm_metadata->metadata_type;
+   drm_metadata->hdmi_metadata_type1.metadata_type = drm_metadata->metadata_type; /* duplicated */
 
    if (drm_metadata->hdmi_metadata_type1.eotf == HDMI_EOTF_ST2084) {
       drm_metadata->hdmi_metadata_type1.display_primaries[0].x = color_xy_to_u16(pMetadata->displayPrimaryRed.x);
@@ -2683,15 +2940,20 @@ drm_atomic_commit(wsi_display_connector *connector, struct wsi_display_image *im
       return -1;
 
    if (!connector->active) {
-      if (drmModeCreatePropertyBlob(fd, mode, sizeof(*mode), &blob_id) != 0) {
-         drmModeAtomicFree(req);
+      /* Do the initial setup of the display when we're first taking control of
+       * it, or after a mode change was requested.
+       */
+
+      if (drmModeCreatePropertyBlob(fd, mode, sizeof(*mode), &blob_id) != 0)
          return -1;
-      }
 
       drmModeAtomicAddProperty(req, connector->id, connector->property[CRTC_ID], crtc_id);
       drmModeAtomicAddProperty(req, crtc_id, connector->crtc_property[MODE_ID], blob_id);
       drmModeAtomicAddProperty(req, crtc_id, connector->crtc_property[ACTIVE], 1);
 
+      /* Disable any color transforms that may have been previously set on the
+       * CRTC by another user.
+       */
       if (connector->crtc_property[GAMMA_LUT] != -1)
          drmModeAtomicAddProperty(req, crtc_id, connector->crtc_property[GAMMA_LUT], 0);
       if (connector->crtc_property[DEGAMMA_LUT] != -1)
@@ -2709,15 +2971,14 @@ drm_atomic_commit(wsi_display_connector *connector, struct wsi_display_image *im
 
          blob_id = 0;
 
+         /* Only bother making a blob if we are HDR, otherwise set it to 0 (empty). */
          if (hdmi_eotf != HDMI_EOTF_SDR) {
             struct hdr_output_metadata drm_metadata;
             _wsi_display_convert_hdr_metadata(&image->chain->hdr_metadata, hdmi_eotf, &drm_metadata);
 
             if (drmModeCreatePropertyBlob(image->chain->wsi->fd, &drm_metadata,
-                                          sizeof(drm_metadata), &blob_id) != 0) {
-               drmModeAtomicFree(req);
+                                          sizeof(drm_metadata), &blob_id) != 0)
                return -1;
-            }
          }
 
          drmModeAtomicAddProperty(req, connector->id, connector->property[HDR_OUTPUT_METADATA], blob_id);
@@ -2730,7 +2991,11 @@ drm_atomic_commit(wsi_display_connector *connector, struct wsi_display_image *im
                                   connector->colorspace_enum[drm_colorspace]);
       }
 
+      /* At least some drivers need a modeset for HDR or Colorspace change, e.g., amdgpu
+       * at least for Colorspace change or HDR en-/disable.
+       */
       flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
+
       connector->color_outcome_serial = image->chain->color_outcome_serial;
    }
 
@@ -2752,8 +3017,12 @@ drm_atomic_commit(wsi_display_connector *connector, struct wsi_display_image *im
    }
 
    ret = drmModeAtomicCommit(fd, req, flags, image);
+   if (ret)
+      goto out;
 
+out:
    drmModeAtomicFree(req);
+
    return ret;
 }
 
@@ -2765,6 +3034,15 @@ _wsi_display_cleanup_state(struct wsi_display_swapchain *chain)
       wsi_display_mode_from_handle(surface->displayMode);
    wsi_display_connector *connector = display_mode->connector;
 
+   /* Reset our color outcome to defaults, and update the state.
+    * We need to clean up after our mess, for any other compositors,
+    * etc that come after us that may not be aware of properties
+    * we have set.
+    * We can do this by just setting ourselves back to sRGB and therefore
+    * SDR and updating like normal.
+    * We only need to do this if we have a color outcome serial that isn't
+    * 0, the default.
+    */
    if (chain->color_outcome_serial) {
       chain->color_outcome_serial = 0;
       chain->base.image_info.color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -2772,6 +3050,10 @@ _wsi_display_cleanup_state(struct wsi_display_swapchain *chain)
    }
 }
 
+/*
+ * Check to see if the kernel has no flip queued and if there's an image
+ * waiting to be displayed.
+ */
 static VkResult
 _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
 {
@@ -2792,6 +3074,10 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
       connector->active = false;
 
    for (;;) {
+
+      /* Check to see if there is an image to display, or if some image is
+       * already queued */
+
       struct wsi_display_image *image = NULL;
 
       for (uint32_t i = 0; i < chain->base.image_count; i++) {
@@ -2800,9 +3086,11 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
          switch (tmp_image->state) {
          case WSI_IMAGE_FLIPPING:
          case WSI_IMAGE_WAITING:
+            /* already flipping or waiting for a flip, don't send another to the kernel yet */
             return VK_SUCCESS;
          case WSI_IMAGE_QUEUED:
          case WSI_IMAGE_QUEUED_AFTER_WAIT:
+            /* find the oldest queued */
             if (!image || tmp_image->flip_sequence < image->flip_sequence)
                image = tmp_image;
             break;
@@ -2835,36 +3123,54 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
       }
 
       if (!skip_timing) {
+         /* Ensure we have some kind of timebase to work from. */
          if (connector->has_vblank && !connector->last_frame) {
             int ret = drmCrtcGetSequence(wsi->fd, connector->crtc_id, &connector->last_frame, &connector->last_nsec);
             if (ret) {
                connector->has_vblank = false;
                connector->last_frame = 0;
                connector->last_nsec = 0;
-               wsi_display_debug("Driver without vblank: %s\n", strerror(errno));
+               wsi_display_debug("Driver without vblank + event dispatch: %s. Fallback to non-vblank timing.\n", strerror(errno));
             }
          }
 
          if ((!connector->last_frame && connector->has_vblank) || chain->base.present_timing.refresh_duration == 0) {
+            /* Something has gone very wrong. Just ignore present timing for safety. */
             skip_timing = true;
+            wsi_display_debug("Cannot get a stable timebase, last frame = %"PRIu64", refresh_duration = %"PRIu64".\n",
+                              connector->last_frame, chain->base.present_timing.refresh_duration);
          }
       }
 
       if (!skip_timing) {
+         /* We need to estimate number of refresh cycles or time to wait for. */
          target_relative_ns = (int64_t)image->timing_request.time;
 
+         /* Choose baseline for absolute or relative timing. */
          if (is_absolute_time) {
+            /* For absolute target time, use the count and timestamp of the connectors most
+             * recent known vblank, to minimize potential absolute time -> absolute target
+             * vblank count conversion error.
+             */
             base_time_ns = connector->last_nsec;
             base_last_frame = connector->last_frame;
+
+            /* Convert absolute requested time to relative time (wrt. last known vblank). */
             target_relative_ns -= (int64_t) base_time_ns;
          } else {
+            /* For a requested relative time to the most recent presented image on the swapchain,
+             * use the count and timestamp of the swapchains most recently presented image.
+             */
             base_time_ns = chain->last_presented_nsec;
             base_last_frame = chain->last_presented_vblank;
          }
 
          if (nearest_cycle) {
+            /* No need to lock, we never update refresh_duration dynamically. */
             target_relative_ns -= (int64_t)chain->base.present_timing.refresh_duration / 2;
          } else {
+            /* If application is computing an exact value that lands exactly on the refresh cycle,
+             * pull back the estimate a little bit since DRM precision is 1us. */
             target_relative_ns -= 1000;
          }
       }
@@ -2873,11 +3179,13 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
       if (target_relative_ns && chain->base.present_timing.refresh_duration)
          num_cycles_to_skip = target_relative_ns / chain->base.present_timing.refresh_duration;
 
+      /* CRTC cycles is not reliable on VRR. We cannot use that as a time base. */
       bool is_vrr = connector->vrr_enabled == VRR_TRISTATE_ENABLED &&
                     connector->vrr_capable == VRR_TRISTATE_ENABLED;
 
       if (num_cycles_to_skip) {
          if (!is_vrr && connector->has_vblank) {
+            /* On FRR, we can rely on vblank events to guide time progression. */
             VkDisplayKHR display = wsi_display_connector_to_handle(connector);
             image->fence = wsi_display_fence_alloc(wsi, -1);
 
@@ -2891,23 +3199,39 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
                                                            0, target_frame, &frame_queued);
 
                if (result == VK_SUCCESS && frame_queued <= target_frame) {
+                  /* Wait until the vblank fence signals and the event handler will attempt to requeue us. */
                   image->state = WSI_IMAGE_WAITING;
                   return VK_SUCCESS;
                }
             }
          } else {
+            /* On a VRR display, applications can request frame times which are fractional,
+             * and there is no good way to target absolute time with atomic commits it seems ... */
             int64_t target_ns = target_relative_ns + (int64_t)base_time_ns;
 
+            /* For VRR, reported present time must be at least target_ns, to stabilize vrr timing. */
             if (is_vrr)
                image->minimum_ns = target_ns;
 
+            /* Account for some minimum delay in submitting a page flip until it's processed and sleep jitter.
+             * We will compensate for the difference if there is any, so that we don't report completion
+             * times in the past. */
             target_ns -= 1 * 1000 * 1000;
+
             os_time_nanosleep_until(target_ns);
          }
       }
 
       image->state = WSI_IMAGE_QUEUED;
 
+      /* Some kms drivers (e.g., amdgpu) send too early pageflip events with all-zero completion
+       * timestamp and count for the very first pageflip after enabling a connector. Try to make sure
+       * that the returned timestamps to clients are at least not earlier than the time of the commit
+       * that triggered the pageflip. This prevents some bits of the CTS from premature failure and
+       * allows a more fair assessment by the CTS for all presents after the initial "power up the crtc"
+       * present. See also some refined workaround in the page_flip_handler2() for this issue, as this
+       * is just another "last ressort" fail-safe.
+       */
       if (!connector->active && !image->minimum_ns)
          image->minimum_ns = os_time_get_nano();
 
@@ -2931,6 +3255,9 @@ _wsi_display_queue_next(struct wsi_swapchain *drv_chain)
          wsi_display_surface_error(chain, VK_ERROR_SURFACE_LOST_KHR);
       }
 
+      /* Some other VT is currently active. Sit here waiting for
+       * our VT to become active again by polling once a second
+       */
       wsi_display_debug("waiting for VT\n");
       usleep(1000 * 1000);
       connector->active = false;
@@ -2959,11 +3286,15 @@ wsi_display_poll_refresh_duration(struct wsi_swapchain *drv_chain, uint64_t *int
 
    uint64_t refresh_ns = (uint64_t)(floor(1.0 / refresh * 1e9 + 0.5));
 
+   /* Assume FRR by default. */
    *interval = refresh_ns;
 
+   /* If VRR is not enabled on the target CRTC, we should honor that.
+    * There is no mechanism to clearly request that VRR is desired,
+    * so we must assume that user might force us into FRR mode. */
    if (connector->vrr_capable == VRR_TRISTATE_ENABLED) {
       if (connector->vrr_enabled == VRR_TRISTATE_UNKNOWN)
-         *interval = 0;
+         *interval = 0; /* Somehow we don't know if the connector is VRR or FRR. Report unknown. */
       else if (connector->vrr_enabled == VRR_TRISTATE_ENABLED)
          *interval = UINT64_MAX;
    }
@@ -2983,6 +3314,7 @@ wsi_display_queue_present(struct wsi_swapchain *drv_chain,
    struct wsi_display_image *image = &chain->images[image_index];
    VkResult result;
 
+   /* Bail early if the swapchain is broken */
    if (chain->status != VK_SUCCESS)
       return chain->status;
 
@@ -2994,6 +3326,8 @@ wsi_display_queue_present(struct wsi_swapchain *drv_chain,
 
    mtx_lock(&wsi->wait_mutex);
 
+   /* Make sure that the page flip handler is processed in finite time if using present wait
+    * or presentation time. */
    if (present_id || chain->base.present_timing.active)
       wsi_display_start_wait_thread(wsi);
 
@@ -3025,6 +3359,8 @@ wsi_display_wait_for_present(struct wsi_swapchain *wsi_chain,
    if (timeout != 0)
       abs_timeout = os_time_get_absolute_timeout(timeout);
 
+   /* Need to observe that the swapchain semaphore has been unsignalled,
+    * as this is guaranteed when a present is complete. */
    VkResult result = wsi_swapchain_wait_for_present_semaphore(
       &chain->base, waitValue, timeout);
    if (result != VK_SUCCESS)
@@ -3091,6 +3427,7 @@ wsi_display_surface_create_swapchain(
       }
    }
 
+   /* the application provided an invalid format, bail */
    if (drm_format == 0)
       return VK_ERROR_DEVICE_LOST;
 
@@ -3138,11 +3475,13 @@ wsi_display_surface_create_swapchain(
       image_params.num_modifiers = &num_modifiers;
    }
 
+   /* Set master, so that we can do modesets when we're using wsi->device_fd
+    * that had previously had master dropped.
+    */
    ret = wsi_display_get_master(wsi);
    if (ret != 0) {
       wsi_display_debug("Failed to get DRM master: %s", strerror(ret));
       result = VK_ERROR_DEVICE_LOST;
-      free((void *)modifiers);
       goto fail_cond_destroy;
    }
 
@@ -3170,7 +3509,11 @@ wsi_display_surface_create_swapchain(
 
    chain->wsi = wsi;
    chain->status = VK_SUCCESS;
+
    chain->surface = surface;
+
+   /* Default HDR metadata when the HDR10/ST2084 colorspace is used
+    * to the metadata provided by the EDID. */
    chain->hdr_metadata = display_mode->connector->metadata.hdr_metadata;
 
    p_atomic_inc(&display_mode->connector->refcount);
@@ -3181,10 +3524,23 @@ wsi_display_surface_create_swapchain(
                                       drm_format,
                                       &chain->images[image]);
 
+      /* Check that we could actually possibly atomic commit to this plane. This
+       * catches cases where the swapchain exceeds some limits of the hardware
+       * that we couldn't tell from the probed properties.
+       *
+       * There is text explicitly allowing this error code for "exclusive
+       * full-screen mode" (which is not actually what DRM KHR_display is by
+       * spec, though we are giving exclusive full-screen access!), but this is
+       * what the CTS expects to find for unsupported swapchains.
+       */
       if (result == VK_SUCCESS) {
          ret = drm_atomic_commit(display_mode->connector, &chain->images[image], true);
          if (ret != 0) {
-            wsi_display_debug("Atomic commit check failed: %s\n", strerror(-errno));
+            wsi_display_debug("Atomic commit check for %dx%d %s, failed: %s\n",
+               create_info->imageExtent.width,
+               create_info->imageExtent.height,
+               util_format_short_name(vk_format_to_pipe_format(create_info->imageFormat)),
+               strerror(-errno));
             result = VK_ERROR_INITIALIZATION_FAILED;
          }
       }
@@ -3199,6 +3555,12 @@ wsi_display_surface_create_swapchain(
       }
    }
 
+   /* For a non-default colorspace, make sure that proper setup also works if
+    * a client app does not explicitly call vkSetHdrMetadataEXT(), but only
+    * selects a HDR colorspace. We assign the EDID provided metadata here, so
+    * the 1st atomic commit will assign colorspace and HDR metadata props to
+    * the connector to enable HDR or Wide color gamut modes.
+    */
    if (create_info->imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
       wsi_display_set_hdr_metadata(&chain->base, &chain->hdr_metadata);
 
@@ -3220,9 +3582,26 @@ fail_free:
    return result;
 }
 
+/*
+ * Local version fo the libdrm helper. Added to avoid depending on bleeding
+ * edge version of the library.
+ */
 static int
 local_drmIsMaster(int fd)
 {
+   /* Detect master by attempting something that requires master.
+    *
+    * Authenticating magic tokens requires master and 0 is an
+    * internal kernel detail which we could use. Attempting this on
+    * a master fd would fail therefore fail with EINVAL because 0
+    * is invalid.
+    *
+    * A non-master fd will fail with EACCES, as the kernel checks
+    * for master before attempting to do anything else.
+    *
+    * Since we don't want to leak implementation details, use
+    * EACCES.
+    */
    return drmAuthMagic(fd, 0) != -EACCES;
 }
 
@@ -3272,9 +3651,13 @@ udev_event_listener_thread(void *data)
          if (fds[0].revents & POLLIN) {
             struct udev_device *dev = udev_monitor_receive_device(mon);
 
+            /* Ignore event if it is not a hotplug event */
             if (!atoi(udev_device_get_property_value(dev, "HOTPLUG")))
                continue;
 
+            /* Note, this supports both drmSyncobjWait for fence->syncobj
+             * and wsi_display_wait_for_event.
+             */
             mtx_lock(&wsi->wait_mutex);
             mtx_lock(&wsi->connectors_mutex);
             wsi->get_connectors_current = false;
@@ -3327,18 +3710,32 @@ wsi_display_init_wsi(struct wsi_device *wsi_device,
    if (wsi->fd != -1 && !local_drmIsMaster(wsi->fd))
       wsi->fd = -1;
 
+   /* wsi->fd will get modified as part of vkAcquireDRMDisplayEXT() and
+    * vkReleaseDisplay(), but we need to keep it around for the
+    * device-equivalence check in vkAcquireDRMDisplayEXT.
+    */
    wsi->device_fd = wsi->fd;
+
    wsi->syncobj_fd = wsi->fd;
 
    if (wsi->fd >= 0) {
       drmSetClientCap(wsi->fd, DRM_CLIENT_CAP_ATOMIC, 1);
+      /* Drop master, so that others (vkAcquireDRMDisplayEXT, KMS-native
+       * compositors after a VT switch) can get master when they open.
+       */
       int ret = drmDropMaster(wsi->fd);
       if (ret != 0) {
+         /* Leave a debug note, but ignore it -- if you ask for KHR_display, and
+          * are the second client (not master), but can later acquire a master
+          * fd by whatever means (systemd-logind, whatever), that should be
+          * allowed.
+          */
          wsi_display_debug("wsi_display_init_wsi: drm fd %d failed to drop master", wsi->fd);
       }
    }
 
    wsi->alloc = alloc;
+
    list_inithead(&wsi->connectors);
 
    int ret = mtx_init(&wsi->wait_mutex, mtx_plain);
@@ -3429,6 +3826,9 @@ wsi_display_finish_wsi(struct wsi_device *wsi_device,
    }
 }
 
+/*
+ * Implement vkReleaseDisplay
+ */
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_ReleaseDisplayEXT(VkPhysicalDevice physicalDevice,
                       VkDisplayKHR display)
@@ -3441,6 +3841,7 @@ wsi_ReleaseDisplayEXT(VkPhysicalDevice physicalDevice,
    if (wsi->fd >= 0) {
       wsi_display_stop_wait_thread(wsi);
 
+      /* Only close if we have an active drmFd passed in from an Acquire. */
       if (wsi->fd != wsi->device_fd)
          close(wsi->fd);
       wsi->fd = wsi->device_fd;
@@ -3481,6 +3882,11 @@ wsi_display_find_randr_output(struct wsi_device *wsi_device,
    return NULL;
 }
 
+/*
+ * Given a RandR output, find the associated kernel connector_id by
+ * looking at the CONNECTOR_ID property provided by the X server
+ */
+
 static uint32_t
 wsi_display_randr_output_to_connector_id(xcb_connection_t *connection,
                                          xcb_atom_t *connector_id_atom_p,
@@ -3490,6 +3896,7 @@ wsi_display_randr_output_to_connector_id(xcb_connection_t *connection,
    xcb_atom_t connector_id_atom = *connector_id_atom_p;
 
    if (connector_id_atom == 0) {
+   /* Go dig out the CONNECTOR_ID property */
       xcb_intern_atom_cookie_t ia_c = xcb_intern_atom(connection,
                                                           true,
                                                           12,
@@ -3503,7 +3910,12 @@ wsi_display_randr_output_to_connector_id(xcb_connection_t *connection,
       }
    }
 
+   /* If there's an CONNECTOR_ID atom in the server, then there may be a
+    * CONNECTOR_ID property. Otherwise, there will not be and we don't even
+    * need to bother.
+    */
    if (connector_id_atom) {
+
       xcb_randr_query_version_cookie_t qv_c =
          xcb_randr_query_version(connection, 1, 6);
       xcb_randr_get_output_property_cookie_t gop_c =
@@ -3541,12 +3953,18 @@ wsi_display_check_randr_version(xcb_connection_t *connection)
    if (!qv_r)
       return false;
 
+   /* Check for version 1.6 or newer */
    ret = (qv_r->major_version > 1 ||
           (qv_r->major_version == 1 && qv_r->minor_version >= 6));
 
    free(qv_r);
    return ret;
 }
+
+/*
+ * Given a kernel connector id, find the associated RandR output using the
+ * CONNECTOR_ID property
+ */
 
 static xcb_randr_output_t
 wsi_display_randr_connector_id_to_output(xcb_connection_t *connection,
@@ -3560,6 +3978,7 @@ wsi_display_randr_connector_id_to_output(xcb_connection_t *connection,
    xcb_atom_t connector_id_atom = 0;
    xcb_randr_output_t output = 0;
 
+   /* Search all of the screens for the provided output */
    xcb_screen_iterator_t iter;
    for (iter = xcb_setup_roots_iterator(setup);
         output == 0 && iter.rem;
@@ -3590,6 +4009,9 @@ wsi_display_randr_connector_id_to_output(xcb_connection_t *connection,
    return output;
 }
 
+/*
+ * Given a RandR output, find out which screen it's associated with
+ */
 static xcb_window_t
 wsi_display_randr_output_to_root(xcb_connection_t *connection,
                                  xcb_randr_output_t output)
@@ -3600,6 +4022,7 @@ wsi_display_randr_output_to_root(xcb_connection_t *connection,
    const xcb_setup_t *setup = xcb_get_setup(connection);
    xcb_window_t root = 0;
 
+   /* Search all of the screens for the provided output */
    for (xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
         root == 0 && iter.rem;
         xcb_screen_next(&iter))
@@ -3679,7 +4102,7 @@ wsi_display_register_x_mode(struct wsi_device *wsi_device,
    display_mode->connector = connector;
    display_mode->valid = true;
    display_mode->preferred = preferred;
-   display_mode->clock = (x_mode->dot_clock + 500) / 1000;
+   display_mode->clock = (x_mode->dot_clock + 500) / 1000; /* kHz */
    display_mode->hdisplay = x_mode->width;
    display_mode->hsync_start = x_mode->hsync_start;
    display_mode->hsync_end = x_mode->hsync_end;
@@ -3710,19 +4133,25 @@ wsi_display_get_randr_output(struct wsi_device *wsi_device,
    if (!root)
       return NULL;
 
+   /* See if we already have a connector for this output */
    connector = wsi_display_find_randr_output(wsi_device, output);
 
    if (!connector) {
       xcb_atom_t connector_id_atom = 0;
 
+      /*
+       * Go get the kernel connector ID for this X output
+       */
       connector_id = wsi_display_randr_output_to_connector_id(connection,
                                                               &connector_id_atom,
                                                               output);
 
+      /* Any X server with lease support will have this atom */
       if (!connector_id) {
          return NULL;
       }
 
+      /* See if we already have a connector for this id */
       connector = wsi_display_find_connector(wsi_device, connector_id);
 
       if (connector == NULL) {
@@ -3744,6 +4173,8 @@ wsi_display_get_randr_output(struct wsi_device *wsi_device,
       xcb_randr_get_output_info_reply(connection, oic, NULL);
 
    if (oir && srr) {
+      /* Get X modes and add them */
+
       connector->connected =
          oir->connection != XCB_RANDR_CONNECTION_DISCONNECTED;
 
@@ -3792,6 +4223,7 @@ wsi_display_find_crtc_for_randr_output(xcb_connection_t *connection,
    xcb_randr_crtc_t idle_crtc = 0;
    xcb_randr_crtc_t active_crtc = 0;
 
+   /* Find either a crtc already connected to the desired output or idle */
    for (int c = 0; active_crtc == 0 && c < gsr_r->num_crtcs; c++) {
       xcb_randr_get_crtc_info_cookie_t gci_c =
          xcb_randr_get_crtc_info(connection, rc[c], gsr_r->config_timestamp);
@@ -3842,6 +4274,9 @@ wsi_AcquireXlibDisplayEXT(VkPhysicalDevice physicalDevice,
       wsi_display_connector_from_handle(display);
    xcb_window_t root;
 
+   /* XXX no support for tracking the FD used for a particular VkDisplayKHR, so
+    * make sure that we don't have an existing Acquire active.
+    */
    if (wsi->fd >= 0 && wsi->fd != wsi->device_fd)
       return VK_ERROR_INITIALIZATION_FAILED;
 
@@ -3849,6 +4284,7 @@ wsi_AcquireXlibDisplayEXT(VkPhysicalDevice physicalDevice,
       connector->output = wsi_display_randr_connector_id_to_output(connection,
                                                                    connector->id);
 
+      /* Check and see if we found the output */
       if (!connector->output)
          return VK_ERROR_INITIALIZATION_FAILED;
    }
@@ -3929,6 +4365,7 @@ wsi_GetRandROutputDisplayEXT(VkPhysicalDevice physicalDevice,
 
 #endif
 
+/* VK_EXT_display_control */
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_DisplayPowerControlEXT(VkDevice _device,
                            VkDisplayKHR display,
@@ -3977,6 +4414,7 @@ wsi_register_device_event(VkDevice _device,
    VkResult ret = VK_SUCCESS;
 
 #ifdef HAVE_LIBUDEV
+   /* Start listening for output change notifications. */
    mtx_lock(&wsi->wait_mutex);
    if (!wsi->hotplug_thread) {
       if (pthread_create(&wsi->hotplug_thread, NULL, udev_event_listener_thread,
@@ -4152,6 +4590,8 @@ wsi_GetSwapchainCounterEXT(VkDevice _device,
       return VK_SUCCESS;
    }
 
+   /* Note: Resist the urge to use query results to update connector->last_nsec/last_frame,
+    * it will lead to races with page_flip_handler2 and potentially wrong present timestamps! */
    int ret = drmCrtcGetSequence(wsi->fd, connector->crtc_id,
                                 pCounterValue, NULL);
    if (ret)
@@ -4174,16 +4614,31 @@ wsi_AcquireDrmDisplayEXT(VkPhysicalDevice physicalDevice,
    struct wsi_display *wsi =
       (struct wsi_display *) wsi_device->wsi[VK_ICD_WSI_PLATFORM_DISPLAY];
 
+   /* "The provided drmFd must correspond to the one owned by the
+    *  physicalDevice.  If not, the error code VK_ERROR_UNKNOWN must be returned.
+    *  The DRM FD must have DRM mast⁠er permissions.  If any error is encountered
+    *  during the acquisition of the display, the call must return the error code
+    *  VK_ERROR_INITIALIZATION_FAILED."
+    *
+    * Since the wsi->fd will only be set to a master fd, we just check if they
+    * provided an fd that matches the device's, and treat the "DRM fd must have
+    * DRM master permissions" as referring to the physicalDevice's.
+    */
    if (wsi->fd >= 0) {
       struct stat in_stat = {0}, wsi_stat = {0};
       if (fstat(drmFd, &in_stat) != 0 ||
           fstat(wsi->device_fd, &wsi_stat) != 0 ||
           in_stat.st_dev != wsi_stat.st_dev ||
           in_stat.st_rdev != wsi_stat.st_rdev) {
-         wsi_display_debug("vkAcquireDRMDisplayEXT vs wsi->fd mismatch\n");
+         wsi_display_debug("vkAcquireDRMDisplayEXT(rdev=%d/%d) vs wsi->fd rdev=%d/%d\n",
+            major(in_stat.st_dev), minor(in_stat.st_dev),
+            major(wsi_stat.st_rdev), minor(wsi_stat.st_rdev));
          return VK_ERROR_UNKNOWN;
       }
 
+      /* XXX no support for tracking the FD used for a particular VkDisplayKHR, so
+       * make sure that we don't have an existing Acquire active.
+       */
       if (wsi->fd != wsi->device_fd)
          return VK_ERROR_INITIALIZATION_FAILED;
    }
