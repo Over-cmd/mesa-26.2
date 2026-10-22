@@ -366,12 +366,62 @@ wsi_crash_handler(int sig)
    raise(sig);
 }
 
+#include <ucontext.h>
+
+static struct sigaction wsi_old_segv;
+static __thread int wsi_in_segv;
+
+static void
+wsi_segv_handler(int sig, siginfo_t *info, void *uctx)
+{
+   if (!wsi_in_segv) {
+      uintptr_t pc = 0, lr = 0;
+#if defined(__aarch64__)
+      ucontext_t *uc = (ucontext_t *)uctx;
+      pc = (uintptr_t)uc->uc_mcontext.pc;
+      lr = (uintptr_t)uc->uc_mcontext.regs[30];
+#elif defined(__x86_64__)
+      ucontext_t *uc = (ucontext_t *)uctx;
+      pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+#endif
+      Dl_info di;
+      /* Solo se informa si el fallo ocurre en código nativo (no en el JIT de box64 ni en box64) */
+      if (pc && dladdr((void *)pc, &di) && di.dli_fname && !strstr(di.dli_fname, "box64")) {
+         wsi_in_segv = 1;
+         const char *b = strrchr(di.dli_fname, '/');
+         WSI_TRACE("[CRASH] SIGSEGV addr=%p pc=%p %s+0x%lx %s lr=%p\n",
+                   info ? info->si_addr : NULL, (void *)pc, b ? b + 1 : di.dli_fname,
+                   (unsigned long)(pc - (uintptr_t)di.dli_fbase),
+                   di.dli_sname ? di.dli_sname : "", (void *)lr);
+         int n = 0;
+         _Unwind_Backtrace(wsi_crash_cb, &n);
+         wsi_in_segv = 0;
+      }
+   }
+   /* encadenar al manejador anterior (box64/Wine) para no romper su emulación */
+   if (wsi_old_segv.sa_flags & SA_SIGINFO) {
+      wsi_old_segv.sa_sigaction(sig, info, uctx);
+   } else if (wsi_old_segv.sa_handler == SIG_DFL || wsi_old_segv.sa_handler == SIG_IGN) {
+      signal(sig, SIG_DFL);
+      raise(sig);
+   } else {
+      wsi_old_segv.sa_handler(sig);
+   }
+}
+
 __attribute__((constructor)) static void
 wsi_crash_install(void)
 {
    const char *d = getenv("WRAPPER_DIAG");
-   if (d && atoi(d))
-      signal(SIGABRT, wsi_crash_handler);   /* solo SIGABRT: Wine usa SIGSEGV */
+   if (!(d && atoi(d)))
+      return;
+   signal(SIGABRT, wsi_crash_handler);
+   struct sigaction sa;
+   memset(&sa, 0, sizeof(sa));
+   sa.sa_sigaction = wsi_segv_handler;
+   sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+   sigemptyset(&sa.sa_mask);
+   sigaction(SIGSEGV, &sa, &wsi_old_segv);   /* encadenado: se llama al anterior */
 }
 CEOF
 echo "-> wsi_common.c: handler [CRASH] en SIGABRT añadido"
