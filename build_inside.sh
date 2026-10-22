@@ -520,6 +520,67 @@ if t and "[WSI] -> SurfaceSupportKHR" not in t:
         print("-> wsi_common.c: traza de entrada de SurfaceSupportKHR")
 PY
 
+# create_swapchain devolvía -1000158000 (VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT):
+# Mali no soporta modificadores DRM -> se desactivan en X11 (WRAPPER_X11_MODIFIERS=1 los reactiva)
+# + migas por etapas en la creación de imágenes del swapchain.
+python3 - <<'PY'
+def patch(path, pairs):
+    try:
+        t = open(path).read()
+    except FileNotFoundError:
+        return
+    o = t
+    for old, new in pairs:
+        if old in t and new not in t:
+            t = t.replace(old, new, 1)
+        elif old not in t:
+            print("-> AVISO: no se encontró el trozo en " + path + ": " + old.strip().splitlines()[0][:70])
+    if t != o:
+        open(path, "w").write(t)
+        print("-> parche de modificadores/trazas de swapchain en " + path)
+
+patch("src/vulkan/wsi/wsi_common_x11.c", [
+("   return wsi_device->supports_modifiers && !wsi_device->x11.ignore_suboptimal;",
+ "   { const char *_e = getenv(\"WRAPPER_X11_MODIFIERS\"); if (!(_e && atoi(_e))) return false; }\n"
+ "   return wsi_device->supports_modifiers && !wsi_device->x11.ignore_suboptimal;"),
+("      if (use_modifiers(wsi_device)) {\n         wsi_x11_get_dri3_modifiers(",
+ "      WSI_TRACE(\"[WSI] swapchain: same_gpu=%d explicit_sync=%d use_modifiers=%d supports_modifiers=%d\\n\",\n"
+ "                (int)drm_image_params.same_gpu, (int)drm_image_params.explicit_sync,\n"
+ "                (int)use_modifiers(wsi_device), (int)wsi_device->supports_modifiers);\n"
+ "      if (use_modifiers(wsi_device)) {\n         wsi_x11_get_dri3_modifiers("),
+("   result = wsi_swapchain_init(wsi_device, &chain->base, device, pCreateInfo,\n                               image_params, pAllocator);\n",
+ "   result = wsi_swapchain_init(wsi_device, &chain->base, device, pCreateInfo,\n                               image_params, pAllocator);\n"
+ "   WSI_TRACE(\"[WSI] swapchain: wsi_swapchain_init -> %d\\n\", (int)result);\n"),
+("      result = x11_image_init(device, chain, pCreateInfo, pAllocator,\n                              &chain->images[image]);\n      if (result != VK_SUCCESS)\n         goto fail_init_images;",
+ "      result = x11_image_init(device, chain, pCreateInfo, pAllocator,\n                              &chain->images[image]);\n"
+ "      WSI_TRACE(\"[WSI] swapchain: x11_image_init[%u] -> %d\\n\", image, (int)result);\n"
+ "      if (result != VK_SUCCESS)\n         goto fail_init_images;"),
+])
+
+patch("src/vulkan/wsi/wsi_common.c", [
+("   result = configure_image(chain, pCreateInfo, image_params,\n                            &chain->image_info);\n   if (result != VK_SUCCESS)\n      goto fail;\n",
+ "   result = configure_image(chain, pCreateInfo, image_params,\n                            &chain->image_info);\n"
+ "   WSI_TRACE(\"[WSI] swapchain_init: configure_image -> %d blit_type=%d image_type=%d\\n\", (int)result, (int)chain->blit.type, (int)image_params->image_type);\n"
+ "   if (result != VK_SUCCESS)\n      goto fail;\n"),
+("   result = wsi->CreateImage(chain->device, &info->create,\n                             &chain->alloc, &image->image);\n   if (result != VK_SUCCESS)\n      goto fail;\n",
+ "   result = wsi->CreateImage(chain->device, &info->create,\n                             &chain->alloc, &image->image);\n"
+ "   WSI_TRACE(\"[WSI] create_image: CreateImage -> %d tiling=%d fmt=%d usage=0x%x flags=0x%x\\n\", (int)result, (int)info->create.tiling, (int)info->create.format, (unsigned)info->create.usage, (unsigned)info->create.flags);\n"
+ "   if (result != VK_SUCCESS)\n      goto fail;\n"),
+("   result = info->create_mem(chain, info, image);\n   if (result != VK_SUCCESS)\n      goto fail;\n",
+ "   result = info->create_mem(chain, info, image);\n"
+ "   WSI_TRACE(\"[WSI] create_image: create_mem -> %d\\n\", (int)result);\n"
+ "   if (result != VK_SUCCESS)\n      goto fail;\n"),
+("   result = wsi->BindImageMemory(chain->device, image->image,\n                                 image->memory, 0);\n   if (result != VK_SUCCESS)\n      goto fail;\n",
+ "   result = wsi->BindImageMemory(chain->device, image->image,\n                                 image->memory, 0);\n"
+ "   WSI_TRACE(\"[WSI] create_image: BindImageMemory -> %d\\n\", (int)result);\n"
+ "   if (result != VK_SUCCESS)\n      goto fail;\n"),
+("      result = info->finish_create(chain, info, image);\n      if (result != VK_SUCCESS)\n         goto fail;\n",
+ "      result = info->finish_create(chain, info, image);\n"
+ "      WSI_TRACE(\"[WSI] create_image: finish_create -> %d\\n\", (int)result);\n"
+ "      if (result != VK_SUCCESS)\n         goto fail;\n"),
+])
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
