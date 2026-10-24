@@ -581,6 +581,56 @@ patch("src/vulkan/wsi/wsi_common.c", [
 ])
 PY
 
+# Camino de blit del WSI (sw o buffer): crash tras BindImageMemory -> en wsi_finish_create_blit_context.
+# - SetDebugUtilsObjectNameEXT puede ser NULL en el wrapper/Mali -> protegido.
+# - supports_scanout=false por defecto: sin imágenes OPTIMAL exportables por dma-buf (Mali las rechaza con -1000158000);
+#   se usa el camino "prime": imagen normal + blit a buffer exportable. WRAPPER_WSI_SCANOUT=1 lo reactiva.
+# - Lista los callbacks WSI que quedaron NULL y traza finish_create por etapas.
+python3 - <<'PY'
+def patch(path, pairs):
+    try:
+        t = open(path).read()
+    except FileNotFoundError:
+        return
+    o = t
+    for old, new in pairs:
+        if old in t and new not in t:
+            t = t.replace(old, new, 1)
+        elif old not in t:
+            print("-> AVISO: no se encontró el trozo en " + path + ": " + old.strip().splitlines()[0][:70])
+    if t != o:
+        open(path, "w").write(t)
+        print("-> parche de blit/callbacks en " + path)
+
+NAMES = ("AllocateMemory AllocateCommandBuffers BindBufferMemory BindImageMemory BeginCommandBuffer "
+         "CmdPipelineBarrier CmdCopyImage CmdCopyImageToBuffer CmdResetQueryPool ResetQueryPoolEXT "
+         "CmdWriteTimestamp CreateBuffer CreateCommandPool CreateFence CreateImage CreateQueryPool "
+         "CreateSemaphore DestroyBuffer DestroyCommandPool DestroyFence DestroyImage DestroyQueryPool "
+         "DestroySemaphore EndCommandBuffer FreeMemory FreeCommandBuffers GetBufferMemoryRequirements "
+         "GetFenceStatus GetImageMemoryRequirements GetImageSubresourceLayout GetMemoryFdKHR "
+         "GetCalibratedTimestampsKHR GetQueryPoolResults GetSemaphoreFdKHR ResetFences QueueSubmit2 "
+         "SetDebugUtilsObjectNameEXT WaitForFences MapMemory UnmapMemory").split()
+chk = "".join("      CHK(%s);\n" % n for n in NAMES)
+
+patch("src/vulkan/wsi/wsi_common.c", [
+("   wsi->supports_scanout = true;\n",
+ "   { const char *_sc = getenv(\"WRAPPER_WSI_SCANOUT\"); wsi->supports_scanout = (_sc && atoi(_sc)) ? true : false; }\n"),
+("   wsi->SetDebugUtilsObjectNameEXT(device, &name_info);\n",
+ "   if (wsi->SetDebugUtilsObjectNameEXT)\n      wsi->SetDebugUtilsObjectNameEXT(device, &name_info);\n"),
+("   return VK_SUCCESS;\nfail:\n   wsi_device_finish(wsi, alloc);",
+ "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE(\"[WSI] callback NULL: %s\\n\", #f)\n" + chk +
+ "#undef CHK\n      WSI_TRACE(\"[WSI] wsi_device_init: supports_scanout=%d sw=%d\\n\", (int)wsi->supports_scanout, (int)wsi->sw);\n   }\n"
+ "   return VK_SUCCESS;\nfail:\n   wsi_device_finish(wsi, alloc);"),
+("      image->blit.cmd_buffers[i] = cmd_buffer;\n\n      wsi_label_cmd_buffer(wsi, chain->device, cmd_buffer, \"wsi blit\");\n",
+ "      image->blit.cmd_buffers[i] = cmd_buffer;\n      WSI_TRACE(\"[WSI] blit: cmdbuf[%u] asignado\\n\", i);\n\n"
+ "      wsi_label_cmd_buffer(wsi, chain->device, cmd_buffer, \"wsi blit\");\n      WSI_TRACE(\"[WSI] blit: label ok\\n\");\n"),
+("      wsi->BeginCommandBuffer(cmd_buffer, &begin_info);\n",
+ "      wsi->BeginCommandBuffer(cmd_buffer, &begin_info);\n      WSI_TRACE(\"[WSI] blit: BeginCommandBuffer ok (type=%d)\\n\", (int)chain->blit.type);\n"),
+("      result = wsi->EndCommandBuffer(cmd_buffer);\n      if (result != VK_SUCCESS)\n         return result;\n",
+ "      result = wsi->EndCommandBuffer(cmd_buffer);\n      WSI_TRACE(\"[WSI] blit: EndCommandBuffer -> %d\\n\", (int)result);\n      if (result != VK_SUCCESS)\n         return result;\n"),
+])
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
