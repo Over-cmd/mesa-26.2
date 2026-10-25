@@ -582,7 +582,7 @@ patch("src/vulkan/wsi/wsi_common.c", [
 PY
 
 # Camino de blit del WSI (sw o buffer): crash tras BindImageMemory -> en wsi_finish_create_blit_context.
-# - SetDebugUtilsObjectNameEXT puede ser NULL en el wrapper/Mali -> protegido.
+# - SetDebugUtilsObjectNameEXT crashea con los cmdbufs del wrapper -> desactivado (WRAPPER_WSI_LABELS=1 lo reactiva).
 # - supports_scanout=false por defecto: sin imágenes OPTIMAL exportables por dma-buf (Mali las rechaza con -1000158000);
 #   se usa el camino "prime": imagen normal + blit a buffer exportable. WRAPPER_WSI_SCANOUT=1 lo reactiva.
 # - Lista los callbacks WSI que quedaron NULL y traza finish_create por etapas.
@@ -616,7 +616,7 @@ patch("src/vulkan/wsi/wsi_common.c", [
 ("   wsi->supports_scanout = true;\n",
  "   { const char *_sc = getenv(\"WRAPPER_WSI_SCANOUT\"); wsi->supports_scanout = (_sc && atoi(_sc)) ? true : false; }\n"),
 ("   wsi->SetDebugUtilsObjectNameEXT(device, &name_info);\n",
- "   if (wsi->SetDebugUtilsObjectNameEXT)\n      wsi->SetDebugUtilsObjectNameEXT(device, &name_info);\n"),
+ "   /* el wrapper devuelve cmdbufs que no son vk_object_base: SetDebugUtilsObjectNameEXT crashea; solo etiquetas de depuración */\n   { const char *_lb = getenv(\"WRAPPER_WSI_LABELS\"); if (_lb && atoi(_lb) && wsi->SetDebugUtilsObjectNameEXT)\n        wsi->SetDebugUtilsObjectNameEXT(device, &name_info); }\n"),
 ("   return VK_SUCCESS;\nfail:\n   wsi_device_finish(wsi, alloc);",
  "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE(\"[WSI] callback NULL: %s\\n\", #f)\n" + chk +
  "#undef CHK\n      WSI_TRACE(\"[WSI] wsi_device_init: supports_scanout=%d sw=%d\\n\", (int)wsi->supports_scanout, (int)wsi->sw);\n   }\n"
