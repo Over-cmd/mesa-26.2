@@ -639,6 +639,89 @@ patch("src/vulkan/wsi/wsi_common.c", [
 ])
 PY
 
+# vkQueuePresentKHR -> SIGSEGV pc=0 con lr dentro del wrapper (offset 0x7184): llamada a puntero de función NULL.
+# Causa más probable: wsi->QueueSubmit2 (synchronization2) -> la Mali (Vulkan 1.1) no lo tiene y el wrapper
+# lo reenvía a una tabla con entrada NULL. Se sustituye por una versión que convierte VkSubmitInfo2 -> VkSubmitInfo
+# y usa vkQueueSubmit (v1).
+python3 - <<'PY'
+path = "src/vulkan/wsi/wsi_common.c"
+try:
+    t = open(path).read()
+except FileNotFoundError:
+    t = None
+if t is not None:
+    compat = r'''
+/* --- compat: QueueSubmit2 -> QueueSubmit (la Mali no soporta synchronization2) --- */
+static PFN_vkQueueSubmit wsi_real_QueueSubmit;
+
+static VkResult
+wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
+                         const VkSubmitInfo2 *pSubmits, VkFence fence)
+{
+   if (!wsi_real_QueueSubmit)
+      return VK_ERROR_INITIALIZATION_FAILED;
+   if (submitCount == 0 || !pSubmits)
+      return wsi_real_QueueSubmit(queue, 0, NULL, fence);
+
+   VkResult res = VK_SUCCESS;
+   for (uint32_t i = 0; i < submitCount && res == VK_SUCCESS; i++) {
+      const VkSubmitInfo2 *s = &pSubmits[i];
+      VkSemaphore waits[16], sigs[16];
+      VkPipelineStageFlags stages[16];
+      uint64_t wv[16], sv[16];
+      VkCommandBuffer cbs[16];
+      uint32_t nw = s->waitSemaphoreInfoCount > 16 ? 16 : s->waitSemaphoreInfoCount;
+      uint32_t ns = s->signalSemaphoreInfoCount > 16 ? 16 : s->signalSemaphoreInfoCount;
+      uint32_t nc = s->commandBufferInfoCount > 16 ? 16 : s->commandBufferInfoCount;
+      bool timeline = false;
+      for (uint32_t j = 0; j < nw; j++) {
+         waits[j] = s->pWaitSemaphoreInfos[j].semaphore;
+         wv[j] = s->pWaitSemaphoreInfos[j].value;
+         VkPipelineStageFlags m = (VkPipelineStageFlags)(s->pWaitSemaphoreInfos[j].stageMask & 0xffffffffu);
+         stages[j] = m ? m : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+         if (wv[j]) timeline = true;
+      }
+      for (uint32_t j = 0; j < ns; j++) {
+         sigs[j] = s->pSignalSemaphoreInfos[j].semaphore;
+         sv[j] = s->pSignalSemaphoreInfos[j].value;
+         if (sv[j]) timeline = true;
+      }
+      for (uint32_t j = 0; j < nc; j++)
+         cbs[j] = s->pCommandBufferInfos[j].commandBuffer;
+
+      VkTimelineSemaphoreSubmitInfo tl = {
+         .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+         .waitSemaphoreValueCount = nw, .pWaitSemaphoreValues = wv,
+         .signalSemaphoreValueCount = ns, .pSignalSemaphoreValues = sv,
+      };
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .pNext = timeline ? &tl : NULL,
+         .waitSemaphoreCount = nw, .pWaitSemaphores = waits, .pWaitDstStageMask = stages,
+         .commandBufferCount = nc, .pCommandBuffers = cbs,
+         .signalSemaphoreCount = ns, .pSignalSemaphores = sigs,
+      };
+      res = wsi_real_QueueSubmit(queue, 1, &si, (i == submitCount - 1) ? fence : VK_NULL_HANDLE);
+   }
+   return res;
+}
+'''
+    anchor = "VkResult\nwsi_device_init("
+    hook_old = "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE("
+    hook_new = ("   wsi_real_QueueSubmit = (PFN_vkQueueSubmit)proc_addr(pdevice, \"vkQueueSubmit\");\n"
+                "   wsi->QueueSubmit2 = wsi_compat_queue_submit2;\n"
+                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
+    if "wsi_compat_queue_submit2" in t:
+        print("-> compat QueueSubmit2 ya aplicado")
+    elif anchor in t and hook_old in t:
+        t = t.replace(anchor, compat + "\n" + anchor, 1)
+        t = t.replace(hook_old, hook_new + hook_old, 1)
+        open(path, "w").write(t)
+        print("-> compat QueueSubmit2 aplicado en " + path)
+    else:
+        print("-> AVISO: no se encontró el ancla para el compat de QueueSubmit2 (anchor=%s hook=%s)" % (anchor in t, hook_old in t))
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
