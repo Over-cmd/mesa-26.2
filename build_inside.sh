@@ -385,8 +385,16 @@ wsi_segv_handler(int sig, siginfo_t *info, void *uctx)
       pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
 #endif
       Dl_info di;
-      /* Solo se informa si el fallo ocurre en código nativo (no en el JIT de box64 ni en box64) */
-      if (pc && dladdr((void *)pc, &di) && di.dli_fname && !strstr(di.dli_fname, "box64")) {
+      static volatile int wsi_segv_count;
+      memset(&di, 0, sizeof(di));
+      int have = pc && dladdr((void *)pc, &di) && di.dli_fname;
+      int in_box = have && strstr(di.dli_fname, "box64");
+      uintptr_t fa = info ? (uintptr_t)info->si_addr : 0;
+      /* box64 usa SIGSEGV para su propia gestión de memoria: solo se informa de fallos en código nativo
+         ajeno a box64, o de accesos casi-NULL (puntero de función/estructura nulo), con tope de 40 líneas */
+      if (wsi_segv_count < 40 && (!in_box || fa < 0x100000)) {
+         wsi_segv_count++;
+         if (!have) { di.dli_fname = "?"; di.dli_fbase = NULL; di.dli_sname = NULL; }
          wsi_in_segv = 1;
          const char *b = strrchr(di.dli_fname, '/');
          WSI_TRACE("[CRASH] SIGSEGV addr=%p pc=%p %s+0x%lx %s lr=%p\n",
