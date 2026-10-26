@@ -5216,8 +5216,6 @@ VKAPI_ATTR void VKAPI_CALL
 wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
 {
    VK_FROM_HANDLE(wrapper_device, device, _device);
-   if (!device)
-      return;
 
    wrapper_query_reset_finish(device);
 
@@ -5247,71 +5245,44 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
       wrapper_fence_destroy(device, wf, pAllocator);
    }
 
-   if (device->dynamic_pipeline_table) {
-      hash_table_u64_foreach(device->dynamic_pipeline_table, entry) {
-         struct wrapper_dynamic_pipeline *pipeline = entry.data;
-         if (pipeline) {
-            if (pipeline->render_pass)
-               device->dispatch_table.DestroyRenderPass(device->dispatch_handle,
-                                                         pipeline->render_pass, NULL);
-            free(pipeline);
-         }
-      }
-      _mesa_hash_table_u64_destroy(device->dynamic_pipeline_table);
+   hash_table_u64_foreach(device->dynamic_pipeline_table, entry) {
+      struct wrapper_dynamic_pipeline *pipeline = entry.data;
+      if (pipeline->render_pass)
+         device->dispatch_table.DestroyRenderPass(device->dispatch_handle,
+                                                   pipeline->render_pass, NULL);
+      free(pipeline);
    }
-
-   if (device->image_view_table) {
-      hash_table_u64_foreach(device->image_view_table, entry)
-         free(entry.data);
-      _mesa_hash_table_u64_destroy(device->image_view_table);
-   }
-
-   if (device->imageless_fb_table) {
-      hash_table_u64_foreach(device->imageless_fb_table, entry)
-         free(entry.data);
-      _mesa_hash_table_u64_destroy(device->imageless_fb_table);
-   }
-
-   if (device->buffer_table)
-      _mesa_hash_table_u64_destroy(device->buffer_table);
-   if (device->image_table)
-      _mesa_hash_table_u64_destroy(device->image_table);
-   if (device->fence_table)
-      _mesa_hash_table_u64_destroy(device->fence_table);
+   hash_table_u64_foreach(device->image_view_table, entry)
+      free(entry.data);
+   hash_table_u64_foreach(device->imageless_fb_table, entry)
+      free(entry.data);
+   _mesa_hash_table_u64_destroy(device->dynamic_pipeline_table);
+   _mesa_hash_table_u64_destroy(device->image_view_table);
+   _mesa_hash_table_u64_destroy(device->imageless_fb_table);
 
    list_for_each_entry_safe(struct vk_queue, queue, &device->vk.queues, link) {
       vk_queue_finish(queue);
       vk_free2(&device->vk.alloc, pAllocator, queue);
    }
-
    if (device->dispatch_handle != VK_NULL_HANDLE) {
-      device->dispatch_table.DestroyDevice(device->dispatch_handle, pAllocator);
+      device->dispatch_table.DestroyDevice(device->
+         dispatch_handle, pAllocator);
    }
-
    if (device->emulate_push_descriptor) {
-      if (device->push_dsl_table) {
-         hash_table_u64_foreach(device->push_dsl_table, e)
-            free(e.data);
-         _mesa_hash_table_u64_destroy(device->push_dsl_table);
+      hash_table_u64_foreach(device->push_dsl_table, e)
+         free(e.data);
+      hash_table_u64_foreach(device->push_pl_table, e) {
+         struct wrapper_push_pl *r = e.data;
+         free(r->set_layouts);
+         free(r);
       }
-      if (device->push_pl_table) {
-         hash_table_u64_foreach(device->push_pl_table, e) {
-            struct wrapper_push_pl *r = e.data;
-            if (r) {
-               free(r->set_layouts);
-               free(r);
-            }
-         }
-         _mesa_hash_table_u64_destroy(device->push_pl_table);
-      }
-      if (device->push_template_table) {
-         hash_table_u64_foreach(device->push_template_table, e)
-            free(e.data);
-         _mesa_hash_table_u64_destroy(device->push_template_table);
-      }
+      hash_table_u64_foreach(device->push_template_table, e)
+         free(e.data);
+      _mesa_hash_table_u64_destroy(device->push_dsl_table);
+      _mesa_hash_table_u64_destroy(device->push_pl_table);
+      _mesa_hash_table_u64_destroy(device->push_template_table);
       simple_mtx_destroy(&device->push_mutex);
    }
-
    simple_mtx_destroy(&device->resource_mutex);
    simple_mtx_destroy(&device->query_reset_mutex);
    vk_device_finish(&device->vk);
