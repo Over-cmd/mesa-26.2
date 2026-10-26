@@ -722,6 +722,238 @@ wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
         print("-> AVISO: no se encontró el ancla para el compat de QueueSubmit2 (anchor=%s hook=%s)" % (anchor in t, hook_old in t))
 PY
 
+# vkDestroyDevice: la Mali aborta (scudo/free) dentro de su vkDestroyDevice al cerrar el proceso.
+# Se reescribe wrapper_DestroyDevice: DeviceWaitIdle, trazas [DESTROY], limpieza de objetos internos
+# (null_*, bcn_*) y modos de diagnóstico con WRAPPER_DESTROY_MODE=0..3.
+python3 - <<'PY'
+import re
+path = "src/vulkan/wrapper/wrapper_device.c"
+try:
+    t = open(path).read()
+except FileNotFoundError:
+    t = None
+if t is not None:
+    new_fn = open("/tmp/dd_new_fn.c").read() if False else r'''/* ---- vkDestroyDevice: orden de limpieza + trazas + modos de diagnóstico ----
+ * WRAPPER_DESTROY_MODE (solo para diagnosticar el abort de la Mali al destruir el device):
+ *   0 (defecto) limpieza completa de lo que el wrapper aún tiene registrado
+ *   1  igual, pero sin llamar a vkFreeCommandBuffers del driver (solo libera los registros)
+ *   2  no destruye ningún objeto hijo en el driver; solo llama a vkDestroyDevice
+ *   3  no llama ni a vkDestroyDevice del driver (fuga a propósito; el proceso está terminando) */
+static int
+wrapper_destroy_mode(void)
+{
+   static int mode = -1;
+   if (mode == -1)
+      mode = getenv("WRAPPER_DESTROY_MODE") ? atoi(getenv("WRAPPER_DESTROY_MODE")) : 0;
+   return mode;
+}
+
+#define DDT(...) do { if (wrapper_diag_on()) wrapper_diag_append("[DESTROY] " __VA_ARGS__); } while (0)
+
+VKAPI_ATTR void VKAPI_CALL
+wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
+{
+   VK_FROM_HANDLE(wrapper_device, device, _device);
+   const struct vk_device_dispatch_table *dt = &device->dispatch_table;
+   const bool have_driver = device->dispatch_handle != VK_NULL_HANDLE;
+   const int mode = wrapper_destroy_mode();
+
+   if (wrapper_diag_on()) {
+      unsigned n_cb = 0, n_mem = 0, n_buf = 0, n_img = 0, n_fence = 0;
+      list_for_each_entry(struct wrapper_command_buffer, c, &device->command_buffer_list, link) n_cb++;
+      list_for_each_entry(struct wrapper_device_memory, m, &device->device_memory_list, link) n_mem++;
+      list_for_each_entry(struct wrapper_buffer, b, &device->buffer_list, link) n_buf++;
+      list_for_each_entry(struct wrapper_image, i, &device->image_list, link) n_img++;
+      list_for_each_entry(struct wrapper_fence, f, &device->fence_list, link) n_fence++;
+      DDT("inicio mode=%d cmdbufs=%u memory=%u buffers=%u images=%u fences=%u\n",
+          mode, n_cb, n_mem, n_buf, n_img, n_fence);
+   }
+
+   /* La spec exige que el device esté ocioso al destruirlo; al cerrar el proceso
+    * puede quedar trabajo del WSI (blit/present) en vuelo. */
+   if (have_driver && mode != 3 && dt->DeviceWaitIdle) {
+      VkResult idle = dt->DeviceWaitIdle(device->dispatch_handle);
+      DDT("DeviceWaitIdle -> %d\n", idle);
+   }
+
+   wrapper_query_reset_finish(device);
+
+   if (mode < 2) {
+      simple_mtx_lock(&device->resource_mutex);
+
+      list_for_each_entry_safe(struct wrapper_command_buffer, wcb,
+                               &device->command_buffer_list, link) {
+         if (mode == 1) {
+            /* El pool puede haber desaparecido ya: no se vuelve a liberar en el driver. */
+            if (device->emulate_push_descriptor)
+               wrapper_push_pool_destroy_all(wcb);
+            wrapper_dynamic_render_objects_reset(wcb);
+            list_del(&wcb->link);
+            vk_object_free(&device->vk, &device->vk.alloc, wcb);
+         } else {
+            wrapper_command_buffer_destroy(device, wcb);
+         }
+      }
+      DDT("command buffers liberados\n");
+      list_for_each_entry_safe(struct wrapper_device_memory, mem,
+                               &device->device_memory_list, link) {
+         wrapper_device_memory_destroy(mem);
+      }
+      DDT("memoria liberada\n");
+
+      simple_mtx_unlock(&device->resource_mutex);
+
+      list_for_each_entry_safe(struct wrapper_buffer, wb,
+                               &device->buffer_list, link) {
+         wrapper_buffer_destroy(device, wb, pAllocator);
+      }
+      DDT("buffers destruidos\n");
+      list_for_each_entry_safe(struct wrapper_image, wi,
+                               &device->image_list, link) {
+         wrapper_image_destroy(device, wi, pAllocator);
+      }
+      DDT("imagenes destruidas\n");
+      list_for_each_entry_safe(struct wrapper_fence, wf,
+                               &device->fence_list, link) {
+         wrapper_fence_destroy(device, wf, pAllocator);
+      }
+      DDT("fences destruidos\n");
+
+      /* Objetos propios del wrapper que antes se quedaban vivos en el driver. */
+      if (have_driver) {
+         if (device->null_sampler)
+            dt->DestroySampler(device->dispatch_handle, device->null_sampler, NULL);
+         if (device->null_image_view)
+            dt->DestroyImageView(device->dispatch_handle, device->null_image_view, NULL);
+         if (device->null_image)
+            dt->DestroyImage(device->dispatch_handle, device->null_image, NULL);
+         if (device->null_image_memory)
+            dt->FreeMemory(device->dispatch_handle, device->null_image_memory, NULL);
+         if (device->null_buffer)
+            dt->DestroyBuffer(device->dispatch_handle, device->null_buffer, NULL);
+         if (device->null_buffer_memory)
+            dt->FreeMemory(device->dispatch_handle, device->null_buffer_memory, NULL);
+         if (device->bcn_pipeline)
+            dt->DestroyPipeline(device->dispatch_handle, device->bcn_pipeline, NULL);
+         if (device->bcn_pipe_layout)
+            dt->DestroyPipelineLayout(device->dispatch_handle, device->bcn_pipe_layout, NULL);
+         if (device->bcn_set_layout)
+            dt->DestroyDescriptorSetLayout(device->dispatch_handle, device->bcn_set_layout, NULL);
+         if (device->bcn_shader)
+            dt->DestroyShaderModule(device->dispatch_handle, device->bcn_shader, NULL);
+         DDT("objetos internos destruidos\n");
+      }
+   }
+
+   hash_table_u64_foreach(device->dynamic_pipeline_table, entry) {
+      struct wrapper_dynamic_pipeline *pipeline = entry.data;
+      if (pipeline->render_pass && mode < 2)
+         device->dispatch_table.DestroyRenderPass(device->dispatch_handle,
+                                                   pipeline->render_pass, NULL);
+      free(pipeline);
+   }
+   hash_table_u64_foreach(device->image_view_table, entry)
+      free(entry.data);
+   hash_table_u64_foreach(device->imageless_fb_table, entry)
+      free(entry.data);
+   _mesa_hash_table_u64_destroy(device->dynamic_pipeline_table);
+   _mesa_hash_table_u64_destroy(device->image_view_table);
+   _mesa_hash_table_u64_destroy(device->imageless_fb_table);
+
+   list_for_each_entry_safe(struct vk_queue, queue, &device->vk.queues, link) {
+      vk_queue_finish(queue);
+      vk_free2(&device->vk.alloc, pAllocator, queue);
+   }
+   DDT("colas liberadas\n");
+   if (have_driver) {
+      if (mode == 3) {
+         DDT("modo 3: no se llama a vkDestroyDevice del driver\n");
+      } else {
+         DDT("llamando a vkDestroyDevice del driver\n");
+         device->dispatch_table.DestroyDevice(device->dispatch_handle, pAllocator);
+         DDT("vkDestroyDevice del driver devolvio\n");
+      }
+   }
+   if (device->emulate_push_descriptor) {
+      hash_table_u64_foreach(device->push_dsl_table, e)
+         free(e.data);
+      hash_table_u64_foreach(device->push_pl_table, e) {
+         struct wrapper_push_pl *r = e.data;
+         free(r->set_layouts);
+         free(r);
+      }
+      hash_table_u64_foreach(device->push_template_table, e)
+         free(e.data);
+      _mesa_hash_table_u64_destroy(device->push_dsl_table);
+      _mesa_hash_table_u64_destroy(device->push_pl_table);
+      _mesa_hash_table_u64_destroy(device->push_template_table);
+      simple_mtx_destroy(&device->push_mutex);
+   }
+   simple_mtx_destroy(&device->resource_mutex);
+   simple_mtx_destroy(&device->query_reset_mutex);
+   vk_device_finish(&device->vk);
+   vk_free2(&device->vk.alloc, pAllocator, device);
+}
+'''
+    if "wrapper_destroy_mode" in t:
+        print("-> DestroyDevice ya parcheado")
+    else:
+        m = re.search(r"VKAPI_ATTR void VKAPI_CALL\s*\nwrapper_DestroyDevice\(", t)
+        end_marker = "   vk_free2(&device->vk.alloc, pAllocator, device);\n}\n"
+        e = t.find(end_marker, m.start()) if m else -1
+        if m and e != -1:
+            t = t[:m.start()] + new_fn + t[e + len(end_marker):]
+            open(path, "w").write(t)
+            print("-> wrapper_DestroyDevice reescrita en " + path)
+        else:
+            print("-> AVISO: no se encontró wrapper_DestroyDevice en " + path)
+PY
+
+# MESA_VK_WSI_DEBUG=sw,noshm es obligatorio en Bannerlator: sin ello el WSI usa DRI3/DMA-BUF (inexistente en la Mali)
+# y no presenta nada. Se fija por defecto al cargar la librería (antes de wsi_device_init).
+python3 - <<'PY'
+path = "src/vulkan/wsi/wsi_common.c"
+try:
+    t = open(path).read()
+except FileNotFoundError:
+    t = None
+if t is not None:
+    snippet = r'''
+
+/* --- camino de presentación por defecto del wrapper: sw (buffer + xcb_put_image) ---
+ * WRAPPER_WSI_NATIVE=1 desactiva este ajuste; WRAPPER_WSI_SHM=1 quita "noshm" (probar MIT-SHM). */
+#include <stdlib.h>
+#include <string.h>
+__attribute__((constructor(101)))
+static void
+wsi_default_env_init(void)
+{
+   const char *native = getenv("WRAPPER_WSI_NATIVE");
+   if (native && atoi(native))
+      return;
+   const char *shm = getenv("WRAPPER_WSI_SHM");
+   const int want_noshm = !(shm && atoi(shm));
+   const char *cur = getenv("MESA_VK_WSI_DEBUG");
+   char buf[256];
+   snprintf(buf, sizeof(buf), "%s", cur ? cur : "");
+   if (!strstr(buf, "sw")) {
+      size_t n = strlen(buf);
+      snprintf(buf + n, sizeof(buf) - n, "%ssw", n ? "," : "");
+   }
+   if (want_noshm && !strstr(buf, "noshm")) {
+      size_t n = strlen(buf);
+      snprintf(buf + n, sizeof(buf) - n, "%snoshm", n ? "," : "");
+   }
+   setenv("MESA_VK_WSI_DEBUG", buf, 1);
+}
+'''
+    if "wsi_default_env_init" in t:
+        print("-> entorno WSI por defecto ya aplicado")
+    else:
+        open(path, "a").write(snippet)
+        print("-> MESA_VK_WSI_DEBUG=sw,noshm por defecto en " + path)
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
