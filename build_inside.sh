@@ -976,6 +976,28 @@ wsi_default_env_init(void)
         print("-> MESA_VK_WSI_DEBUG=sw por defecto (MIT-SHM activo) en " + path)
 PY
 
+# wrapper_device_memory.c: mem->alloc se guardaba como &device->vk.alloc cuando la app no daba allocator, y
+# wrapper_device_memory_reset lo pasaba a FreeMemory del driver. La Mali reservó con pAllocator=NULL, así que
+# liberaba con callbacks ajenos -> free() inválido (scudo) -> abort en vkDestroyDevice.
+# vk_free2() ya hace fallback al allocator del device si alloc es NULL, así que basta guardar el original.
+python3 - <<'PY'
+path = "src/vulkan/wrapper/wrapper_device_memory.c"
+try:
+    t = open(path).read()
+except FileNotFoundError:
+    t = None
+if t is not None:
+    old = "(*out_mem)->alloc = alloc ? alloc : &device->vk.alloc;"
+    new = "(*out_mem)->alloc = alloc;   /* NULL si la app no dio allocator: se reenvia igual al driver */"
+    if new in t:
+        print("-> mem->alloc ya parcheado")
+    elif old in t:
+        open(path, "w").write(t.replace(old, new, 1))
+        print("-> mem->alloc: ya no se pasa el allocator de Mesa al FreeMemory del driver")
+    else:
+        print("-> AVISO: no se encontro mem->alloc en " + path)
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
