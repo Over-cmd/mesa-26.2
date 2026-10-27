@@ -734,17 +734,18 @@ except FileNotFoundError:
     t = None
 if t is not None:
     new_fn = open("/tmp/dd_new_fn.c").read() if False else r'''/* ---- vkDestroyDevice: orden de limpieza + trazas + modos de diagnóstico ----
- * WRAPPER_DESTROY_MODE (solo para diagnosticar el abort de la Mali al destruir el device):
- *   0 (defecto) limpieza completa de lo que el wrapper aún tiene registrado
- *   1  igual, pero sin llamar a vkFreeCommandBuffers del driver (solo libera los registros)
- *   2  no destruye ningún objeto hijo en el driver; solo llama a vkDestroyDevice
- *   3  no llama ni a vkDestroyDevice del driver (fuga a propósito; el proceso está terminando) */
+ * WRAPPER_DESTROY_MODE (la Mali aborta al liberar la memoria ANTES que los buffers enlazados a ella):
+ *   0  limpieza antigua (memoria, buffers, imágenes, fences): reproduce el abort
+ *   1  igual que 0, pero sin llamar a vkFreeCommandBuffers del driver
+ *   2  (defecto, probado) no destruye hijos; solo vkDestroyDevice, que los libera él
+ *   3  no llama ni a vkDestroyDevice del driver (fuga a propósito; el proceso está terminando)
+ *   4  limpieza ordenada: cmdbufs, fences, buffers, imágenes y por último la memoria */
 static int
 wrapper_destroy_mode(void)
 {
    static int mode = -1;
    if (mode == -1)
-      mode = getenv("WRAPPER_DESTROY_MODE") ? atoi(getenv("WRAPPER_DESTROY_MODE")) : 0;
+      mode = getenv("WRAPPER_DESTROY_MODE") ? atoi(getenv("WRAPPER_DESTROY_MODE")) : 2;
    return mode;
 }
 
@@ -778,7 +779,8 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
 
    wrapper_query_reset_finish(device);
 
-   if (mode < 2) {
+   const bool ordered = (mode == 4);
+   if (mode < 2 || ordered) {
       simple_mtx_lock(&device->resource_mutex);
 
       list_for_each_entry_safe(struct wrapper_command_buffer, wcb,
@@ -795,14 +797,23 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
          }
       }
       DDT("command buffers liberados\n");
-      list_for_each_entry_safe(struct wrapper_device_memory, mem,
-                               &device->device_memory_list, link) {
-         wrapper_device_memory_destroy(mem);
+      if (!ordered) {
+         list_for_each_entry_safe(struct wrapper_device_memory, mem,
+                                  &device->device_memory_list, link) {
+            wrapper_device_memory_destroy(mem);
+         }
+         DDT("memoria liberada\n");
       }
-      DDT("memoria liberada\n");
 
       simple_mtx_unlock(&device->resource_mutex);
 
+      if (ordered) {
+         list_for_each_entry_safe(struct wrapper_fence, wf,
+                                  &device->fence_list, link) {
+            wrapper_fence_destroy(device, wf, pAllocator);
+         }
+         DDT("fences destruidos\n");
+      }
       list_for_each_entry_safe(struct wrapper_buffer, wb,
                                &device->buffer_list, link) {
          wrapper_buffer_destroy(device, wb, pAllocator);
@@ -813,11 +824,22 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
          wrapper_image_destroy(device, wi, pAllocator);
       }
       DDT("imagenes destruidas\n");
-      list_for_each_entry_safe(struct wrapper_fence, wf,
-                               &device->fence_list, link) {
-         wrapper_fence_destroy(device, wf, pAllocator);
+      if (!ordered) {
+         list_for_each_entry_safe(struct wrapper_fence, wf,
+                                  &device->fence_list, link) {
+            wrapper_fence_destroy(device, wf, pAllocator);
+         }
+         DDT("fences destruidos\n");
+      } else {
+         /* La memoria, la última: ya no queda ningún recurso enlazado a ella. */
+         simple_mtx_lock(&device->resource_mutex);
+         list_for_each_entry_safe(struct wrapper_device_memory, mem,
+                                  &device->device_memory_list, link) {
+            wrapper_device_memory_destroy(mem);
+         }
+         simple_mtx_unlock(&device->resource_mutex);
+         DDT("memoria liberada\n");
       }
-      DDT("fences destruidos\n");
 
       /* Objetos propios del wrapper que antes se quedaban vivos en el driver. */
       if (have_driver) {
@@ -847,7 +869,7 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
 
    hash_table_u64_foreach(device->dynamic_pipeline_table, entry) {
       struct wrapper_dynamic_pipeline *pipeline = entry.data;
-      if (pipeline->render_pass && mode < 2)
+      if (pipeline->render_pass && (mode < 2 || ordered))
          device->dispatch_table.DestroyRenderPass(device->dispatch_handle,
                                                    pipeline->render_pass, NULL);
       free(pipeline);
@@ -909,8 +931,8 @@ wrapper_DestroyDevice(VkDevice _device, const VkAllocationCallbacks* pAllocator)
             print("-> AVISO: no se encontró wrapper_DestroyDevice en " + path)
 PY
 
-# MESA_VK_WSI_DEBUG=sw,noshm es obligatorio en Bannerlator: sin ello el WSI usa DRI3/DMA-BUF (inexistente en la Mali)
-# y no presenta nada. Se fija por defecto al cargar la librería (antes de wsi_device_init).
+# El WSI necesita el camino sw (buffer + xcb_put_image): sin él usa DRI3/DMA-BUF (inexistente en la Mali) y no presenta.
+# Se fija por defecto al cargar la librería (antes de wsi_device_init); MIT-SHM queda activo (probado).
 python3 - <<'PY'
 path = "src/vulkan/wsi/wsi_common.c"
 try:
@@ -921,7 +943,7 @@ if t is not None:
     snippet = r'''
 
 /* --- camino de presentación por defecto del wrapper: sw (buffer + xcb_put_image) ---
- * WRAPPER_WSI_NATIVE=1 desactiva este ajuste; WRAPPER_WSI_SHM=1 quita "noshm" (probar MIT-SHM). */
+ * WRAPPER_WSI_NATIVE=1 desactiva este ajuste; WRAPPER_WSI_NOSHM=1 añade "noshm" (sin MIT-SHM). */
 #include <stdlib.h>
 #include <string.h>
 __attribute__((constructor(101)))
@@ -931,8 +953,8 @@ wsi_default_env_init(void)
    const char *native = getenv("WRAPPER_WSI_NATIVE");
    if (native && atoi(native))
       return;
-   const char *shm = getenv("WRAPPER_WSI_SHM");
-   const int want_noshm = !(shm && atoi(shm));
+   const char *noshm_env = getenv("WRAPPER_WSI_NOSHM");
+   const int want_noshm = noshm_env && atoi(noshm_env);
    const char *cur = getenv("MESA_VK_WSI_DEBUG");
    char buf[256];
    snprintf(buf, sizeof(buf), "%s", cur ? cur : "");
@@ -951,7 +973,7 @@ wsi_default_env_init(void)
         print("-> entorno WSI por defecto ya aplicado")
     else:
         open(path, "a").write(snippet)
-        print("-> MESA_VK_WSI_DEBUG=sw,noshm por defecto en " + path)
+        print("-> MESA_VK_WSI_DEBUG=sw por defecto (MIT-SHM activo) en " + path)
 PY
 
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
