@@ -737,15 +737,15 @@ if t is not None:
  * WRAPPER_DESTROY_MODE (la Mali aborta al liberar la memoria ANTES que los buffers enlazados a ella):
  *   0  limpieza antigua (memoria, buffers, imágenes, fences): reproduce el abort
  *   1  igual que 0, pero sin llamar a vkFreeCommandBuffers del driver
- *   2  (defecto, probado) no destruye hijos; solo vkDestroyDevice, que los libera él
+ *   2  no destruye hijos; solo vkDestroyDevice, que los libera él (alternativa probada)
  *   3  no llama ni a vkDestroyDevice del driver (fuga a propósito; el proceso está terminando)
- *   4  limpieza ordenada: cmdbufs, fences, buffers, imágenes y por último la memoria */
+ *   4  (defecto, probado) limpieza ordenada: cmdbufs, fences, buffers, imágenes y la memoria al final */
 static int
 wrapper_destroy_mode(void)
 {
    static int mode = -1;
    if (mode == -1)
-      mode = getenv("WRAPPER_DESTROY_MODE") ? atoi(getenv("WRAPPER_DESTROY_MODE")) : 2;
+      mode = getenv("WRAPPER_DESTROY_MODE") ? atoi(getenv("WRAPPER_DESTROY_MODE")) : 4;
    return mode;
 }
 
@@ -996,6 +996,98 @@ if t is not None:
         print("-> mem->alloc: ya no se pasa el allocator de Mesa al FreeMemory del driver")
     else:
         print("-> AVISO: no se encontro mem->alloc en " + path)
+PY
+
+# Perfilado de la presentación (WRAPPER_PROF=1 + WRAPPER_DIAG=1): tiempo medio por fase cada 120 presents.
+python3 - <<'PY'
+path = "src/vulkan/wsi/wsi_common.c"
+try:
+    t = open(path).read()
+except FileNotFoundError:
+    t = None
+if t is not None:
+    helper = r"""
+/* --- perfilado de vkQueuePresentKHR (WRAPPER_PROF=1) --- */
+static int
+wsi_prof_enabled(void)
+{
+   static int on = -1;
+   if (on < 0)
+      on = getenv("WRAPPER_PROF") ? atoi(getenv("WRAPPER_PROF")) : 0;
+   return on;
+}
+
+static uint64_t
+wsi_prof_now(void)
+{
+   struct timespec ts;
+   if (!wsi_prof_enabled())
+      return 0;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void
+wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
+{
+   static uint64_t last_end, n, a_gap, a_thr, a_sub, a_wait, a_put, a_tot, win0;
+   if (!wsi_prof_enabled())
+      return;
+   uint64_t t3 = wsi_prof_now();
+   if (!n)
+      win0 = t0;
+   if (last_end)
+      a_gap += t0 - last_end;
+   a_thr += t1 - t0;
+   a_sub += t2 - t1;
+   a_wait += tw;
+   a_put += tp;
+   a_tot += t3 - t0;
+   last_end = t3;
+   if (++n == 120) {
+      double f = 1e-6 / (double)n;   /* ns -> ms por frame */
+      fprintf(stderr,
+         "[PROF] fps=%.1f | app/entre_presents=%.2fms | throttle=%.2fms submit=%.2fms"
+         " espera_blit=%.2fms put_image=%.2fms | present_total=%.2fms\n",
+         (double)n * 1e9 / (double)(t3 - win0), a_gap * f, a_thr * f, a_sub * f,
+         a_wait * f, a_put * f, a_tot * f);
+      n = a_gap = a_thr = a_sub = a_wait = a_put = a_tot = 0;
+   }
+}
+
+"""
+    edits = [
+      ("VkResult\nwsi_common_queue_present(const struct wsi_device *wsi,",
+       helper + "VkResult\nwsi_common_queue_present(const struct wsi_device *wsi,", False),
+      ("   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n",
+       "   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n"
+       "   uint64_t _p_t0 = wsi_prof_now(), _p_t1 = 0, _p_t2 = 0, _p_tw = 0, _p_tp = 0;\n", False),
+      ("   /* Gather up all the semaphores we need to wait on */\n",
+       "   _p_t1 = wsi_prof_now();\n   /* Gather up all the semaphores we need to wait on */\n", False),
+      ("   /* Now do blits on any blit queues */\n",
+       "   _p_t2 = wsi_prof_now();\n   /* Now do blits on any blit queues */\n", False),
+      ("      if (wsi->sw) {\n         wsi->WaitForFences(",
+       "      uint64_t _pw0 = wsi_prof_now();\n      if (wsi->sw) {\n         wsi->WaitForFences(", False),
+      ("      const VkPresentRegionKHR *region = NULL;\n",
+       "      _p_tw += wsi_prof_now() - _pw0;\n      const VkPresentRegionKHR *region = NULL;\n", False),
+      ("      results[i] = swapchain->queue_present(swapchain, image_index,",
+       "      uint64_t _pp0 = wsi_prof_now();\n      results[i] = swapchain->queue_present(swapchain, image_index,", False),
+      ("      if (results[i] != VK_SUCCESS && results[i] != VK_SUBOPTIMAL_KHR)\n",
+       "      _p_tp += wsi_prof_now() - _pp0;\n      if (results[i] != VK_SUCCESS && results[i] != VK_SUBOPTIMAL_KHR)\n", False),
+      ("   STACK_ARRAY_FINISH(results);\n",
+       "   wsi_prof_frame(_p_t0, _p_t1, _p_t2, _p_tw, _p_tp);\n   STACK_ARRAY_FINISH(results);\n", False),
+    ]
+    if "wsi_prof_frame" in t:
+        print("-> perfilado WSI ya aplicado")
+    else:
+        missing = [e[0].strip().splitlines()[0][:60] for e in edits if t.count(e[0]) != 1]
+        if missing:
+            print("-> AVISO: anclas del perfilado no encontradas (o repetidas): %s" % missing)
+        else:
+            for old, new, _ in edits:
+                t = t.replace(old, new, 1)
+            open(path, "w").write(t)
+            print("-> perfilado WRAPPER_PROF aplicado en " + path)
 PY
 
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
