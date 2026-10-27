@@ -998,7 +998,7 @@ if t is not None:
         print("-> AVISO: no se encontro mem->alloc en " + path)
 PY
 
-# Perfilado de la presentación (WRAPPER_PROF=1 + WRAPPER_DIAG=1): tiempo medio por fase cada 120 presents.
+# Perfilado de la presentación (activo con WRAPPER_DIAG=1, o WRAPPER_PROF=1): tiempo medio por fase cada 60 presents.
 python3 - <<'PY'
 path = "src/vulkan/wsi/wsi_common.c"
 try:
@@ -1013,7 +1013,8 @@ wsi_prof_enabled(void)
 {
    static int on = -1;
    if (on < 0)
-      on = getenv("WRAPPER_PROF") ? atoi(getenv("WRAPPER_PROF")) : 0;
+      on = getenv("WRAPPER_PROF") ? atoi(getenv("WRAPPER_PROF")) :
+           (getenv("WRAPPER_DIAG") ? atoi(getenv("WRAPPER_DIAG")) : 0);
    return on;
 }
 
@@ -1034,6 +1035,11 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
    if (!wsi_prof_enabled())
       return;
    uint64_t t3 = wsi_prof_now();
+   static int announced;
+   if (!announced) {
+      announced = 1;
+      WSI_TRACE("[PROF] perfilado activo (informe cada 60 presents)\n");
+   }
    if (!n)
       win0 = t0;
    if (last_end)
@@ -1044,9 +1050,9 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
    a_put += tp;
    a_tot += t3 - t0;
    last_end = t3;
-   if (++n == 120) {
+   if (++n == 60) {
       double f = 1e-6 / (double)n;   /* ns -> ms por frame */
-      fprintf(stderr,
+      WSI_TRACE(
          "[PROF] fps=%.1f | app/entre_presents=%.2fms | throttle=%.2fms submit=%.2fms"
          " espera_blit=%.2fms put_image=%.2fms | present_total=%.2fms\n",
          (double)n * 1e9 / (double)(t3 - win0), a_gap * f, a_thr * f, a_sub * f,
