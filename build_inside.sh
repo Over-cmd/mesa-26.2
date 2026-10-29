@@ -1067,7 +1067,9 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
        helper + "VkResult\nwsi_common_queue_present(const struct wsi_device *wsi,", False),
       ("   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n",
        "   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n"
-       "   uint64_t _p_t0 = wsi_prof_now(), _p_t1 = 0, _p_t2 = 0, _p_tw = 0, _p_tp = 0;\n", False),
+       "   uint64_t _p_t0 = wsi_prof_now(), _p_t1 = 0, _p_t2 = 0, _p_tw = 0, _p_tp = 0;\n"
+       "   { static unsigned _pc; if (_pc == 0 || ((_pc + 1) % 60) == 0) WSI_TRACE(\"[PROF] present #%u hook ok (WRAPPER_PROF=%s)\\n\", _pc + 1, getenv(\"WRAPPER_PROF\") ? getenv(\"WRAPPER_PROF\") : \"(unset)\"); _pc++; }\n", False),
+      ("wsi-build=prof2 real=%p", "wsi-build=prof2+hook real=%p", False),
       ("   /* Gather up all the semaphores we need to wait on */\n",
        "   _p_t1 = wsi_prof_now();\n   /* Gather up all the semaphores we need to wait on */\n", False),
       ("   /* Now do blits on any blit queues */\n",
