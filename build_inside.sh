@@ -710,7 +710,7 @@ wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
     hook_old = "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE("
     hook_new = ("   wsi_real_QueueSubmit = (PFN_vkQueueSubmit)proc_addr(pdevice, \"vkQueueSubmit\");\n"
                 "   wsi->QueueSubmit2 = wsi_compat_queue_submit2;\n"
-                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
+                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
     if "wsi_compat_queue_submit2" in t:
         print("-> compat QueueSubmit2 ya aplicado")
     elif anchor in t and hook_old in t:
