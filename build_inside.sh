@@ -710,7 +710,7 @@ wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
     hook_old = "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE("
     hook_new = ("   wsi_real_QueueSubmit = (PFN_vkQueueSubmit)proc_addr(pdevice, \"vkQueueSubmit\");\n"
                 "   wsi->QueueSubmit2 = wsi_compat_queue_submit2;\n"
-                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r6 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
+                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r7 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
     if "wsi_compat_queue_submit2" in t:
         print("-> compat QueueSubmit2 ya aplicado")
     elif anchor in t and hook_old in t:
@@ -1067,12 +1067,8 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
        helper + "VkResult\nwsi_common_queue_present(const struct wsi_device *wsi,", False),
       ("   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n",
        "   uint32_t current_frame = p_atomic_fetch_add(&dev->current_frame, 1);\n"
-       "   uint64_t _p_t0 = wsi_prof_now(), _p_t1 = 0, _p_t2 = 0, _p_tw = 0, _p_tp = 0;\n"
+       "   uint64_t _p_t0 = wsi_prof_now(), _p_t1 = _p_t0, _p_t2 = _p_t0, _p_tw = 0, _p_tp = 0;\n"
        "   { static unsigned _pc; if (_pc == 0 || ((_pc + 1) % 60) == 0) WSI_TRACE(\"[PROF] present #%u hook ok (WRAPPER_PROF=%s)\\n\", _pc + 1, getenv(\"WRAPPER_PROF\") ? getenv(\"WRAPPER_PROF\") : \"(unset)\"); _pc++; }\n", False),
-      ("   /* Gather up all the semaphores we need to wait on */\n",
-       "   _p_t1 = wsi_prof_now();\n   /* Gather up all the semaphores we need to wait on */\n", False),
-      ("   /* Now do blits on any blit queues */\n",
-       "   _p_t2 = wsi_prof_now();\n   /* Now do blits on any blit queues */\n", False),
       ("      if (wsi->sw) {\n         wsi->WaitForFences(",
        "      uint64_t _pw0 = wsi_prof_now();\n      if (wsi->sw) {\n         wsi->WaitForFences(", False),
       ("      const VkPresentRegionKHR *region = NULL;\n",
@@ -1085,13 +1081,28 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
        "   wsi_prof_frame(_p_t0, _p_t1, _p_t2, _p_tw, _p_tp);\n   STACK_ARRAY_FINISH(results);\n", False),
     ]
     t = t.replace("\r\n", "\n")
-    stamp = "rev=r6 real=%p"
+    stamp = "rev=r7 real=%p"
     if "wsi_prof_frame" in t:
         print("-> perfilado WSI ya aplicado")
     else:
+        def pick(alts, stmt):
+            for anchor in alts:
+                if t.count(anchor) == 1:
+                    return (anchor, stmt + anchor, False)
+            return None
+        opt = [
+            pick(["   /* Gather up all the semaphores we need to wait on */\n",
+                  "   STACK_ARRAY(VkSemaphoreSubmitInfo, semaphore_wait_infos,"],
+                 "   _p_t1 = wsi_prof_now();\n"),
+            pick(["   /* Now do blits on any blit queues */\n",
+                  "   /* Finally, we can present */\n",
+                  "   const VkPresentRegionKHR *regions =\n"],
+                 "   _p_t2 = wsi_prof_now();\n"),
+        ]
+        edits = edits + [o for o in opt if o]
         missing = [n for n, e in enumerate(edits) if t.count(e[0]) != 1]
         if missing:
-            tag = "rev=r6+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
+            tag = "rev=r7+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
             t = t.replace(stamp, tag, 1)
             open(path, "w").write(t)
             print("-> AVISO: anclas del perfilado no encontradas (indices %s): %s" %
@@ -1099,7 +1110,8 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
         else:
             for old, new, _ in edits:
                 t = t.replace(old, new, 1)
-            t = t.replace(stamp, "rev=r6+hook real=%p", 1)
+            sfx = "+hook" + ("-nt1" if opt[0] is None else "") + ("-nt2" if opt[1] is None else "")
+            t = t.replace(stamp, "rev=r7" + sfx + " real=%p", 1)
             open(path, "w").write(t)
             print("-> perfilado WRAPPER_PROF aplicado en " + path)
 PY
