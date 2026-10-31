@@ -710,7 +710,7 @@ wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
     hook_old = "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE("
     hook_new = ("   wsi_real_QueueSubmit = (PFN_vkQueueSubmit)proc_addr(pdevice, \"vkQueueSubmit\");\n"
                 "   wsi->QueueSubmit2 = wsi_compat_queue_submit2;\n"
-                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r7 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
+                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r8 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
     if "wsi_compat_queue_submit2" in t:
         print("-> compat QueueSubmit2 ya aplicado")
     elif anchor in t and hook_old in t:
@@ -1012,9 +1012,14 @@ static int
 wsi_prof_enabled(void)
 {
    static int on = -1;
-   if (on < 0)
-      on = getenv("WRAPPER_PROF") ? atoi(getenv("WRAPPER_PROF")) :
-           (getenv("WRAPPER_DIAG") ? atoi(getenv("WRAPPER_DIAG")) : 0);
+   if (on < 0) {
+      const char *e = getenv("WRAPPER_PROF");
+      if (e)
+         on = atoi(e) > 0 || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y' ||
+              ((e[0] == 'o' || e[0] == 'O') && (e[1] == 'n' || e[1] == 'N'));
+      else
+         on = getenv("WRAPPER_DIAG") ? atoi(getenv("WRAPPER_DIAG")) > 0 : 0;
+   }
    return on;
 }
 
@@ -1044,8 +1049,8 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
       win0 = t0;
    if (last_end)
       a_gap += t0 - last_end;
-   a_thr += t1 - t0;
-   a_sub += t2 - t1;
+   a_thr += t1 > t0 ? t1 - t0 : 0;
+   a_sub += t2 > t1 ? t2 - t1 : 0;
    a_wait += tw;
    a_put += tp;
    a_tot += t3 - t0;
@@ -1081,7 +1086,7 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
        "   wsi_prof_frame(_p_t0, _p_t1, _p_t2, _p_tw, _p_tp);\n   STACK_ARRAY_FINISH(results);\n", False),
     ]
     t = t.replace("\r\n", "\n")
-    stamp = "rev=r7 real=%p"
+    stamp = "rev=r8 real=%p"
     if "wsi_prof_frame" in t:
         print("-> perfilado WSI ya aplicado")
     else:
@@ -1102,7 +1107,7 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
         edits = edits + [o for o in opt if o]
         missing = [n for n, e in enumerate(edits) if t.count(e[0]) != 1]
         if missing:
-            tag = "rev=r7+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
+            tag = "rev=r8+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
             t = t.replace(stamp, tag, 1)
             open(path, "w").write(t)
             print("-> AVISO: anclas del perfilado no encontradas (indices %s): %s" %
@@ -1111,7 +1116,7 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
             for old, new, _ in edits:
                 t = t.replace(old, new, 1)
             sfx = "+hook" + ("-nt1" if opt[0] is None else "") + ("-nt2" if opt[1] is None else "")
-            t = t.replace(stamp, "rev=r7" + sfx + " real=%p", 1)
+            t = t.replace(stamp, "rev=r8" + sfx + " real=%p", 1)
             open(path, "w").write(t)
             print("-> perfilado WRAPPER_PROF aplicado en " + path)
 PY
