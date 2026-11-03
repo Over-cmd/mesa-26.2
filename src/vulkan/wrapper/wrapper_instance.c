@@ -28,11 +28,14 @@ const struct vk_instance_extension_table wrapper_instance_extensions = {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
    .KHR_android_surface = true,
 #endif
+/* Desactivadas explícitamente para evitar conflictos con el socket X11 en entornos móviles/Mali */
+#if 0
 #ifdef VK_USE_PLATFORM_XCB_KHR
-   .KHR_xcb_surface = true,
+   .KHR_xcb_surface = false,
 #endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
-   .KHR_xlib_surface = true,
+   .KHR_xlib_surface = false,
+#endif
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    .KHR_wayland_surface = true,
@@ -192,6 +195,11 @@ static VkResult wrapper_vulkan_init()
       }
       if (idx >= VK_INSTANCE_EXTENSION_COUNT)
          continue;
+      
+      // Filtrado duro de extensiones X11 para que el soporte nativo no intente engancharlas
+      if (strstr(props[i].extensionName, "xlib") || strstr(props[i].extensionName, "xcb"))
+         continue;
+
       supported_instance_extensions->extensions[idx] = true;
    }
 
@@ -282,7 +290,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.enumerate = enumerate_physical_device;
    instance->vk.physical_devices.destroy = destroy_physical_device;
 
-   // Recopilar extensiones y filtrar las incompatibles con Mali (xlib, xcb, portability)
+   // Recopilar extensiones y asegurar el bloqueo estricto de xlib, xcb y portability
    for (int idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++) {
       if (!wrapper_instance_extensions.extensions[idx])
          continue;
@@ -303,7 +311,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    if (wrapper_create_info.pApplicationInfo) {
       wrapper_application_info = *wrapper_create_info.pApplicationInfo;
-      // Limitar versión de API a 1.1 para evitar fallos de incompatibilidad en Mali-G52
+      // Limitar versión de API a 1.1 para garantizar estabilidad absoluta en Mali-G52
       if (wrapper_application_info.apiVersion > VK_API_VERSION_1_1) {
          wrapper_application_info.apiVersion = VK_API_VERSION_1_1;
       }
@@ -370,12 +378,14 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       }
    }
 
-   // Filtrado estricto final para asegurar que solo pasen extensiones válidas
+   // Filtrado estricto final secundario para prevenir cualquier valor nulo o no deseado
    const char *filtered_extensions[VK_INSTANCE_EXTENSION_COUNT];
    uint32_t filtered_count = 0;
    for (uint32_t i = 0; i < wrapper_enable_extension_count; i++) {
       if (wrapper_enable_extensions[i]) {
-         filtered_extensions[filtered_count++] = wrapper_enable_extensions[i];
+         if (!strstr(wrapper_enable_extensions[i], "xlib") && !strstr(wrapper_enable_extensions[i], "xcb")) {
+            filtered_extensions[filtered_count++] = wrapper_enable_extensions[i];
+         }
       }
    }
 
