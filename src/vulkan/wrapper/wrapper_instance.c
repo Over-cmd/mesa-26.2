@@ -282,15 +282,19 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.enumerate = enumerate_physical_device;
    instance->vk.physical_devices.destroy = destroy_physical_device;
 
+   // Recopilar extensiones y filtrar las incompatibles con Mali (xlib, xcb, portability)
    for (int idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++) {
-      if (wrapper_instance_extensions.extensions[idx])
+      if (!wrapper_instance_extensions.extensions[idx])
          continue;
 
       if (!instance->vk.enabled_extensions.extensions[idx])
          continue;
 
-      wrapper_enable_extensions[wrapper_enable_extension_count++] =
-         vk_instance_extensions[idx].extensionName;
+      const char *ext_name = vk_instance_extensions[idx].extensionName;
+      if (ext_name && (strstr(ext_name, "xlib") || strstr(ext_name, "xcb") || strstr(ext_name, "portability")))
+         continue;
+
+      wrapper_enable_extensions[wrapper_enable_extension_count++] = ext_name;
    }
 
    set_wrapper_required_extensions(&instance->vk,
@@ -299,7 +303,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    if (wrapper_create_info.pApplicationInfo) {
       wrapper_application_info = *wrapper_create_info.pApplicationInfo;
-      // Limitar la versión de la API para evitar conflictos de incompatibilidad en hardware antiguo/Mali
+      // Limitar versión de API a 1.1 para evitar fallos de incompatibilidad en Mali-G52
       if (wrapper_application_info.apiVersion > VK_API_VERSION_1_1) {
          wrapper_application_info.apiVersion = VK_API_VERSION_1_1;
       }
@@ -307,7 +311,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       wrapper_application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
       wrapper_application_info.pApplicationName = "wrapper";
       wrapper_application_info.pEngineName = "wrapper";
-      enumerate_instance_version(&wrapper_application_info.apiVersion);
+      wrapper_application_info.apiVersion = VK_API_VERSION_1_1;
    }
       
    wrapper_create_info.pApplicationInfo = &wrapper_application_info;
@@ -366,7 +370,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       }
    }
 
-   // Filtrado seguro de extensiones habilitadas para prevenir rechazos del driver base
+   // Filtrado estricto final para asegurar que solo pasen extensiones válidas
    const char *filtered_extensions[VK_INSTANCE_EXTENSION_COUNT];
    uint32_t filtered_count = 0;
    for (uint32_t i = 0; i < wrapper_enable_extension_count; i++) {
