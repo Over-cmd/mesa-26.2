@@ -1121,6 +1121,88 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
             print("-> perfilado WRAPPER_PROF aplicado en " + path)
 PY
 
+# vkCreateInstance -> VK_ERROR_INCOMPATIBLE_DRIVER (-9) con apps Vulkan nativas (AIO Graphics Test --cube vk):
+# el wrapper reenviaba al Vulkan de Android el apiVersion pedido por la app; si es mayor que el del driver
+# (Mali: 1.1) algunos loaders de Android lo rechazan. Se limita a la versión del driver (WRAPPER_NO_APICLAMP=1
+# lo desactiva) y, con WRAPPER_DIAG=1, se traza cada paso en el log de Wine con el prefijo [WRAPPER_INST].
+python3 - <<'PY'
+import glob
+done = False
+for path in sorted(glob.glob("src/vulkan/wrapper/*.c")):
+    t = open(path).read()
+    if "wrapper_CreateInstance(" not in t or "set_wrapper_required_extensions" not in t:
+        continue
+    if "[WRAPPER_INST]" in t:
+        print("-> CreateInstance ya parcheado: " + path)
+        done = True
+        break
+    edits = [
+      ("   result = wrapper_vulkan_init();\n   if (result != VK_SUCCESS)\n      return vk_error(NULL, result);\n\n   instance = vk_zalloc2(",
+       """   if (wrapper_diag_on()) {
+      const VkApplicationInfo *ai = pCreateInfo->pApplicationInfo;
+      fprintf(stderr, "[WRAPPER_INST] vkCreateInstance: app='%s' engine='%s' apiVersion=%u.%u.%u exts=%u layers=%u\\n",
+              ai && ai->pApplicationName ? ai->pApplicationName : "",
+              ai && ai->pEngineName ? ai->pEngineName : "",
+              ai ? VK_VERSION_MAJOR(ai->apiVersion) : 0, ai ? VK_VERSION_MINOR(ai->apiVersion) : 0,
+              ai ? VK_VERSION_PATCH(ai->apiVersion) : 0,
+              pCreateInfo->enabledExtensionCount, pCreateInfo->enabledLayerCount);
+      for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++)
+         fprintf(stderr, "[WRAPPER_INST]   ext %s\\n", pCreateInfo->ppEnabledExtensionNames[i]);
+      for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount; i++)
+         fprintf(stderr, "[WRAPPER_INST]   layer %s\\n", pCreateInfo->ppEnabledLayerNames[i]);
+   }
+
+   result = wrapper_vulkan_init();
+   if (wrapper_diag_on())
+      fprintf(stderr, "[WRAPPER_INST] wrapper_vulkan_init -> %d\\n", result);
+   if (result != VK_SUCCESS)
+      return vk_error(NULL, result);
+
+   instance = vk_zalloc2("""),
+      ('      WRAPPER_LOG(error, "Failed to init instance, res %d", result);',
+       '      if (wrapper_diag_on())\n         fprintf(stderr, "[WRAPPER_INST] vk_instance_init -> %d\\n", result);\n'
+       '      WRAPPER_LOG(error, "Failed to init instance, res %d", result);'),
+      ("   wrapper_create_info.pApplicationInfo = &wrapper_application_info;\n",
+       """   {
+      uint32_t drv_ver = VK_API_VERSION_1_0;
+      static int noclamp = -1;
+      if (noclamp < 0)
+         noclamp = getenv("WRAPPER_NO_APICLAMP") ? atoi(getenv("WRAPPER_NO_APICLAMP")) : 0;
+      if (enumerate_instance_version)
+         enumerate_instance_version(&drv_ver);
+      const bool clamp = !noclamp && wrapper_application_info.apiVersion > drv_ver;
+      if (wrapper_diag_on())
+         fprintf(stderr, "[WRAPPER_INST] app apiVersion=%u.%u.%u driver instance=%u.%u.%u%s\\n",
+                 VK_VERSION_MAJOR(wrapper_application_info.apiVersion),
+                 VK_VERSION_MINOR(wrapper_application_info.apiVersion),
+                 VK_VERSION_PATCH(wrapper_application_info.apiVersion),
+                 VK_VERSION_MAJOR(drv_ver), VK_VERSION_MINOR(drv_ver), VK_VERSION_PATCH(drv_ver),
+                 clamp ? " -> se limita a la del driver" : "");
+      if (clamp)
+         wrapper_application_info.apiVersion = drv_ver;
+   }
+   wrapper_create_info.pApplicationInfo = &wrapper_application_info;
+"""),
+      ('      WRAPPER_LOG(error, "Failed driver createInstance, res %d", result);',
+       '      if (wrapper_diag_on())\n         fprintf(stderr, "[WRAPPER_INST] driver vkCreateInstance -> %d\\n", result);\n'
+       '      WRAPPER_LOG(error, "Failed driver createInstance, res %d", result);'),
+    ]
+    missing = [e[0].strip().splitlines()[0][:60] for e in edits if t.count(e[0]) != 1]
+    if missing:
+        print("-> AVISO: anclas de CreateInstance no encontradas en %s: %s" % (path, missing))
+    else:
+        for old, new in edits:
+            t = t.replace(old, new, 1)
+        if "#include <stdio.h>" not in t:
+            t = "#include <stdio.h>\n#include <stdlib.h>\n" + t
+        open(path, "w").write(t)
+        print("-> CreateInstance parcheado (clamp de apiVersion + trazas) en " + path)
+    done = True
+    break
+if not done:
+    print("-> AVISO: no se encontró wrapper_CreateInstance en src/vulkan/wrapper/*.c")
+PY
+
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
 # (si tu copia local del header no está en el repo, el CI compila con otra versión).
 python3 - <<'PY'
