@@ -1121,7 +1121,8 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
             print("-> perfilado WRAPPER_PROF aplicado en " + path)
 PY
 
-# vkCreateInstance -> VK_ERROR_INCOMPATIBLE_DRIVER (-9) con apps Vulkan nativas (AIO Graphics Test --cube vk):
+# vkCreateInstance -> -9 (el loader descarta el ICD) con apps Vulkan nativas (AIO Graphics Test --cube vk): el driver de Android
+# devolvía -7 (extensión no presente) porque se le reenviaba VK_KHR_portability_enumeration.
 # el wrapper reenviaba al Vulkan de Android el apiVersion pedido por la app; si es mayor que el del driver
 # (Mali: 1.1) algunos loaders de Android lo rechazan. Se limita a la versión del driver (WRAPPER_NO_APICLAMP=1
 # lo desactiva) y, con WRAPPER_DIAG=1, se traza cada paso en el log de Wine con el prefijo [WRAPPER_INST].
@@ -1182,6 +1183,38 @@ for path in sorted(glob.glob("src/vulkan/wrapper/*.c")):
          wrapper_application_info.apiVersion = drv_ver;
    }
    wrapper_create_info.pApplicationInfo = &wrapper_application_info;
+"""),
+      ("   wrapper_create_info.enabledExtensionCount = wrapper_enable_extension_count;\n",
+       """   {
+      /* El wrapper marca como soportadas TODAS las extensiones de instancia en 64 bits; al driver de Android solo
+       * se le reenvían las que él enumera (p.ej. VK_KHR_portability_enumeration daba VK_ERROR_EXTENSION_NOT_PRESENT). */
+      static int nofilter = -1;
+      if (nofilter < 0)
+         nofilter = getenv("WRAPPER_NO_EXTFILTER") ? atoi(getenv("WRAPPER_NO_EXTFILTER")) : 0;
+      uint32_t dn = 0;
+      if (!nofilter && enumerate_instance_extension_properties(NULL, &dn, NULL) == VK_SUCCESS && dn) {
+         VkExtensionProperties *dprops = malloc(sizeof(*dprops) * dn);
+         if (dprops && enumerate_instance_extension_properties(NULL, &dn, dprops) == VK_SUCCESS) {
+            uint32_t kept = 0;
+            for (uint32_t i = 0; i < wrapper_enable_extension_count; i++) {
+               bool ok = false;
+               for (uint32_t j = 0; j < dn; j++) {
+                  if (!strcmp(wrapper_enable_extensions[i], dprops[j].extensionName)) { ok = true; break; }
+               }
+               if (ok)
+                  wrapper_enable_extensions[kept++] = wrapper_enable_extensions[i];
+               else if (wrapper_diag_on())
+                  fprintf(stderr, "[WRAPPER_INST] extension no soportada por el driver, no se reenvia: %s\\n",
+                          wrapper_enable_extensions[i]);
+            }
+            wrapper_enable_extension_count = kept;
+         }
+         free(dprops);
+      }
+      /* VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR solo es valido con esa extension, que el driver no tiene. */
+      wrapper_create_info.flags &= ~0x00000001u;
+   }
+   wrapper_create_info.enabledExtensionCount = wrapper_enable_extension_count;
 """),
       ('      WRAPPER_LOG(error, "Failed driver createInstance, res %d", result);',
        '      if (wrapper_diag_on())\n         fprintf(stderr, "[WRAPPER_INST] driver vkCreateInstance -> %d\\n", result);\n'
