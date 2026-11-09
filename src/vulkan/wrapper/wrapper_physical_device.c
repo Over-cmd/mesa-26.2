@@ -1,5 +1,10 @@
 #include <math.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <strings.h>
 
 #include "wrapper_private.h"
 #include "wrapper_log.h"
@@ -20,52 +25,14 @@ static uint32_t
 parse_vk_version_from_env()
 {
    uint32_t apiVersion = 0, major = 0, minor = 0, patch = 0;
-
    const char *wrapper_vk_version = getenv("WRAPPER_VK_VERSION");
 
    if (wrapper_vk_version) {
-      sscanf(wrapper_vk_version, "%d.%d.%d", &major, &minor, &patch);
+      sscanf(wrapper_vk_version, "%u.%u.%u", &major, &minor, &patch);
       apiVersion = VK_MAKE_VERSION(major, minor, patch);
    }
 
    return apiVersion;
-}
-
-static void
-wrapper_filter_enabled_extensions(const struct wrapper_device *device,
-                                  uint32_t *enable_extension_count,
-                                  const char **enable_extensions)
-{
-   for (int idx = 0; idx < VK_DEVICE_EXTENSION_COUNT; idx++) {
-      if (!device->vk.enabled_extensions.extensions[idx])
-         continue;
-
-      if (!device->physical->base_supported_extensions.extensions[idx])
-         continue;
-
-      if (wrapper_device_extensions.extensions[idx])
-         continue;
-
-      if (wrapper_filter_extensions.extensions[idx])
-         continue;
-
-      enable_extensions[(*enable_extension_count)++] =
-         vk_device_extensions[idx].extensionName;
-   }
-
-   if (device->vk.enabled_extensions.EXT_vertex_attribute_divisor &&
-       !device->vk.enabled_extensions.KHR_vertex_attribute_divisor &&
-       device->physical->base_supported_extensions.KHR_vertex_attribute_divisor) {
-      enable_extensions[(*enable_extension_count)++] =
-         "VK_KHR_vertex_attribute_divisor";
-   }
-
-   if (device->vk.enabled_extensions.KHR_vertex_attribute_divisor &&
-       !device->vk.enabled_extensions.EXT_vertex_attribute_divisor &&
-       device->physical->base_supported_extensions.EXT_vertex_attribute_divisor) {
-      enable_extensions[(*enable_extension_count)++] =
-         "VK_EXT_vertex_attribute_divisor";
-   }
 }
 
 static void
@@ -81,6 +48,7 @@ wrapper_apply_device_extension_blacklist(struct wrapper_physical_device *physica
         extension = strtok_r(NULL, ",", &save)) {
       for (int i = 0; i < VK_DEVICE_EXTENSION_COUNT; i++) {
          if (strcmp(extension, vk_device_extensions[i].extensionName) == 0) {
+            WRAPPER_LOG(info, "Blacklisting extension %s", extension);
             physical_device->vk.supported_extensions.extensions[i] = false;
          }
       }
@@ -103,7 +71,6 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
    static int wrapper_disable_placed = -1;
    static int wrapper_dmaheap_cached = -1;
    static int wrapper_disable_present_wait = -1;
-   static int wrapper_force_swapchain_blit = -1;
    int wrapper_emulate_bcn;
    VkResult result;
 
@@ -111,7 +78,12 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       instance->dispatch_handle, &physical_device_count, NULL);
 
    if (result != VK_SUCCESS) {
+      WRAPPER_LOG(error, "Failed to retrieve physical devices count, res %d", result);
       return result;
+   }
+
+   if (physical_device_count == 0) {
+      return VK_SUCCESS;
    }
 
    physical_devices = malloc(physical_device_count * sizeof(VkPhysicalDevice));
@@ -122,6 +94,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       instance->dispatch_handle, &physical_device_count, physical_devices);
       
    if (result != VK_SUCCESS) {
+      WRAPPER_LOG(error, "Failed to enumerate physical devices, res %d", result);
       free(physical_devices);
       return result;
    }
@@ -169,35 +142,37 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       if (wrapper_disable_present_wait == -1)
          wrapper_disable_present_wait = getenv("WRAPPER_DISABLE_PRESENT_WAIT") && atoi(getenv("WRAPPER_DISABLE_PRESENT_WAIT"));
 
-      if (wrapper_force_swapchain_blit == -1)
-         wrapper_force_swapchain_blit = getenv("WRAPPER_FORCE_SWAPCHAIN_BLIT") ? atoi(getenv("WRAPPER_FORCE_SWAPCHAIN_BLIT")) : 1;
-
       wrapper_setup_device_extensions(pdevice);
       wrapper_apply_device_extension_blacklist(pdevice);
       wrapper_setup_device_features(pdevice);
 
       struct vk_features *supported_features = &pdevice->vk.supported_features;
       pdevice->base_supported_features = *supported_features;
+
       supported_features->presentId = true;
       supported_features->multiViewport = true;
       supported_features->depthClamp = true;
       supported_features->depthBiasClamp = true;
-      if (!wrapper_disable_placed) {
-        pdevice->vk.supported_extensions.EXT_map_memory_placed = true;
-        pdevice->vk.supported_extensions.KHR_map_memory2 = true;
-        supported_features->memoryMapPlaced = true;
-        supported_features->memoryUnmapReserve = true;
-      } else {
-        pdevice->vk.supported_extensions.EXT_map_memory_placed = false;
-        pdevice->vk.supported_extensions.KHR_map_memory2 = false;
-        supported_features->memoryMapPlaced = false;
-        supported_features->memoryUnmapReserve = false;
-      }
       supported_features->textureCompressionBC = true;
       supported_features->fillModeNonSolid = true;
       supported_features->shaderClipDistance = true;
       supported_features->shaderCullDistance = true;
+
+      if (!wrapper_disable_placed) {
+        pdevice->vk.supported_extensions.EXT_map_memory_placed = true;
+        pdevice->vk.supported_extensions.KHR_map_memory2 = true;
+      	supported_features->memoryMapPlaced = true;
+      	supported_features->memoryUnmapReserve = true;
+      } else {
+        WRAPPER_LOG(info, "Disabling VK_EXT_map_memory_placed");
+      	pdevice->vk.supported_extensions.EXT_map_memory_placed = false;
+        pdevice->vk.supported_extensions.KHR_map_memory2 = false;
+      	supported_features->memoryMapPlaced = false;
+      	supported_features->memoryUnmapReserve = false;
+      }
+
       if (wrapper_disable_present_wait) {
+         WRAPPER_LOG(info, "Disabling present wait");
          supported_features->presentWait = false;
          pdevice->vk.supported_extensions.KHR_present_wait = false;
       } else {
@@ -206,14 +181,10 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       supported_features->swapchainMaintenance1 = true;
       supported_features->imageCompressionControlSwapchain = false;
       
-      struct wsi_device_options wsi_options = {
-         .sw_device = false,
-      };
-
       result = wsi_device_init(&pdevice->wsi_device,
                                wrapper_physical_device_to_handle(pdevice),
                                wrapper_wsi_proc_addr, &_instance->alloc, -1,
-                               NULL, &wsi_options);
+                               NULL, &(struct wsi_device_options){});
       if (result != VK_SUCCESS) {
          vk_physical_device_finish(&pdevice->vk);
          vk_free(&_instance->alloc, pdevice);
@@ -236,29 +207,37 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       pdevice->dispatch_table.GetPhysicalDeviceMemoryProperties(
          pdevice->dispatch_handle, &pdevice->memory_properties);
 
+      {
+         uint32_t drv = pdevice->properties2.properties.driverVersion;
+         WRAPPER_LOG(info, "GPU Name: %s", pdevice->properties2.properties.deviceName);
+         WRAPPER_LOG(info, "Driver Version: %d.%d.%d",
+                     VK_VERSION_MAJOR(drv), VK_VERSION_MINOR(drv), VK_VERSION_PATCH(drv));
+      }
+
       const char *app_name = instance->vk.app_info.app_name
          ? instance->vk.app_info.app_name : "wrapper";
-
       const char *engine_name = instance->vk.app_info.engine_name
          ? instance->vk.app_info.engine_name : "wrapper";
       pdevice->wsi_device.engine_name = engine_name;
 
       const uint32_t engine_version = instance->vk.app_info.engine_version;
       const uint32_t driver_version = pdevice->properties2.properties.driverVersion;
-      
+
       if (pdevice->driver_properties.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
          if (strstr(engine_name, "DXVK")) {
+            WRAPPER_LOG(info, "Disabling VK_EXT_line_rasterization");
             pdevice->vk.supported_extensions.EXT_line_rasterization = false;	
             if (engine_version >= VK_MAKE_VERSION(2, 7, 0)) {
+               WRAPPER_LOG(info, "Faking VK_KHR_pipeline_library");
                pdevice->vk.supported_extensions.KHR_pipeline_library = true;
             }
          }
-         
          if (driver_version > VK_MAKE_VERSION(512, 744, 0) &&
              strstr(app_name, "clvk")) {
+            WRAPPER_LOG(info, "Disabling globalPriorityQuery feature");
             supported_features->globalPriorityQuery = false;    
          }
-
+         WRAPPER_LOG(info, "Disabling VK_KHR_shader_float_controls");
          pdevice->vk.supported_extensions.KHR_shader_float_controls = false;
       }
 
@@ -268,10 +247,12 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          bool is_d3d = is_dxvk || is_vkd3d;
          pdevice->is_vkd3d = is_vkd3d;
          if (is_d3d) {
+            WRAPPER_LOG(info, "Faking VK_EXT_robustness2 for engine '%s'", engine_name);
             pdevice->vk.supported_extensions.EXT_robustness2 = true;
             supported_features->robustBufferAccess2 = true;
             supported_features->nullDescriptor = true;
             if (is_dxvk && engine_version >= VK_MAKE_VERSION(2, 7, 0)) {
+               WRAPPER_LOG(info, "Faking VK_KHR_pipeline_library");
                pdevice->vk.supported_extensions.KHR_pipeline_library = true;
             }
             supported_features->extendedDynamicState = true;
@@ -279,10 +260,13 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
             supported_features->dualSrcBlend = true;
             supported_features->multiDrawIndirect = true;
          }
+         WRAPPER_LOG(info, "Spoofing VK_EXT/KHR_vertex_attribute_divisor as supported");
          pdevice->vk.supported_extensions.EXT_vertex_attribute_divisor = true;
          pdevice->vk.supported_extensions.KHR_vertex_attribute_divisor = true;
+         WRAPPER_LOG(info, "Disabling VK_EXT_calibrated_timestamps");
          pdevice->vk.supported_extensions.EXT_calibrated_timestamps = false;
          if (!is_d3d) {
+            WRAPPER_LOG(info, "Disabling VK_EXT_extended_dynamic_state and VK_EXT_extended_dynamic_state2");
             pdevice->vk.supported_extensions.EXT_extended_dynamic_state = false;
             pdevice->vk.supported_extensions.EXT_extended_dynamic_state2 = false;
          }
@@ -293,6 +277,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          pdevice->is_vkd3d = strstr(engine_name, "vkd3d") != NULL;
          if (samsung_d3d &&
              !pdevice->base_supported_extensions.EXT_dynamic_rendering_unused_attachments) {
+            WRAPPER_LOG(info, "Faking VK_EXT_dynamic_rendering_unused_attachments for Xclipse");
             pdevice->vk.supported_extensions.EXT_dynamic_rendering_unused_attachments = true;
          }
       }
@@ -300,6 +285,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       {
          bool is_d3d = strstr(engine_name, "DXVK") || strstr(engine_name, "vkd3d");
          if (is_d3d && !pdevice->base_supported_extensions.KHR_maintenance5) {
+            WRAPPER_LOG(info, "Faking VK_KHR_maintenance5 (base driver lacks it)");
             pdevice->vk.supported_extensions.KHR_maintenance5 = true;
          }
       }
@@ -307,12 +293,12 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       {
          bool is_d3d = strstr(engine_name, "DXVK") || strstr(engine_name, "vkd3d");
          if (is_d3d && !pdevice->base_supported_extensions.KHR_push_descriptor) {
+            WRAPPER_LOG(info, "Faking VK_KHR_push_descriptor (base driver lacks it)");
             pdevice->vk.supported_extensions.KHR_push_descriptor = true;
          }
       }
 
       char *wrapper_emulate_bcn_env = getenv("WRAPPER_EMULATE_BCN");
-
       if (!wrapper_emulate_bcn_env) 
          wrapper_emulate_bcn = 3;
       else 
@@ -321,8 +307,7 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       if (wrapper_emulate_bcn >= 3)  {
          if (pdevice->driver_properties.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
              driver_version >= VK_MAKE_VERSION(512, 530, 0)) {
-            wrapper_emulate_bcn = (pdevice->base_supported_features.textureCompressionBC) ?
-               0 : 1;
+            wrapper_emulate_bcn = (pdevice->base_supported_features.textureCompressionBC) ? 0 : 1;
          } else if (pdevice->driver_properties.driverID == VK_DRIVER_ID_MESA_TURNIP) {
             wrapper_emulate_bcn = 0;
          }
@@ -339,18 +324,17 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
          pdevice->dma_heap_fd = open("/dev/dma_heap/system-uncached", O_RDONLY | O_CLOEXEC);
          
       if (pdevice->dma_heap_fd < 0) {
+         WRAPPER_LOG(info, "dmabuf heap not found, falling back to /dev/ion");
          pdevice->dma_heap_fd = open("/dev/ion", O_RDONLY);
       }
 
       char *wrapper_resource_type = getenv("WRAPPER_RESOURCE_TYPE");
-
       pdevice->resource_type = wrapper_resource_type ? wrapper_resource_type : "auto";
 
       list_addtail(&pdevice->vk.link, &_instance->physical_devices.list);
    }
 
    free(physical_devices);
-
    return VK_SUCCESS;
 }
 
@@ -376,40 +360,17 @@ wrapper_EnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
                                                        pProperties);
 }
 
-VKAPI_ATTR void VKAPI_CALL
-wrapper_GetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice physicalDevice,
-                                               uint32_t *pQueueFamilyPropertyCount,
-                                               VkQueueFamilyProperties *pQueueFamilyProperties)
+static bool wrapper_feature_spoof_enabled(void)
 {
-   VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
-   pdevice->dispatch_table.GetPhysicalDeviceQueueFamilyProperties(
-      pdevice->dispatch_handle, pQueueFamilyPropertyCount, pQueueFamilyProperties);
-
-   if (pQueueFamilyProperties && *pQueueFamilyPropertyCount > 0) {
-      for (uint32_t i = 0; i < *pQueueFamilyPropertyCount; i++) {
-         if (pQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            pQueueFamilyProperties[i].queueFlags |= VK_QUEUE_PRESENT_BIT;
-         }
-      }
+   static int cached = -1;
+   if (cached < 0) {
+      const char *e = getenv("WRAPPER_FEATURE_SPOOF");
+      cached = (e && (e[0] == '0' || !strcasecmp(e, "false") ||
+                      !strcasecmp(e, "off"))) ? 0 : 1;
+      if (getenv("WRAPPER_DIAG"))
+         fprintf(stderr, "[WRAPPER_FEAT] core feature spoof=%d\n", cached);
    }
-}
-
-VKAPI_ATTR void VKAPI_CALL
-wrapper_GetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice,
-                                                uint32_t *pQueueFamilyPropertyCount,
-                                                VkQueueFamilyProperties2 *pQueueFamilyProperties)
-{
-   VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
-   pdevice->dispatch_table.GetPhysicalDeviceQueueFamilyProperties2(
-      pdevice->dispatch_handle, pQueueFamilyPropertyCount, pQueueFamilyProperties);
-
-   if (pQueueFamilyProperties && *pQueueFamilyPropertyCount > 0) {
-      for (uint32_t i = 0; i < *pQueueFamilyPropertyCount; i++) {
-         if (pQueueFamilyProperties[i].queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            pQueueFamilyProperties[i].queueFamilyProperties.queueFlags |= VK_QUEUE_PRESENT_BIT;
-         }
-      }
-   }
+   return cached;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -417,6 +378,8 @@ wrapper_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
                                   VkPhysicalDeviceFeatures* pFeatures) 
 {
    vk_common_GetPhysicalDeviceFeatures(physicalDevice, pFeatures);
+   if (!wrapper_feature_spoof_enabled())
+      return;
 
    pFeatures->textureCompressionBC = true;
    pFeatures->fillModeNonSolid = true;
@@ -452,10 +415,12 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
    if (pdevice->driver_properties.driverID == VK_DRIVER_ID_ARM_PROPRIETARY) {
       vk_foreach_struct(s, pFeatures->pNext) {
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT) {
-            VkPhysicalDeviceRobustness2FeaturesEXT *r2 = (VkPhysicalDeviceRobustness2FeaturesEXT *)s;
-            r2->robustBufferAccess2 = VK_FALSE;
-            r2->robustImageAccess2 = VK_FALSE;
-            r2->nullDescriptor = VK_FALSE;
+            VkPhysicalDeviceRobustness2FeaturesEXT *r2 =
+               (VkPhysicalDeviceRobustness2FeaturesEXT *)s;
+            r2->robustBufferAccess2 = VK_TRUE;
+            r2->nullDescriptor = VK_TRUE;
+            if (pdevice->is_vkd3d)
+               r2->robustImageAccess2 = VK_TRUE;
          }
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT) {
             ((VkPhysicalDeviceExtendedDynamicStateFeaturesEXT *)s)->extendedDynamicState = VK_TRUE;
@@ -464,7 +429,8 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
             ((VkPhysicalDeviceExtendedDynamicState2FeaturesEXT *)s)->extendedDynamicState2 = VK_TRUE;
          }
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT) {
-            VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *vad = (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *)s;
+            VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *vad =
+               (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *)s;
             vad->vertexAttributeInstanceRateDivisor = VK_TRUE;
             vad->vertexAttributeInstanceRateZeroDivisor = VK_TRUE;
          }
@@ -478,7 +444,8 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       vk_foreach_struct(s, pFeatures->pNext) {
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT &&
              pdevice->vk.supported_extensions.EXT_dynamic_rendering_unused_attachments)
-            ((VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT *)s)->dynamicRenderingUnusedAttachments = VK_TRUE;
+            ((VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT *)s)
+               ->dynamicRenderingUnusedAttachments = VK_TRUE;
          if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES &&
              pdevice->vk.supported_extensions.KHR_maintenance5)
             ((VkPhysicalDeviceMaintenance5Features *)s)->maintenance5 = VK_TRUE;
@@ -511,14 +478,12 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
 
    pdevice->vk.supported_extensions.EXT_vertex_attribute_divisor = true;
    pdevice->vk.supported_extensions.KHR_vertex_attribute_divisor = true;
-   pdevice->vk.supported_extensions.EXT_extended_dynamic_state = false;
    pdevice->vk.supported_extensions.EXT_extended_dynamic_state2 = true;
    pdevice->vk.supported_extensions.EXT_vertex_input_dynamic_state = true;
    pdevice->vk.supported_extensions.KHR_sampler_ycbcr_conversion = true;
    pdevice->vk.supported_extensions.KHR_shader_draw_parameters = true;
    pdevice->vk.supported_extensions.EXT_filter_cubic = true;
    pdevice->vk.supported_extensions.EXT_image_robustness = true;
-   pdevice->vk.supported_extensions.EXT_calibrated_timestamps = false;
    pdevice->vk.supported_extensions.EXT_blend_operation_advanced = true;
    pdevice->vk.supported_extensions.EXT_discard_rectangles = true;
    pdevice->vk.supported_extensions.EXT_sample_locations = true;
@@ -531,7 +496,6 @@ wrapper_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
    pdevice->vk.supported_extensions.KHR_separate_depth_stencil_layouts = true;
    pdevice->vk.supported_extensions.KHR_create_renderpass2 = true;
    pdevice->vk.supported_extensions.KHR_depth_stencil_resolve = true;
-   pdevice->vk.supported_extensions.KHR_dynamic_rendering = false;
    pdevice->vk.supported_extensions.KHR_image_format_list = true;
    pdevice->vk.supported_extensions.EXT_color_write_enable = true;
    pdevice->vk.supported_extensions.KHR_shader_float_controls = true;
@@ -546,12 +510,7 @@ wrapper_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
    uint32_t device_id;
    uint32_t vendor_id;
    
-   device_id = getenv("WRAPPER_DEVICE_ID") ? atoi(getenv("WRAPPER_DEVICE_ID")) : 0;
-   vendor_id = getenv("WRAPPER_VENDOR_ID") ? atoi(getenv("WRAPPER_VENDOR_ID")) : 0;
-   
    uint32_t api_version = parse_vk_version_from_env();
-   if (api_version > 0)
-      pProperties->apiVersion = api_version;
    
    VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
    pdevice->dispatch_table.GetPhysicalDeviceProperties(
@@ -605,12 +564,7 @@ wrapper_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
    uint32_t vendor_id;
    uint32_t driver_id;
 
-   device_id = getenv("WRAPPER_DEVICE_ID") ? atoi(getenv("WRAPPER_DEVICE_ID")) : 0;
-   vendor_id = getenv("WRAPPER_VENDOR_ID") ? atoi(getenv("WRAPPER_VENDOR_ID")) : 0;
-
    uint32_t api_version = parse_vk_version_from_env();
-   if (api_version > 0)
-      pProperties->properties.apiVersion = api_version;
 
    VK_FROM_HANDLE(wrapper_physical_device, pdevice, physicalDevice);
    pdevice->dispatch_table.GetPhysicalDeviceProperties2(
@@ -726,7 +680,6 @@ wrapper_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          }
 
          driver_id = getenv("WRAPPER_DRIVER_ID") ? atoi(getenv("WRAPPER_DRIVER_ID")) : 0;
-
          if (driver_id > 0)
          	vk12_prop->driverID = driver_id;
          
@@ -840,7 +793,7 @@ wrapper_GetPhysicalDeviceImageFormatProperties(VkPhysicalDevice physicalDevice,
       else
          pImageFormatProperties->maxArrayLayers = pdevice->properties2.properties.limits.maxImageArrayLayers;
       pImageFormatProperties->sampleCounts = VK_SAMPLE_COUNT_1_BIT;      
-      pImageFormatProperties->maxResourceSize = 562949953421312;
+      pImageFormatProperties->maxResourceSize = 562949953421312ULL;
       return VK_SUCCESS;
    default:
       break;
@@ -848,7 +801,7 @@ wrapper_GetPhysicalDeviceImageFormatProperties(VkPhysicalDevice physicalDevice,
   
    return pdevice->dispatch_table.GetPhysicalDeviceImageFormatProperties(pdevice->dispatch_handle, 
       format, type, tiling, usage, flags, pImageFormatProperties);  
-}	                                           
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL
 wrapper_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
@@ -917,7 +870,7 @@ wrapper_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
       else
          pImageFormatProperties->imageFormatProperties.maxArrayLayers = pdevice->properties2.properties.limits.maxImageArrayLayers;
       pImageFormatProperties->imageFormatProperties.sampleCounts = VK_SAMPLE_COUNT_1_BIT;      
-      pImageFormatProperties->imageFormatProperties.maxResourceSize = 562949953421312;
+      pImageFormatProperties->imageFormatProperties.maxResourceSize = 562949953421312ULL;
       return VK_SUCCESS;
    default:
       break;
@@ -1051,7 +1004,7 @@ wrapper_GetPhysicalDeviceMemoryProperties(VkPhysicalDevice physicalDevice,
       wrapper_vmem_max_size = getenv("WRAPPER_VMEM_MAX_SIZE") ? atoi(getenv("WRAPPER_VMEM_MAX_SIZE")) : 0;
 
    if (wrapper_vmem_max_size > 0)
-      pMemoryProperties->memoryHeaps[0].size = (VkDeviceSize)wrapper_vmem_max_size * 1048576;
+      pMemoryProperties->memoryHeaps[0].size = (VkDeviceSize)wrapper_vmem_max_size * 1048576ULL;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1071,7 +1024,7 @@ wrapper_GetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
       wrapper_vmem_max_size = getenv("WRAPPER_VMEM_MAX_SIZE") ? atoi(getenv("WRAPPER_VMEM_MAX_SIZE")) : 0;
 
    if (wrapper_vmem_max_size > 0)
-      pMemoryProperties->memoryProperties.memoryHeaps[0].size = (VkDeviceSize)wrapper_vmem_max_size * 1048576;
+      pMemoryProperties->memoryProperties.memoryHeaps[0].size = (VkDeviceSize)wrapper_vmem_max_size * 1048576ULL;
 }
 
 static VkResult
