@@ -394,15 +394,35 @@ wrapper_DestroyInstance(VkInstance _instance,
    if (!instance)
       return;
 
+   const char *m = getenv("WRAPPER_DESTROY_INSTANCE");
+   int mode = m ? atoi(m) : 0;      /* 0 normal, 1 sin driver, 2 fuga total */
+   bool diag = getenv("WRAPPER_DIAG") != NULL;
+
+#define DI_TRACE(msg) do { if (diag) { \
+      fprintf(stderr, "[WRAPPER_INST] DestroyInstance " msg " (mode=%d)\n", mode); \
+      fflush(stderr); } } while (0)
+
+   DI_TRACE("enter");
+   if (mode == 2) {
+      DI_TRACE("skip all (leak)");
+      return;
+   }
+
    if (destroy_debug_utils_messenger && debugUtilsMessenger != VK_NULL_HANDLE) {
       destroy_debug_utils_messenger(instance->dispatch_handle, debugUtilsMessenger, pAllocator);
       debugUtilsMessenger = VK_NULL_HANDLE;
    }
 
-   instance->dispatch_table.DestroyInstance(instance->dispatch_handle, pAllocator);
+   if (mode != 1)
+      instance->dispatch_table.DestroyInstance(instance->dispatch_handle, pAllocator);
+   DI_TRACE("after driver DestroyInstance");
 
    vk_instance_finish(&instance->vk);
+   DI_TRACE("after vk_instance_finish");
+
    vk_free2(vk_default_allocator(), pAllocator, instance);
+   DI_TRACE("done");
+#undef DI_TRACE
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
