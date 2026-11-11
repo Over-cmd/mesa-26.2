@@ -375,7 +375,7 @@ static bool wrapper_feature_spoof_enabled(void)
 
 VKAPI_ATTR void VKAPI_CALL
 wrapper_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
-                                  VkPhysicalDeviceFeatures* pFeatures) 
+                                  VkPhysicalDeviceFeatures* pFeatures)
 {
    vk_common_GetPhysicalDeviceFeatures(physicalDevice, pFeatures);
    if (!wrapper_feature_spoof_enabled())
