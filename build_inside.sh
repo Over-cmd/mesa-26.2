@@ -1133,7 +1133,7 @@ for path in sorted(glob.glob("src/vulkan/wrapper/*.c")):
     t = open(path).read()
     if "wrapper_CreateInstance(" not in t or "set_wrapper_required_extensions" not in t:
         continue
-    if "[WRAPPER_INST]" in t:
+    if "[WRAPPER_INST] vkCreateInstance:" in t:
         print("-> CreateInstance ya parcheado: " + path)
         done = True
         break
