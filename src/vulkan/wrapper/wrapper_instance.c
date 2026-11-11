@@ -1,5 +1,4 @@
 #include <sys/stat.h>
-
 #include "wrapper_private.h"
 #include "wrapper_log.h"
 #include "graphicsenv_hook.hpp"
