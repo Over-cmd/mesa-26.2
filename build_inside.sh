@@ -710,7 +710,7 @@ wsi_compat_queue_submit2(VkQueue queue, uint32_t submitCount,
     hook_old = "   {\n#define CHK(f) if (!wsi->f) WSI_TRACE("
     hook_new = ("   wsi_real_QueueSubmit = (PFN_vkQueueSubmit)proc_addr(pdevice, \"vkQueueSubmit\");\n"
                 "   wsi->QueueSubmit2 = wsi_compat_queue_submit2;\n"
-                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r7 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
+                "   WSI_TRACE(\"[WSI] QueueSubmit2 -> compat (QueueSubmit v1) wsi-build=prof2 rev=r8 real=%p\\n\", (void *)wsi_real_QueueSubmit);\n")
     if "wsi_compat_queue_submit2" in t:
         print("-> compat QueueSubmit2 ya aplicado")
     elif anchor in t and hook_old in t:
@@ -1012,9 +1012,14 @@ static int
 wsi_prof_enabled(void)
 {
    static int on = -1;
-   if (on < 0)
-      on = getenv("WRAPPER_PROF") ? atoi(getenv("WRAPPER_PROF")) :
-           (getenv("WRAPPER_DIAG") ? atoi(getenv("WRAPPER_DIAG")) : 0);
+   if (on < 0) {
+      const char *e = getenv("WRAPPER_PROF");
+      if (e)
+         on = atoi(e) > 0 || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y' ||
+              ((e[0] == 'o' || e[0] == 'O') && (e[1] == 'n' || e[1] == 'N'));
+      else
+         on = getenv("WRAPPER_DIAG") ? atoi(getenv("WRAPPER_DIAG")) > 0 : 0;
+   }
    return on;
 }
 
@@ -1044,8 +1049,8 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
       win0 = t0;
    if (last_end)
       a_gap += t0 - last_end;
-   a_thr += t1 - t0;
-   a_sub += t2 - t1;
+   a_thr += t1 > t0 ? t1 - t0 : 0;
+   a_sub += t2 > t1 ? t2 - t1 : 0;
    a_wait += tw;
    a_put += tp;
    a_tot += t3 - t0;
@@ -1081,7 +1086,7 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
        "   wsi_prof_frame(_p_t0, _p_t1, _p_t2, _p_tw, _p_tp);\n   STACK_ARRAY_FINISH(results);\n", False),
     ]
     t = t.replace("\r\n", "\n")
-    stamp = "rev=r7 real=%p"
+    stamp = "rev=r8 real=%p"
     if "wsi_prof_frame" in t:
         print("-> perfilado WSI ya aplicado")
     else:
@@ -1102,7 +1107,7 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
         edits = edits + [o for o in opt if o]
         missing = [n for n, e in enumerate(edits) if t.count(e[0]) != 1]
         if missing:
-            tag = "rev=r7+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
+            tag = "rev=r8+miss" + format(sum(1 << n for n in missing), "03x") + " real=%p"
             t = t.replace(stamp, tag, 1)
             open(path, "w").write(t)
             print("-> AVISO: anclas del perfilado no encontradas (indices %s): %s" %
@@ -1111,9 +1116,124 @@ wsi_prof_frame(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t tw, uint64_t tp)
             for old, new, _ in edits:
                 t = t.replace(old, new, 1)
             sfx = "+hook" + ("-nt1" if opt[0] is None else "") + ("-nt2" if opt[1] is None else "")
-            t = t.replace(stamp, "rev=r7" + sfx + " real=%p", 1)
+            t = t.replace(stamp, "rev=r8" + sfx + " real=%p", 1)
             open(path, "w").write(t)
             print("-> perfilado WRAPPER_PROF aplicado en " + path)
+PY
+
+# vkCreateInstance -> -9 (el loader descarta el ICD) con apps Vulkan nativas (AIO Graphics Test --cube vk): el driver de Android
+# devolvía -7 (extensión no presente) porque se le reenviaba VK_KHR_portability_enumeration.
+# el wrapper reenviaba al Vulkan de Android el apiVersion pedido por la app; si es mayor que el del driver
+# (Mali: 1.1) algunos loaders de Android lo rechazan. Se limita a la versión del driver (WRAPPER_NO_APICLAMP=1
+# lo desactiva) y, con WRAPPER_DIAG=1, se traza cada paso en el log de Wine con el prefijo [WRAPPER_INST].
+python3 - <<'PY'
+import glob
+done = False
+for path in sorted(glob.glob("src/vulkan/wrapper/*.c")):
+    t = open(path).read()
+    if "wrapper_CreateInstance(" not in t or "set_wrapper_required_extensions" not in t:
+        continue
+    if "[WRAPPER_INST] vkCreateInstance:" in t:
+        print("-> CreateInstance ya parcheado: " + path)
+        done = True
+        break
+    edits = [
+      ("   result = wrapper_vulkan_init();\n   if (result != VK_SUCCESS)\n      return vk_error(NULL, result);\n\n   instance = vk_zalloc2(",
+       """   if (wrapper_diag_on()) {
+      const VkApplicationInfo *ai = pCreateInfo->pApplicationInfo;
+      fprintf(stderr, "[WRAPPER_INST] vkCreateInstance: app='%s' engine='%s' apiVersion=%u.%u.%u exts=%u layers=%u\\n",
+              ai && ai->pApplicationName ? ai->pApplicationName : "",
+              ai && ai->pEngineName ? ai->pEngineName : "",
+              ai ? VK_VERSION_MAJOR(ai->apiVersion) : 0, ai ? VK_VERSION_MINOR(ai->apiVersion) : 0,
+              ai ? VK_VERSION_PATCH(ai->apiVersion) : 0,
+              pCreateInfo->enabledExtensionCount, pCreateInfo->enabledLayerCount);
+      for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++)
+         fprintf(stderr, "[WRAPPER_INST]   ext %s\\n", pCreateInfo->ppEnabledExtensionNames[i]);
+      for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount; i++)
+         fprintf(stderr, "[WRAPPER_INST]   layer %s\\n", pCreateInfo->ppEnabledLayerNames[i]);
+   }
+
+   result = wrapper_vulkan_init();
+   if (wrapper_diag_on())
+      fprintf(stderr, "[WRAPPER_INST] wrapper_vulkan_init -> %d\\n", result);
+   if (result != VK_SUCCESS)
+      return vk_error(NULL, result);
+
+   instance = vk_zalloc2("""),
+      ('      WRAPPER_LOG(error, "Failed to init instance, res %d", result);',
+       '      if (wrapper_diag_on())\n         fprintf(stderr, "[WRAPPER_INST] vk_instance_init -> %d\\n", result);\n'
+       '      WRAPPER_LOG(error, "Failed to init instance, res %d", result);'),
+      ("   wrapper_create_info.pApplicationInfo = &wrapper_application_info;\n",
+       """   {
+      uint32_t drv_ver = VK_API_VERSION_1_0;
+      static int noclamp = -1;
+      if (noclamp < 0)
+         noclamp = getenv("WRAPPER_NO_APICLAMP") ? atoi(getenv("WRAPPER_NO_APICLAMP")) : 0;
+      if (enumerate_instance_version)
+         enumerate_instance_version(&drv_ver);
+      const bool clamp = !noclamp && wrapper_application_info.apiVersion > drv_ver;
+      if (wrapper_diag_on())
+         fprintf(stderr, "[WRAPPER_INST] app apiVersion=%u.%u.%u driver instance=%u.%u.%u%s\\n",
+                 VK_VERSION_MAJOR(wrapper_application_info.apiVersion),
+                 VK_VERSION_MINOR(wrapper_application_info.apiVersion),
+                 VK_VERSION_PATCH(wrapper_application_info.apiVersion),
+                 VK_VERSION_MAJOR(drv_ver), VK_VERSION_MINOR(drv_ver), VK_VERSION_PATCH(drv_ver),
+                 clamp ? " -> se limita a la del driver" : "");
+      if (clamp)
+         wrapper_application_info.apiVersion = drv_ver;
+   }
+   wrapper_create_info.pApplicationInfo = &wrapper_application_info;
+"""),
+      ("   wrapper_create_info.enabledExtensionCount = wrapper_enable_extension_count;\n",
+       """   {
+      /* El wrapper marca como soportadas TODAS las extensiones de instancia en 64 bits; al driver de Android solo
+       * se le reenvían las que él enumera (p.ej. VK_KHR_portability_enumeration daba VK_ERROR_EXTENSION_NOT_PRESENT). */
+      static int nofilter = -1;
+      if (nofilter < 0)
+         nofilter = getenv("WRAPPER_NO_EXTFILTER") ? atoi(getenv("WRAPPER_NO_EXTFILTER")) : 0;
+      uint32_t dn = 0;
+      if (!nofilter && enumerate_instance_extension_properties(NULL, &dn, NULL) == VK_SUCCESS && dn) {
+         VkExtensionProperties *dprops = malloc(sizeof(*dprops) * dn);
+         if (dprops && enumerate_instance_extension_properties(NULL, &dn, dprops) == VK_SUCCESS) {
+            uint32_t kept = 0;
+            for (uint32_t i = 0; i < wrapper_enable_extension_count; i++) {
+               bool ok = false;
+               for (uint32_t j = 0; j < dn; j++) {
+                  if (!strcmp(wrapper_enable_extensions[i], dprops[j].extensionName)) { ok = true; break; }
+               }
+               if (ok)
+                  wrapper_enable_extensions[kept++] = wrapper_enable_extensions[i];
+               else if (wrapper_diag_on())
+                  fprintf(stderr, "[WRAPPER_INST] extension no soportada por el driver, no se reenvia: %s\\n",
+                          wrapper_enable_extensions[i]);
+            }
+            wrapper_enable_extension_count = kept;
+         }
+         free(dprops);
+      }
+      /* VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR solo es valido con esa extension, que el driver no tiene. */
+      wrapper_create_info.flags &= ~0x00000001u;
+   }
+   wrapper_create_info.enabledExtensionCount = wrapper_enable_extension_count;
+"""),
+      ('      WRAPPER_LOG(error, "Failed driver createInstance, res %d", result);',
+       '      if (wrapper_diag_on())\n         fprintf(stderr, "[WRAPPER_INST] driver vkCreateInstance -> %d\\n", result);\n'
+       '      WRAPPER_LOG(error, "Failed driver createInstance, res %d", result);'),
+    ]
+    missing = [e[0].strip().splitlines()[0][:60] for e in edits if t.count(e[0]) != 1]
+    if missing:
+        print("-> AVISO: anclas de CreateInstance no encontradas en %s: %s" % (path, missing))
+    else:
+        for old, new in edits:
+            t = t.replace(old, new, 1)
+        if "#include <stdio.h>" not in t:
+            t = "#include <stdio.h>\n#include <stdlib.h>\n" + t
+        open(path, "w").write(t)
+        print("-> CreateInstance parcheado (clamp de apiVersion + trazas) en " + path)
+    done = True
+    break
+if not done:
+    print("-> AVISO: no se encontró wrapper_CreateInstance en src/vulkan/wrapper/*.c")
 PY
 
 # wsi_common.h: asegurar que struct wsi_device tiene el campo que usa wsi_common_drm.c
@@ -1149,6 +1269,98 @@ if t:
     if t != o:
         open(f, "w").write(t)
         print("-> wsi_common_x11.c parcheado (NULL checks)")
+PY
+
+# ---------- Diagnóstico GPUInfo: tope/ocultado de extensiones de dispositivo ----------
+# WRAPPER_DEVEXT_HIDE=1 oculta las 11 extensiones que el wrapper 25 no anunciaba.
+# WRAPPER_DEVEXT_CAP=N  limita el número de extensiones de dispositivo (host) a N (58 = igual que el 25).
+# Sin variables, comportamiento idéntico al original.
+python3 - <<'PY'
+f = "src/vulkan/wrapper/wrapper_physical_device.c"
+try:
+    t = open(f).read()
+except FileNotFoundError:
+    t = None
+if t and "WRAPPER_DEVEXT_HIDE" not in t:
+    old = """wrapper_EnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                           const char* pLayerName,
+                                           uint32_t* pPropertyCount,
+                                           VkExtensionProperties* pProperties)
+{
+   return vk_common_EnumerateDeviceExtensionProperties(physicalDevice,
+                                                       pLayerName,
+                                                       pPropertyCount,
+                                                       pProperties);
+}"""
+    new = """wrapper_EnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                           const char* pLayerName,
+                                           uint32_t* pPropertyCount,
+                                           VkExtensionProperties* pProperties)
+{
+   const char *e_hide = getenv("WRAPPER_DEVEXT_HIDE");
+   const char *e_cap = getenv("WRAPPER_DEVEXT_CAP");
+   int hide = e_hide ? atoi(e_hide) : 0;
+   int cap = e_cap ? atoi(e_cap) : 0;
+   if (pLayerName || (!hide && cap <= 0))
+      return vk_common_EnumerateDeviceExtensionProperties(physicalDevice,
+                                                          pLayerName,
+                                                          pPropertyCount,
+                                                          pProperties);
+   static const char *const hidden[] = {
+      "VK_KHR_push_descriptor", "VK_EXT_blend_operation_advanced",
+      "VK_EXT_color_write_enable", "VK_EXT_custom_border_color",
+      "VK_EXT_discard_rectangles", "VK_EXT_extended_dynamic_state2",
+      "VK_EXT_filter_cubic", "VK_EXT_memory_budget", "VK_EXT_private_data",
+      "VK_EXT_sample_locations", "VK_EXT_vertex_input_dynamic_state",
+   };
+   uint32_t n = 0;
+   VkResult r = vk_common_EnumerateDeviceExtensionProperties(physicalDevice, NULL, &n, NULL);
+   if (r != VK_SUCCESS)
+      return r;
+   VkExtensionProperties *all = (VkExtensionProperties *)malloc(sizeof(*all) * (n ? n : 1));
+   if (!all)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   uint32_t n2 = n;
+   r = vk_common_EnumerateDeviceExtensionProperties(physicalDevice, NULL, &n2, all);
+   if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
+      free(all);
+      return r;
+   }
+   uint32_t m = 0;
+   for (uint32_t i = 0; i < n2; i++) {
+      bool skip = false;
+      if (hide) {
+         for (unsigned j = 0; j < sizeof(hidden) / sizeof(hidden[0]); j++)
+            if (!strcmp(all[i].extensionName, hidden[j]))
+               skip = true;
+      }
+      if (skip)
+         continue;
+      if (cap > 0 && m >= (uint32_t)cap)
+         break;
+      all[m++] = all[i];
+   }
+   if (!pProperties) {
+      fprintf(stderr, "[WRAPPER_INST] DEVEXT %u -> %u (hide=%d cap=%d)\\n", n2, m, hide, cap);
+      *pPropertyCount = m;
+      free(all);
+      return VK_SUCCESS;
+   }
+   uint32_t c = *pPropertyCount < m ? *pPropertyCount : m;
+   for (uint32_t i = 0; i < c; i++)
+      pProperties[i] = all[i];
+   *pPropertyCount = c;
+   free(all);
+   return c < m ? VK_INCOMPLETE : VK_SUCCESS;
+}"""
+    if old in t:
+        t = t.replace(old, new, 1)
+        if "#include <stdlib.h>" not in t:
+            t = "#include <stdlib.h>\\n#include <string.h>\\n#include <stdio.h>\\n" + t
+        open(f, "w").write(t)
+        print("-> wrapper_EnumerateDeviceExtensionProperties: añadido WRAPPER_DEVEXT_HIDE/CAP")
+    else:
+        print("-> AVISO: wrapper_EnumerateDeviceExtensionProperties no coincide; sin parche DEVEXT")
 PY
 
 # ---------- LIBS X11/XCB/DRM (el meson.build las pone como null_dep, hay que enlazarlas a mano) ----------
@@ -1268,9 +1480,7 @@ ROOTFS_DIR="${BUILD_DIR}/rootfs_export"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}/usr/lib" "${ROOTFS_DIR}/usr/share/vulkan/icd.d"
 cp "${BUILD_DIR}/libvulkan_wrapper.so" "${ROOTFS_DIR}/usr/lib/"
-
-# 🔍 KƆLƐKT ƆL DI .SO LAEBRARI DƐN NA BUILD (Zink, Panfrost, etc.)
-find "${BUILD_DIR}/" -name "*.so" -not -path "*/CMakeFiles/*" -not -path "*/test/*" -exec cp -f {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
+find "${BUILD_DIR}/subprojects" -name "*.so" -exec cp -f {} "${ROOTFS_DIR}/usr/lib/" \; 2>/dev/null || true
 
 cat << EOF > "${ROOTFS_DIR}/usr/share/vulkan/icd.d/wrapper_icd.${LIBDIR_TAG}.json"
 {
