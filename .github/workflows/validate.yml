@@ -1,0 +1,26 @@
+name: Validate Vulkan Shaders
+
+on: [push, pull_request]
+
+jobs:
+  validate-shaders:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK / Shaderc tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools spirv-tools
+
+      - name: Compile GLSL to SPIR-V and Validate
+        run: |
+          # 1. Compila usando la ruta exacta de tu archivo en el repositorio
+          glslangValidator -V -S comp src/vulkan/wrapper/wrapper_bcn_transcode.comp -o wrapper_bcn_transcode.spv
+          
+          # 2. Valida estrictamente el binario SPIR-V resultante
+          spirv-val wrapper_bcn_transcode.spv
+          
+          echo "¡El shader es completamente válido y compatible con SPIR-V!"
