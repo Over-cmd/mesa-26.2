@@ -431,16 +431,16 @@ void encode_rgba_8x8() {
    int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
    int arange=amax-amin;
    for(int g=0;g<16;g++){
-      mediump float a0=0.0,a1=0.0;
+      float a0=0.0,a1=0.0;
       for(int t=0;t<64;t++){
-         mediump float w0;
+         float w0;
          if(dlen2==0)w0=0.0;
-         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];mediump float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
-         mediump float w1;
+         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
+         float w1;
          if(arange==0)w1=0.0;
-         else{mediump float f=float(int(chan64(uint(t),3u))-amin)/float(arange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
+         else{float f=float(int(chan64(uint(t),3u))-amin)/float(arange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
          if(swap!=0){w0=3.0-w0;w1=3.0-w1;}
-         a0+=mediump float(astc_pinv8[g*64+t])*w0;a1+=mediump float(astc_pinv8[g*64+t])*w1;
+         a0+=float(astc_pinv8[g*64+t])*w0;a1+=float(astc_pinv8[g*64+t])*w1;
       }
       int q0=int(floor(a0/256.0+0.5)),q1=int(floor(a1/256.0+0.5));
       if(q0<0)q0=0;if(q0>3)q0=3;if(q1<0)q1=0;if(q1>3)q1=3;
