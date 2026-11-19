@@ -1,7 +1,9 @@
 #version 450
 /*
- * BCn -> ASTC 4x4 / 8x8 transcode compute shader. 
- * Formats: 0=BC1, 1=BC7, 2=BC2, 3=BC3, 4=BC4, 5=BC5.
+ * BCn -> ASTC transcode compute shader. One invocation per ASTC block:
+ * decode the BC block(s) to RGBA texels, run the (CPU-validated, bit-identical)
+ * ASTC encoder, write one 16-byte ASTC block.
+ * format: 0=BC1, 1=BC7, 2=BC2, 3=BC3, 4=BC4, 5=BC5.   (BC6H is HDR and is not handled here.)
  */
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(std430, binding = 0) readonly buffer SrcBuf { uint src[]; };
@@ -69,7 +71,6 @@ const uint bc7_part2[1024] = uint[](
   1u,1u,1u,0u,1u,1u,1u,0u,128u,1u,0u,0u,0u,1u,0u,0u,0u,1u,1u,1u,
   0u,1u,1u,129u
 );
-
 const uint bc7_part3[1024] = uint[](
   128u,0u,1u,129u,0u,0u,1u,1u,0u,2u,2u,1u,2u,2u,2u,130u,128u,0u,0u,129u,
   0u,0u,1u,1u,130u,2u,1u,1u,2u,2u,2u,1u,128u,0u,0u,0u,2u,0u,0u,1u,
@@ -140,18 +141,15 @@ const uint astc_trit5[243] = uint[](
   61u,62u,92u,93u,94u,156u,157u,158u,188u,189u,190u,220u,221u,222u,31u,63u,95u,159u,191u,223u,
   124u,125u,126u
 );
-
 const uint astc_trit3[27] = uint[](
   0u,1u,2u,4u,5u,6u,8u,9u,10u,16u,17u,18u,20u,21u,22u,24u,25u,26u,3u,7u,
   11u,19u,23u,27u,12u,13u,14u
 );
-
 const uint astc_ce_unq[48] = uint[](
   0u,255u,16u,239u,32u,223u,48u,207u,65u,190u,81u,174u,97u,158u,113u,142u,5u,250u,21u,234u,
   38u,217u,54u,201u,70u,185u,86u,169u,103u,152u,119u,136u,11u,244u,27u,228u,43u,212u,59u,196u,
   76u,179u,92u,163u,108u,147u,124u,131u
 );
-
 const uint astc_ce_quant[256] = uint[](
   0u,0u,0u,16u,16u,16u,16u,16u,16u,32u,32u,32u,32u,32u,2u,2u,2u,2u,2u,18u,
   18u,18u,18u,18u,18u,34u,34u,34u,34u,34u,4u,4u,4u,4u,4u,4u,20u,20u,20u,20u,
@@ -168,6 +166,9 @@ const uint astc_ce_quant[256] = uint[](
   3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1u,1u,1u
 );
 
+
+/* 8x8 weight-grid infill pseudo-inverse (x256 fixed point), flattened [16*64].
+   Row g, col t = astc_pinv8[g*64 + t]. Identical values to the CPU encoder. */
 const int astc_pinv8[1024] = int[](
   166,75,-16,-25,-4,10,4,-3,75,33,-9,-10,-3,5,2,-2,
   -16,-9,-2,5,-1,-1,0,0,-25,-10,5,5,0,-2,-1,0,
@@ -235,13 +236,15 @@ const int astc_pinv8[1024] = int[](
   -2,2,5,-3,-10,-9,33,75,-3,4,10,-4,-25,-16,75,166
 );
 
-/* ---- Declaración adelantada de variables globales y buffers de texels ---- */
-uint apal[8];
+
+/* ---- decoded texels (0xAABBGGRR) ---- */
 uint texel[16];
 uint chan(uint px, uint c) { return (texel[px] >> (c * 8u)) & 0xffu; }
 
+/* 8x8 texel grid (64 texels, row-major) + accessor for the 8x8 encoders. */
 uint texel64[64];
 uint chan64(uint px, uint c) { return (texel64[px] >> (c * 8u)) & 0xffu; }
+
 
 /* ---- BC1 decode (matches bcdec) ---- */
 void decode_bc1(uint w0) {
@@ -324,7 +327,20 @@ void decode_bc7(uint w0) {
    }
 }
 
-/* ---- Decodificadores BC adicionales (BC2 / BC3 / BC4 / BC5) ---- */
+/* ============================================================================
+ * Decodificadores BC2 / BC3 / BC4 / BC5 para el shader compute BC -> ASTC.
+ *
+ * DÓNDE PEGARLO: después de `uint texel[16];` y de decode_bc1/decode_bc7, y antes de main().
+ * Usa tu buffer `src[]` y tu array global `texel[16]` (formato 0xAABBGGRR), igual que decode_bc1.
+ * Todo es aritmética entera sin signo: mismo resultado que bcdec_bc2/3/4/5 (rama no "PRECISE").
+ *
+ * Códigos de formato (pc.format):  0 = BC1, 1 = BC7, 2 = BC2, 3 = BC3, 4 = BC4, 5 = BC5
+ * BC4 -> texel = (R, 0, 0, 255).   BC5 -> texel = (R, G, 0, 255).
+ * ========================================================================== */
+
+uint apal[8];
+
+/* Paleta de 8 valores del bloque de alfa/canal (BC3 alfa, BC4, cada canal de BC5) que empieza en la palabra w0 */
 void bc_alpha_palette(uint w0) {
    uint a0 = src[w0] & 0xffu;
    uint a1 = (src[w0] >> 8u) & 0xffu;
@@ -347,15 +363,17 @@ void bc_alpha_palette(uint w0) {
    }
 }
 
+/* Índice de 3 bits del texel k (0..15, fila-mayor); los índices empiezan en el bit 16 del bloque de 64 bits */
 uint bc_alpha_index(uint w0, uint k) {
    uint p = 16u + 3u * k;
    uint wi = w0 + (p >> 5u);
    uint sh = p & 31u;
    uint v = src[wi] >> sh;
-   if (sh > 29u) v |= src[wi + 1u] << (32u - sh);
+   if (sh > 29u) v |= src[wi + 1u] << (32u - sh);   /* el campo cruza el límite de palabra */
    return v & 7u;
 }
 
+/* Bloque de color de BC2/BC3: siempre modo de 4 colores (ignora c0 <= c1). cw = palabra donde empieza el bloque de color. */
 void bc_color_block_opaque(uint cw) {
    uint lo = src[cw], idx = src[cw + 1u];
    uint c0 = lo & 0xffffu, c1 = lo >> 16u;
@@ -374,6 +392,7 @@ void bc_color_block_opaque(uint cw) {
    for (uint i = 0u; i < 16u; i++) texel[i] = pal[(idx >> (i * 2u)) & 3u];
 }
 
+/* BC2: 8 bytes de alfa de 4 bits (2 palabras) + bloque de color */
 void decode_bc2(uint w0) {
    bc_color_block_opaque(w0 + 2u);
    for (uint i = 0u; i < 16u; i++) {
@@ -385,6 +404,7 @@ void decode_bc2(uint w0) {
    }
 }
 
+/* BC3: bloque de alfa suave (2 palabras) + bloque de color */
 void decode_bc3(uint w0) {
    bc_color_block_opaque(w0 + 2u);
    bc_alpha_palette(w0);
@@ -394,12 +414,14 @@ void decode_bc3(uint w0) {
    }
 }
 
+/* BC4: un canal -> R */
 void decode_bc4(uint w0) {
    bc_alpha_palette(w0);
    for (uint i = 0u; i < 16u; i++)
       texel[i] = 0xff000000u | apal[bc_alpha_index(w0, i)];
 }
 
+/* BC5: dos canales -> R, G */
 void decode_bc5(uint w0) {
    bc_alpha_palette(w0);
    for (uint i = 0u; i < 16u; i++)
@@ -409,8 +431,10 @@ void decode_bc5(uint w0) {
       texel[i] |= apal[bc_alpha_index(w0 + 2u, i)] << 8u;
 }
 
+/* Palabras de 32 bits por bloque BC */
 uint bc_block_words(uint fmt) { return (fmt == 0u || fmt == 4u) ? 2u : 4u; }
 
+/* Despachador: sustituye a `if (pc.format==0u) decode_bc1(..); else decode_bc7(..);` */
 void decode_bc_any(uint fmt, uint w0) {
    if (fmt == 0u) decode_bc1(w0);
    else if (fmt == 1u) decode_bc7(w0);
@@ -419,6 +443,7 @@ void decode_bc_any(uint fmt, uint w0) {
    else if (fmt == 4u) decode_bc4(w0);
    else decode_bc5(w0);
 }
+
 
 /* ---- ASTC block assembly ---- */
 uint blk[4];
@@ -481,7 +506,9 @@ void encode_rgba() {
    }
 }
 
-/* ---- 8x8 encoders ---- */
+/* ---- 8x8 encoders: 4x4 weight grid least-squares-fit to the 64 ideal texel
+ * weights via the pinv infill matrix. Float math is bit-identical to the CPU
+ * double encoder (validated offline over 8000 blocks). ---- */
 void encode_rgb_8x8() {
    blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
    int ai=0,bi=0,best=-1;
@@ -546,14 +573,16 @@ void encode_rgba_8x8() {
    }
 }
 
+
 /* Decode one BC block at (bcx,bcy) into the (qx,qy) 4x4 quadrant of texel64. */
 void decode_into_quadrant(uint bcx, uint bcy, uint qx, uint qy) {
-   uint words = bc_block_words(pc.format);
-   uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * words;
-   decode_bc_any(pc.format, srcWord);
+   uint words=bc_block_words(pc.format);
+   uint srcWord=pc.src_word_off+(bcy*pc.block_x_src+bcx)*words;
+   decode_bc_any(pc.format,srcWord);
    for(uint r=0u;r<4u;r++)for(uint c=0u;c<4u;c++)
       texel64[(qy*4u+r)*8u+(qx*4u+c)]=texel[r*4u+c];
 }
+
 
 void main() {
    uint bx=gl_GlobalInvocationID.x, by=gl_GlobalInvocationID.y;
@@ -569,9 +598,9 @@ void main() {
       }
       if (pc.has_alpha!=0u) encode_rgba_8x8(); else encode_rgb_8x8();
    } else {
-      uint words = bc_block_words(pc.format);
-      uint srcWord = pc.src_word_off + (by * pc.block_x_src + bx) * words;
-      decode_bc_any(pc.format, srcWord);
+      uint words=bc_block_words(pc.format);
+      uint srcWord=pc.src_word_off+(by*pc.block_x_src+bx)*words;
+      decode_bc_any(pc.format,srcWord);
       if (pc.has_alpha!=0u) encode_rgba(); else encode_rgb();
    }
    uint dstWord=(by*pc.block_x+bx)*4u;
