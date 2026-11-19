@@ -173,7 +173,7 @@ uint read_src(uint idx) {
 }
 
 /* ---- BC1 decode (matches bcdec) ---- */
-void decode_bc1(uint w0, inout uint out_grid[16]) {
+void decode_bc1(uint w0, inout uint out_grid[64]) {
    uint lo = read_src(w0), idx = read_src(w0 + 1u);
    uint c0 = lo & 0xffffu, c1 = lo >> 16u;
    uint r0=(c0>>11u)&0x1fu,g0=(c0>>5u)&0x3fu,b0=c0&0x1fu;
@@ -196,7 +196,7 @@ uint B[4]; uint bitpos;
 uint rd(uint n) { uint r=0u; for(uint i=0u;i<n;i++){uint bp=bitpos+i;r|=((B[bp>>5u]>>(bp&31u))&1u)<<i;} bitpos+=n; return r; }
 int interp(int a,int b,int w) { return (a*(64-w)+b*w+32)>>6; }
 
-void decode_bc7(uint w0, inout uint out_grid[16]) {
+void decode_bc7(uint w0, inout uint out_grid[64]) {
    for (uint i=0u;i<4u;i++) B[i]=read_src(w0+i);
    bitpos=0u;
    const int abc0[8]=int[](4,6,5,7,5,7,7,5);
@@ -290,7 +290,7 @@ uint bc_alpha_index(uint w0, uint k) {
    return v & 7u;
 }
 
-void bc_color_block_opaque(uint cw, inout uint rgb16[16]) {
+void bc_color_block_opaque(uint cw, inout uint rgb16[64]) {
    uint lo = read_src(cw), idx = read_src(cw + 1u);
    uint c0 = lo & 0xffffu, c1 = lo >> 16u;
    uint r0 = (c0 >> 11u) & 0x1fu, g0 = (c0 >> 5u) & 0x3fu, b0 = c0 & 0x1fu;
@@ -308,7 +308,7 @@ void bc_color_block_opaque(uint cw, inout uint rgb16[16]) {
    for (uint i = 0u; i < 16u; i++) rgb16[i] = pal[(idx >> (i * 2u)) & 3u];
 }
 
-void decode_bc2(uint w0, inout uint out_grid[16]) {
+void decode_bc2(uint w0, inout uint out_grid[64]) {
    bc_color_block_opaque(w0 + 2u, out_grid);
    for (uint i = 0u; i < 16u; i++) {
       uint row = i >> 2u, col = i & 3u;
@@ -319,7 +319,7 @@ void decode_bc2(uint w0, inout uint out_grid[16]) {
    }
 }
 
-void decode_bc3(uint w0, inout uint out_grid[16]) {
+void decode_bc3(uint w0, inout uint out_grid[64]) {
    bc_color_block_opaque(w0 + 2u, out_grid);
    uint pal[8];
    bc_alpha_palette(w0, pal);
@@ -330,7 +330,7 @@ void decode_bc3(uint w0, inout uint out_grid[16]) {
 }
 
 /* BC4 decoded as grayscale (R = G = B = v, A = 255) for faithful monochrome ASTC transcode */
-void decode_bc4(uint w0, inout uint out_grid[16]) {
+void decode_bc4(uint w0, inout uint out_grid[64]) {
    uint pal[8];
    bc_alpha_palette(w0, pal);
    for (uint i = 0u; i < 16u; i++) {
@@ -339,7 +339,7 @@ void decode_bc4(uint w0, inout uint out_grid[16]) {
    }
 }
 
-void decode_bc5(uint w0, inout uint out_grid[16]) {
+void decode_bc5(uint w0, inout uint out_grid[64]) {
    uint pal0[8], pal1[8];
    bc_alpha_palette(w0, pal0);
    bc_alpha_palette(w0 + 2u, pal1);
@@ -352,7 +352,7 @@ void decode_bc5(uint w0, inout uint out_grid[16]) {
 
 uint bc_block_words(uint fmt) { return (fmt == 0u || fmt == 4u) ? 2u : 4u; }
 
-void decode_bc_any(uint fmt, uint w0, inout uint out_grid[16]) {
+void decode_bc_any(uint fmt, uint w0, inout uint out_grid[64]) {
    if (fmt == 0u) decode_bc1(w0, out_grid);
    else if (fmt == 1u) decode_bc7(w0, out_grid);
    else if (fmt == 2u) decode_bc2(w0, out_grid);
@@ -656,19 +656,19 @@ void main() {
 
    if (pc.astc8 == 1u) {
       /* 8x8 ASTC block from 2x2 group of BC blocks */
-      uint sub16[16];
+      uint sub64[64];
       for (uint dy = 0u; dy < 2u; dy++) {
          for (uint dx = 0u; dx < 2u; dx++) {
             uint bcx = 2u * bx + dx, bcy = 2u * by + dy;
             if (bcx < pc.bc_bx && bcy < pc.bc_by) {
                uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * words;
-               decode_bc_any(pc.format, srcWord, sub16);
+               decode_bc_any(pc.format, srcWord, sub64);
             } else {
-               for (uint i = 0u; i < 16u; i++) sub16[i] = 0u;
+               for (uint i = 0u; i < 16u; i++) sub64[i] = 0u;
             }
             for (uint r = 0u; r < 4u; r++) {
                for (uint c = 0u; c < 4u; c++) {
-                  grid[(dy * 4u + r) * 8u + (dx * 4u + c)] = sub16[r * 4u + c];
+                  grid[(dy * 4u + r) * 8u + (dx * 4u + c)] = sub64[r * 4u + c];
                }
             }
          }
@@ -681,12 +681,12 @@ void main() {
       uint bcx0 = px0 >> 2u, bcy0 = py0 >> 2u;
       uint bcx1 = min((px0 + 5u) >> 2u, (pc.bc_bx > 0u) ? (pc.bc_bx - 1u) : 0u);
       uint bcy1 = min((py0 + 5u) >> 2u, (pc.bc_by > 0u) ? (pc.bc_by - 1u) : 0u);
-      uint sub16[16];
+      uint sub64[64];
       if (pc.bc_bx > 0u && pc.bc_by > 0u) {
          for (uint bcy = bcy0; bcy <= bcy1; bcy++) {
             for (uint bcx = bcx0; bcx <= bcx1; bcx++) {
                uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * words;
-               decode_bc_any(pc.format, srcWord, sub16);
+               decode_bc_any(pc.format, srcWord, sub64);
                uint bpx = bcx << 2u, bpy = bcy << 2u;
                for (uint r = 0u; r < 4u; r++) {
                   uint y = bpy + r;
@@ -694,7 +694,7 @@ void main() {
                   for (uint c = 0u; c < 4u; c++) {
                      uint x = bpx + c;
                      if (x < px0 || x >= px0 + 6u) continue;
-                     grid[(y - py0) * 6u + (x - px0)] = sub16[r * 4u + c];
+                     grid[(y - py0) * 6u + (x - px0)] = sub64[r * 4u + c];
                   }
                }
             }
