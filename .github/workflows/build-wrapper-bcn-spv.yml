@@ -1,16 +1,15 @@
-name: Generate wrapper_bcn_spv.h
+name: Auto Generate wrapper_bcn_spv.h
 
 on:
   push:
     branches:
-      - main
+      - fusion
     paths:
       - 'src/vulkan/wrapper/wrapper_bcn_transcode.comp'
       - '.github/workflows/build-wrapper-bcn-spv.yml'
-  workflow_dispatch:
 
 permissions:
-  contents: write # Solo necesario si habilitas el paso de commit/push al final
+  contents: write
 
 jobs:
   generate-spv-header:
@@ -18,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: fusion
 
       - name: Install glslc
         run: |
@@ -71,19 +72,14 @@ jobs:
 
           head -n 8 "$OUT_H"
 
-      - name: Upload wrapper_bcn_spv.h artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wrapper-bcn-spv-header
-          path: src/vulkan/wrapper/wrapper_bcn_spv.h
-
-      # Opcional: descomenta este paso si quieres que el workflow guarde wrapper_bcn_spv.h en el repo
-      # - name: Commit and push wrapper_bcn_spv.h
-      #   run: |
-      #     git config user.name "github-actions[bot]"
-      #     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      #     git add src/vulkan/wrapper/wrapper_bcn_spv.h
-      #     if ! git diff --staged --quiet; then
-      #       git commit -m "chore(vulkan/wrapper): generate wrapper_bcn_spv.h"
-      #       git push
-      #     fi
+      - name: Commit and push wrapper_bcn_spv.h to fusion
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vulkan/wrapper/wrapper_bcn_spv.h
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(vulkan/wrapper): auto-generate wrapper_bcn_spv.h [skip ci]"
+            git push origin HEAD:fusion
+          else
+            echo "Sin cambios en wrapper_bcn_spv.h"
+          fi
