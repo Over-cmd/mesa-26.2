@@ -243,6 +243,87 @@ uint chan(uint px, uint c) { return (texel[px] >> (c * 8u)) & 0xffu; }
 uint texel64[64];
 uint chan64(uint px, uint c) { return (texel64[px] >> (c * 8u)) & 0xffu; }
 
+/* ---- BC1 decode (matches bcdec) ---- */
+void decode_bc1(uint w0) {
+   uint lo = src[w0], idx = src[w0 + 1u];
+   uint c0 = lo & 0xffffu, c1 = lo >> 16u;
+   uint r0=(c0>>11u)&0x1fu,g0=(c0>>5u)&0x3fu,b0=c0&0x1fu;
+   uint r1=(c1>>11u)&0x1fu,g1=(c1>>5u)&0x3fu,b1=c1&0x1fu;
+   uint ref[4]; uint r,g,b;
+   r=(r0*527u+23u)>>6u;g=(g0*259u+33u)>>6u;b=(b0*527u+23u)>>6u;ref[0]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   r=(r1*527u+23u)>>6u;g=(g1*259u+33u)>>6u;b=(b1*527u+23u)>>6u;ref[1]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   if (c0 > c1) {
+      r=((2u*r0+r1)*351u+61u)>>7u;g=((2u*g0+g1)*2763u+1039u)>>11u;b=((2u*b0+b1)*351u+61u)>>7u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;
+      r=((r0+2u*r1)*351u+61u)>>7u;g=((g0+2u*g1)*2763u+1039u)>>11u;b=((b0+2u*b1)*351u+61u)>>7u;ref[3]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   } else {
+      r=((r0+r1)*1053u+125u)>>8u;g=((g0+g1)*4145u+1019u)>>11u;b=((b0+b1)*1053u+125u)>>8u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;ref[3]=0u;
+   }
+   for (uint i=0u;i<16u;i++) texel[i]=ref[(idx>>(i*2u))&3u];
+}
+
+/* ---- BC7 decode (128-bit reader over 4 words; matches bcdec, host-validated) ---- */
+uint B[4]; uint bitpos;
+uint rd(uint n) { uint r=0u; for(uint i=0u;i<n;i++){uint bp=bitpos+i;r|=((B[bp>>5u]>>(bp&31u))&1u)<<i;} bitpos+=n; return r; }
+int interp(int a,int b,int w) { return (a*(64-w)+b*w+32)>>6; }
+
+void decode_bc7(uint w0) {
+   for (uint i=0u;i<4u;i++) B[i]=src[w0+i];
+   bitpos=0u;
+   const int abc0[8]=int[](4,6,5,7,5,7,7,5);
+   const int abc1[8]=int[](0,0,0,0,6,8,7,5);
+   const int aW2[4]=int[](0,21,43,64);
+   const int aW3[8]=int[](0,9,18,27,37,46,55,64);
+   const int aW4[16]=int[](0,4,9,13,17,21,26,30,34,38,43,47,51,55,60,64);
+   int mode=0; while(mode<8 && rd(1u)==0u) mode++;
+   if (mode>=8) { for(uint i=0u;i<16u;i++) texel[i]=0u; return; }
+   int numPart=1,part_idx=0,rotation=0,isb=0;
+   if(mode==0||mode==1||mode==2||mode==3||mode==7){numPart=(mode==0||mode==2)?3:2;part_idx=int(rd((mode==0)?4u:6u));}
+   int numEP=numPart*2;
+   if(mode==4||mode==5){rotation=int(rd(2u));if(mode==4)isb=int(rd(1u));}
+   int ep[6][4];
+   for(int i=0;i<3;i++)for(int j=0;j<numEP;j++)ep[j][i]=int(rd(uint(abc0[mode])));
+   if(abc1[mode]>0)for(int j=0;j<numEP;j++)ep[j][3]=int(rd(uint(abc1[mode])));
+   int pbits=0xCB;
+   if(mode==0||mode==1||mode==3||mode==6||mode==7){
+      for(int i=0;i<numEP;i++)for(int j=0;j<4;j++)ep[i][j]<<=1;
+      if(mode==1){int pi=int(rd(1u)),pj=int(rd(1u));for(int k=0;k<3;k++){ep[0][k]|=pi;ep[1][k]|=pi;ep[2][k]|=pj;ep[3][k]|=pj;}}
+      else if((pbits&(1<<mode))!=0){for(int i=0;i<numEP;i++){int pj=int(rd(1u));for(int k=0;k<4;k++)ep[i][k]|=pj;}}
+   }
+   for(int i=0;i<numEP;i++){
+      int j=abc0[mode]+((pbits>>mode)&1);
+      for(int k=0;k<3;k++){ep[i][k]=ep[i][k]<<(8-j);ep[i][k]=ep[i][k]|(ep[i][k]>>j);}
+      j=abc1[mode]+((pbits>>mode)&1);
+      ep[i][3]=ep[i][3]<<(8-j);ep[i][3]=ep[i][3]|(ep[i][3]>>j);
+   }
+   if(abc1[mode]==0)for(int j=0;j<numEP;j++)ep[j][3]=0xFF;
+   int indexBits=(mode==0||mode==1)?3:((mode==6)?4:2);
+   int indexBits2=(mode==4)?3:((mode==5)?2:0);
+   int idxs[16];
+   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
+      int ps=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
+      int ib=(mode==0||mode==1)?3:((mode==6)?4:2);
+      if((ps&0x80)!=0)ib--;
+      idxs[i*4+j]=int(rd(uint(ib)));
+   }
+   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
+      int psr=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
+      int ps=psr&3;
+      int idx=idxs[i*4+j],r,g,b,a;
+      int w0i=(indexBits==2)?aW2[idx]:((indexBits==3)?aW3[idx]:aW4[idx]);
+      if(indexBits2==0){
+         r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);
+         b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);
+      } else {
+         int idx2=int(rd(((i|j)!=0)?uint(indexBits2):uint(indexBits2-1)));
+         int w2i=(indexBits2==2)?aW2[idx2]:aW3[idx2];
+         if(isb==0){r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w2i);}
+         else {r=interp(ep[ps*2][0],ep[ps*2+1][0],w2i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w2i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w2i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);}
+      }
+      if(rotation==1){int t=a;a=r;r=t;}else if(rotation==2){int t=a;a=g;g=t;}else if(rotation==3){int t=a;a=b;b=t;}
+      texel[i*4+j]=uint(r)|(uint(g)<<8u)|(uint(b)<<16u)|(uint(a)<<24u);
+   }
+}
+
 /* ---- Decodificadores BC adicionales (BC2 / BC3 / BC4 / BC5) ---- */
 void bc_alpha_palette(uint w0) {
    uint a0 = src[w0] & 0xffu;
@@ -337,87 +418,6 @@ void decode_bc_any(uint fmt, uint w0) {
    else if (fmt == 3u) decode_bc3(w0);
    else if (fmt == 4u) decode_bc4(w0);
    else decode_bc5(w0);
-}
-
-/* ---- BC1 decode (matches bcdec) ---- */
-void decode_bc1(uint w0) {
-   uint lo = src[w0], idx = src[w0 + 1u];
-   uint c0 = lo & 0xffffu, c1 = lo >> 16u;
-   uint r0=(c0>>11u)&0x1fu,g0=(c0>>5u)&0x3fu,b0=c0&0x1fu;
-   uint r1=(c1>>11u)&0x1fu,g1=(c1>>5u)&0x3fu,b1=c1&0x1fu;
-   uint ref[4]; uint r,g,b;
-   r=(r0*527u+23u)>>6u;g=(g0*259u+33u)>>6u;b=(b0*527u+23u)>>6u;ref[0]=0xff000000u|(b<<16u)|(g<<8u)|r;
-   r=(r1*527u+23u)>>6u;g=(g1*259u+33u)>>6u;b=(b1*527u+23u)>>6u;ref[1]=0xff000000u|(b<<16u)|(g<<8u)|r;
-   if (c0 > c1) {
-      r=((2u*r0+r1)*351u+61u)>>7u;g=((2u*g0+g1)*2763u+1039u)>>11u;b=((2u*b0+b1)*351u+61u)>>7u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;
-      r=((r0+2u*r1)*351u+61u)>>7u;g=((g0+2u*g1)*2763u+1039u)>>11u;b=((b0+2u*b1)*351u+61u)>>7u;ref[3]=0xff000000u|(b<<16u)|(g<<8u)|r;
-   } else {
-      r=((r0+r1)*1053u+125u)>>8u;g=((g0+g1)*4145u+1019u)>>11u;b=((b0+b1)*1053u+125u)>>8u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;ref[3]=0u;
-   }
-   for (uint i=0u;i<16u;i++) texel[i]=ref[(idx>>(i*2u))&3u];
-}
-
-/* ---- BC7 decode (128-bit reader over 4 words; matches bcdec, host-validated) ---- */
-uint B[4]; uint bitpos;
-uint rd(uint n) { uint r=0u; for(uint i=0u;i<n;i++){uint bp=bitpos+i;r|=((B[bp>>5u]>>(bp&31u))&1u)<<i;} bitpos+=n; return r; }
-int interp(int a,int b,int w) { return (a*(64-w)+b*w+32)>>6; }
-
-void decode_bc7(uint w0) {
-   for (uint i=0u;i<4u;i++) B[i]=src[w0+i];
-   bitpos=0u;
-   const int abc0[8]=int[](4,6,5,7,5,7,7,5);
-   const int abc1[8]=int[](0,0,0,0,6,8,7,5);
-   const int aW2[4]=int[](0,21,43,64);
-   const int aW3[8]=int[](0,9,18,27,37,46,55,64);
-   const int aW4[16]=int[](0,4,9,13,17,21,26,30,34,38,43,47,51,55,60,64);
-   int mode=0; while(mode<8 && rd(1u)==0u) mode++;
-   if (mode>=8) { for(uint i=0u;i<16u;i++) texel[i]=0u; return; }
-   int numPart=1,part_idx=0,rotation=0,isb=0;
-   if(mode==0||mode==1||mode==2||mode==3||mode==7){numPart=(mode==0||mode==2)?3:2;part_idx=int(rd((mode==0)?4u:6u));}
-   int numEP=numPart*2;
-   if(mode==4||mode==5){rotation=int(rd(2u));if(mode==4)isb=int(rd(1u));}
-   int ep[6][4];
-   for(int i=0;i<3;i++)for(int j=0;j<numEP;j++)ep[j][i]=int(rd(uint(abc0[mode])));
-   if(abc1[mode]>0)for(int j=0;j<numEP;j++)ep[j][3]=int(rd(uint(abc1[mode])));
-   int pbits=0xCB;
-   if(mode==0||mode==1||mode==3||mode==6||mode==7){
-      for(int i=0;i<numEP;i++)for(int j=0;j<4;j++)ep[i][j]<<=1;
-      if(mode==1){int pi=int(rd(1u)),pj=int(rd(1u));for(int k=0;k<3;k++){ep[0][k]|=pi;ep[1][k]|=pi;ep[2][k]|=pj;ep[3][k]|=pj;}}
-      else if((pbits&(1<<mode))!=0){for(int i=0;i<numEP;i++){int pj=int(rd(1u));for(int k=0;k<4;k++)ep[i][k]|=pj;}}
-   }
-   for(int i=0;i<numEP;i++){
-      int j=abc0[mode]+((pbits>>mode)&1);
-      for(int k=0;k<3;k++){ep[i][k]=ep[i][k]<<(8-j);ep[i][k]=ep[i][k]|(ep[i][k]>>j);}
-      j=abc1[mode]+((pbits>>mode)&1);
-      ep[i][3]=ep[i][3]<<(8-j);ep[i][3]=ep[i][3]|(ep[i][3]>>j);
-   }
-   if(abc1[mode]==0)for(int j=0;j<numEP;j++)ep[j][3]=0xFF;
-   int indexBits=(mode==0||mode==1)?3:((mode==6)?4:2);
-   int indexBits2=(mode==4)?3:((mode==5)?2:0);
-   int idxs[16];
-   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
-      int ps=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
-      int ib=(mode==0||mode==1)?3:((mode==6)?4:2);
-      if((ps&0x80)!=0)ib--;
-      idxs[i*4+j]=int(rd(uint(ib)));
-   }
-   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
-      int psr=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
-      int ps=psr&3;
-      int idx=idxs[i*4+j],r,g,b,a;
-      int w0i=(indexBits==2)?aW2[idx]:((indexBits==3)?aW3[idx]:aW4[idx]);
-      if(indexBits2==0){
-         r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);
-         b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);
-      } else {
-         int idx2=int(rd(((i|j)!=0)?uint(indexBits2):uint(indexBits2-1)));
-         int w2i=(indexBits2==2)?aW2[idx2]:aW3[idx2];
-         if(isb==0){r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w2i);}
-         else {r=interp(ep[ps*2][0],ep[ps*2+1][0],w2i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w2i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w2i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);}
-      }
-      if(rotation==1){int t=a;a=r;r=t;}else if(rotation==2){int t=a;a=g;g=t;}else if(rotation==3){int t=a;a=b;b=t;}
-      texel[i*4+j]=uint(r)|(uint(g)<<8u)|(uint(b)<<16u)|(uint(a)<<24u);
-   }
 }
 
 /* ---- ASTC block assembly ---- */
