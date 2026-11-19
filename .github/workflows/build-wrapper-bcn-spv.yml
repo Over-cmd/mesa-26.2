@@ -1,0 +1,89 @@
+name: Generate wrapper_bcn_spv.h
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/vulkan/wrapper/wrapper_bcn_transcode.comp'
+      - '.github/workflows/build-wrapper-bcn-spv.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write # Solo necesario si habilitas el paso de commit/push al final
+
+jobs:
+  generate-spv-header:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install glslc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          glslc --version
+
+      - name: Compile wrapper_bcn_transcode.comp to wrapper_bcn_spv.h
+        run: |
+          SHADER_COMP="src/vulkan/wrapper/wrapper_bcn_transcode.comp"
+          TMP_SPV="/tmp/wrapper_bcn_transcode.spv"
+          OUT_H="src/vulkan/wrapper/wrapper_bcn_spv.h"
+          ARRAY_NAME="wrapper_bcn_transcode_spv"
+
+          glslc "$SHADER_COMP" -o "$TMP_SPV"
+
+          python3 - "$TMP_SPV" "$OUT_H" "$ARRAY_NAME" <<'EOF'
+          import struct
+          import sys
+
+          spv_path, h_path, var_name = sys.argv[1], sys.argv[2], sys.argv[3]
+          guard = "WRAPPER_BCN_SPV_H"
+
+          with open(spv_path, "rb") as f:
+              data = f.read()
+
+          if len(data) % 4 != 0:
+              raise ValueError("El archivo .spv no tiene un tamano multiplo de 4 bytes.")
+
+          words = struct.unpack("<" + "I" * (len(data) // 4), data)
+          lines = []
+          per_line = 4
+          for i in range(0, len(words), per_line):
+              chunk = words[i : i + per_line]
+              lines.append("{" + ",".join(f"0x{w:08x}" for w in chunk) + "}")
+
+          header = f"""/* Auto-generated from wrapper_bcn_transcode.comp via glslc. Do not edit. */
+          #ifndef {guard}
+          #define {guard}
+          #include <stdint.h>
+          static const uint32_t {var_name}[] =
+          {{
+          {",\n".join(lines)}
+          }};
+          #endif
+          """
+
+          with open(h_path, "w", encoding="utf-8") as f:
+              f.write(header)
+          EOF
+
+          head -n 8 "$OUT_H"
+
+      - name: Upload wrapper_bcn_spv.h artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wrapper-bcn-spv-header
+          path: src/vulkan/wrapper/wrapper_bcn_spv.h
+
+      # Opcional: descomenta este paso si quieres que el workflow guarde wrapper_bcn_spv.h en el repo
+      # - name: Commit and push wrapper_bcn_spv.h
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      #     git add src/vulkan/wrapper/wrapper_bcn_spv.h
+      #     if ! git diff --staged --quiet; then
+      #       git commit -m "chore(vulkan/wrapper): generate wrapper_bcn_spv.h"
+      #       git push
+      #     fi
