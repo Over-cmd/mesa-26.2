@@ -165,7 +165,7 @@ const uint astc_ce_quant[256] = uint[](
   41u,41u,25u,25u,25u,25u,25u,25u,9u,9u,9u,9u,9u,9u,39u,39u,39u,39u,39u,23u,
   23u,23u,23u,23u,7u,7u,7u,7u,7u,7u,37u,37u,37u,37u,37u,21u,21u,21u,21u,21u,
   5u,5u,5u,5u,5u,5u,35u,35u,35u,35u,35u,19u,19u,19u,19u,19u,19u,3u,3u,3u,
-  3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1u,1u,1u
+  3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1.0,1u,1u
 );
 
 const int astc_pinv8[1024] = int[](
@@ -235,9 +235,15 @@ const int astc_pinv8[1024] = int[](
   -2,2,5,-3,-10,-9,33,75,-3,4,10,-4,-25,-16,75,166
 );
 
-/* ---- Decodificadores BC adicionales (BC2 / BC3 / BC4 / BC5) ---- */
+/* ---- Declaración adelantada de variables globales y buffers de texels ---- */
 uint apal[8];
+uint texel[16];
+uint chan(uint px, uint c) { return (texel[px] >> (c * 8u)) & 0xffu; }
 
+uint texel64[64];
+uint chan64(uint px, uint c) { return (texel64[px] >> (c * 8u)) & 0xffu; }
+
+/* ---- Decodificadores BC adicionales (BC2 / BC3 / BC4 / BC5) ---- */
 void bc_alpha_palette(uint w0) {
    uint a0 = src[w0] & 0xffu;
    uint a1 = (src[w0] >> 8u) & 0xffu;
@@ -332,14 +338,6 @@ void decode_bc_any(uint fmt, uint w0) {
    else if (fmt == 4u) decode_bc4(w0);
    else decode_bc5(w0);
 }
-
-/* ---- decoded texels (0xAABBGGRR) ---- */
-uint texel[16];
-uint chan(uint px, uint c) { return (texel[px] >> (c * 8u)) & 0xffu; }
-
-/* 8x8 texel grid (64 texels, row-major) + accessor for the 8x8 encoders. */
-uint texel64[64];
-uint chan64(uint px, uint c) { return (texel64[px] >> (c * 8u)) & 0xffu; }
 
 /* ---- BC1 decode (matches bcdec) ---- */
 void decode_bc1(uint w0) {
