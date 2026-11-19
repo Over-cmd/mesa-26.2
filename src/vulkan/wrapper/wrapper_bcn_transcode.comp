@@ -1,0 +1,838 @@
+#version 450
+/*
+ * BCn -> ASTC transcode compute shader. One invocation per ASTC block:
+ * decode the BC block(s) to RGBA texels, run the ASTC encoder, write one 16-byte ASTC block.
+ * format: 0=BC1, 1=BC7, 2=BC2, 3=BC3, 4=BC4, 5=BC5.   (BC6H is HDR and is not handled here.)
+ * astc8:  0=4x4 ASTC, 1=8x8 ASTC (2x2 BC blocks), 2=6x6 ASTC (2x2 BC blocks, top-left 6x6).
+ */
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer SrcBuf { uint src[]; };
+layout(std430, binding = 1) writeonly buffer DstBuf { uint dst[]; };
+layout(push_constant) uniform PC {
+   uint block_x; uint block_x_src; uint block_y; uint src_word_off;
+   uint format; uint has_alpha;
+   uint astc8; uint bc_bx; uint bc_by;
+} pc;
+
+const uint bc7_part2[1024] = uint[](
+  128u,0u,1u,1u,0u,0u,1u,1u,0u,0u,1u,1u,0u,0u,1u,129u,128u,0u,0u,1u,
+  0u,0u,0u,1u,0u,0u,0u,1u,0u,0u,0u,129u,128u,1u,1u,1u,0u,1u,1u,1u,
+  0u,1u,1u,1u,0u,1u,1u,129u,128u,0u,0u,1u,0u,0u,1u,1u,0u,0u,1u,1u,
+  0u,1u,1u,129u,128u,0u,0u,0u,0u,0u,0u,1u,0u,0u,0u,1u,0u,0u,1u,129u,
+  128u,0u,1u,1u,0u,1u,1u,1u,0u,1u,1u,1u,1u,1u,1u,129u,128u,0u,0u,1u,
+  0u,0u,1u,1u,0u,1u,1u,1u,1u,1u,1u,129u,128u,0u,0u,0u,0u,0u,0u,1u,
+  0u,0u,1u,1u,0u,1u,1u,129u,128u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,1u,
+  0u,0u,1u,129u,128u,0u,1u,1u,0u,1u,1u,1u,1u,1u,1u,1u,1u,1u,1u,129u,
+  128u,0u,0u,0u,0u,0u,0u,1u,0u,1u,1u,1u,1u,1u,1u,129u,128u,0u,0u,0u,
+  0u,0u,0u,0u,0u,0u,0u,1u,0u,1u,1u,129u,128u,0u,0u,1u,0u,1u,1u,1u,
+  1u,1u,1u,1u,1u,1u,1u,129u,128u,0u,0u,0u,0u,0u,0u,0u,1u,1u,1u,1u,
+  1u,1u,1u,129u,128u,0u,0u,0u,1u,1u,1u,1u,1u,1u,1u,1u,1u,1u,1u,129u,
+  128u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,1u,1u,1u,129u,128u,0u,0u,0u,
+  1u,0u,0u,0u,1u,1u,1u,0u,1u,1u,1u,129u,128u,1u,129u,1u,0u,0u,0u,1u,
+  0u,0u,0u,0u,0u,0u,0u,0u,128u,0u,0u,0u,0u,0u,0u,0u,129u,0u,0u,0u,
+  1u,1u,1u,0u,128u,1u,129u,1u,0u,0u,1u,1u,0u,0u,0u,1u,0u,0u,0u,0u,
+  128u,0u,129u,1u,0u,0u,0u,1u,0u,0u,0u,0u,0u,0u,0u,0u,128u,0u,0u,0u,
+  1u,0u,0u,0u,129u,1u,0u,0u,1u,1u,1u,0u,128u,0u,0u,0u,0u,0u,0u,0u,
+  129u,0u,0u,0u,1u,1u,0u,0u,128u,1u,1u,1u,0u,0u,1u,1u,0u,0u,1u,1u,
+  0u,0u,0u,129u,128u,0u,129u,1u,0u,0u,0u,1u,0u,0u,0u,1u,0u,0u,0u,0u,
+  128u,0u,0u,0u,1u,0u,0u,0u,129u,0u,0u,0u,1u,1u,0u,0u,128u,1u,129u,0u,
+  0u,1u,1u,0u,0u,1u,1u,0u,0u,1u,1u,0u,128u,0u,129u,1u,0u,1u,1u,0u,
+  0u,1u,1u,0u,1u,1u,0u,0u,128u,0u,0u,1u,0u,1u,1u,1u,129u,1u,1u,0u,
+  1u,0u,0u,0u,128u,0u,0u,0u,1u,1u,1u,1u,129u,1u,1u,1u,0u,0u,0u,0u,
+  128u,1u,129u,1u,0u,0u,0u,1u,1u,0u,0u,0u,1u,1u,1u,0u,128u,0u,129u,1u,
+  1u,0u,0u,1u,1u,0u,0u,1u,1u,1u,0u,0u,128u,1u,0u,1u,0u,1u,0u,1u,
+  0u,1u,0u,1u,0u,1u,0u,129u,128u,0u,0u,0u,1u,1u,1u,1u,0u,0u,0u,0u,
+  1u,1u,1u,129u,128u,1u,0u,1u,1u,0u,129u,0u,0u,1u,0u,1u,1u,0u,1u,0u,
+  128u,0u,1u,1u,0u,0u,1u,1u,129u,1u,0u,0u,1u,1u,0u,0u,128u,0u,129u,1u,
+  1u,1u,0u,0u,0u,0u,1u,1u,1u,1u,0u,0u,128u,1u,0u,1u,0u,1u,0u,1u,
+  129u,0u,1u,0u,1u,0u,1u,0u,128u,1u,1u,0u,1u,0u,0u,1u,0u,1u,1u,0u,
+  1u,0u,0u,129u,128u,1u,0u,1u,1u,0u,1u,0u,1u,0u,1u,0u,0u,1u,0u,129u,
+  128u,1u,129u,1u,0u,0u,1u,1u,1u,1u,0u,0u,1u,1u,1u,0u,128u,0u,0u,1u,
+  0u,0u,1u,1u,129u,1u,0u,0u,1u,0u,0u,0u,128u,0u,129u,1u,0u,0u,1u,0u,
+  0u,1u,0u,0u,1u,1u,0u,0u,128u,0u,129u,1u,1u,0u,1u,1u,1u,1u,0u,1u,
+  1u,1u,0u,0u,128u,1u,129u,0u,1u,0u,0u,1u,1u,0u,0u,1u,0u,1u,1u,0u,
+  128u,0u,1u,1u,1u,1u,0u,0u,1u,1u,0u,0u,0u,0u,1u,129u,128u,1u,1u,0u,
+  0u,1u,1u,0u,1u,0u,0u,1u,1u,0u,0u,129u,128u,0u,0u,0u,0u,1u,129u,0u,
+  0u,1u,1u,0u,0u,0u,0u,0u,128u,1u,0u,0u,1u,1u,129u,0u,0u,1u,0u,0u,
+  0u,0u,0u,0u,128u,0u,129u,0u,0u,1u,1u,1u,0u,0u,1u,0u,0u,0u,0u,0u,
+  128u,0u,0u,0u,0u,0u,129u,0u,0u,1u,1u,1u,0u,0u,1u,0u,128u,0u,0u,0u,
+  0u,1u,0u,0u,129u,1u,1u,0u,0u,1u,0u,0u,128u,1u,1u,0u,1u,1u,0u,0u,
+  1u,0u,0u,1u,0u,0u,1u,129u,128u,0u,1u,1u,0u,1u,1u,0u,1u,1u,0u,0u,
+  1u,0u,0u,129u,128u,1u,129u,0u,0u,0u,1u,1u,1u,0u,0u,1u,1u,1u,0u,0u,
+  128u,0u,129u,1u,1u,0u,0u,1u,1u,1u,0u,0u,0u,1u,1u,0u,128u,1u,1u,0u,
+  1u,1u,0u,0u,1u,1u,0u,0u,1u,0u,0u,129u,128u,1u,1u,0u,0u,0u,1u,1u,
+  0u,0u,1u,1u,1u,0u,0u,129u,128u,1u,1u,1u,1u,1u,1u,0u,1u,0u,0u,0u,
+  0u,0u,0u,129u,128u,0u,0u,1u,1u,0u,0u,0u,1u,1u,1u,0u,0u,1u,1u,129u,
+  128u,0u,0u,0u,1u,1u,1u,1u,0u,0u,1u,1u,0u,0u,1u,129u,128u,0u,129u,1u,
+  0u,0u,1u,1u,1u,1u,1u,1u,0u,0u,0u,0u,128u,0u,129u,0u,0u,0u,1u,0u,
+  1u,1u,1u,0u,1u,1u,1u,0u,128u,1u,0u,0u,0u,1u,0u,0u,0u,1u,1u,1u,
+  0u,1u,1u,129u
+);
+const uint bc7_part3[1024] = uint[](
+  128u,0u,1u,129u,0u,0u,1u,1u,0u,2u,2u,1u,2u,2u,2u,130u,128u,0u,0u,129u,
+  0u,0u,1u,1u,130u,2u,1u,1u,2u,2u,2u,1u,128u,0u,0u,0u,2u,0u,0u,1u,
+  130u,2u,1u,1u,2u,2u,1u,129u,128u,2u,2u,130u,0u,0u,2u,2u,0u,0u,1u,1u,
+  0u,1u,1u,129u,128u,0u,0u,0u,0u,0u,0u,0u,129u,1u,2u,2u,1u,1u,2u,130u,
+  128u,0u,1u,129u,0u,0u,1u,1u,0u,0u,2u,2u,0u,0u,2u,130u,128u,0u,2u,130u,
+  0u,0u,2u,2u,1u,1u,1u,1u,1u,1u,1u,129u,128u,0u,1u,1u,0u,0u,1u,1u,
+  130u,2u,1u,1u,2u,2u,1u,129u,128u,0u,0u,0u,0u,0u,0u,0u,129u,1u,1u,1u,
+  2u,2u,2u,130u,128u,0u,0u,0u,1u,1u,1u,1u,129u,1u,1u,1u,2u,2u,2u,130u,
+  128u,0u,0u,0u,1u,1u,129u,1u,2u,2u,2u,2u,2u,2u,2u,130u,128u,0u,1u,2u,
+  0u,0u,129u,2u,0u,0u,1u,2u,0u,0u,1u,130u,128u,1u,1u,2u,0u,1u,129u,2u,
+  0u,1u,1u,2u,0u,1u,1u,130u,128u,1u,2u,2u,0u,129u,2u,2u,0u,1u,2u,2u,
+  0u,1u,2u,130u,128u,0u,1u,129u,0u,1u,1u,2u,1u,1u,2u,2u,1u,2u,2u,130u,
+  128u,0u,1u,129u,2u,0u,0u,1u,130u,2u,0u,0u,2u,2u,2u,0u,128u,0u,0u,129u,
+  0u,0u,1u,1u,0u,1u,1u,2u,1u,1u,2u,130u,128u,1u,1u,129u,0u,0u,1u,1u,
+  130u,0u,0u,1u,2u,2u,0u,0u,128u,0u,0u,0u,1u,1u,2u,2u,129u,1u,2u,2u,
+  1u,1u,2u,130u,128u,0u,2u,130u,0u,0u,2u,2u,0u,0u,2u,2u,1u,1u,1u,129u,
+  128u,1u,1u,129u,0u,1u,1u,1u,0u,2u,2u,2u,0u,2u,2u,130u,128u,0u,0u,129u,
+  0u,0u,0u,1u,130u,2u,2u,1u,2u,2u,2u,1u,128u,0u,0u,0u,0u,0u,129u,1u,
+  0u,1u,2u,2u,0u,1u,2u,130u,128u,0u,0u,0u,1u,1u,0u,0u,130u,2u,129u,0u,
+  2u,2u,1u,0u,128u,1u,2u,130u,0u,129u,2u,2u,0u,0u,1u,1u,0u,0u,0u,0u,
+  128u,0u,1u,2u,0u,0u,1u,2u,129u,1u,2u,2u,2u,2u,2u,130u,128u,1u,1u,0u,
+  1u,2u,130u,1u,129u,2u,2u,1u,0u,1u,1u,0u,128u,0u,0u,0u,0u,1u,129u,0u,
+  1u,2u,130u,1u,1u,2u,2u,1u,128u,0u,2u,2u,1u,1u,0u,2u,129u,1u,0u,2u,
+  0u,0u,2u,130u,128u,1u,1u,0u,0u,129u,1u,0u,2u,0u,0u,2u,2u,2u,2u,130u,
+  128u,0u,1u,1u,0u,1u,2u,2u,0u,1u,130u,2u,0u,0u,1u,129u,128u,0u,0u,0u,
+  2u,0u,0u,0u,130u,2u,1u,1u,2u,2u,2u,129u,128u,0u,0u,0u,0u,0u,0u,2u,
+  129u,1u,2u,2u,1u,2u,2u,130u,128u,2u,2u,130u,0u,0u,2u,2u,0u,0u,1u,2u,
+  0u,0u,1u,129u,128u,0u,1u,129u,0u,0u,1u,2u,0u,0u,2u,2u,0u,2u,2u,130u,
+  128u,1u,2u,0u,0u,129u,2u,0u,0u,1u,130u,0u,0u,1u,2u,0u,128u,0u,0u,0u,
+  1u,1u,129u,1u,2u,2u,130u,2u,0u,0u,0u,0u,128u,1u,2u,0u,1u,2u,0u,1u,
+  130u,0u,129u,2u,0u,1u,2u,0u,128u,1u,2u,0u,2u,0u,1u,2u,129u,130u,0u,1u,
+  0u,1u,2u,0u,128u,0u,1u,1u,2u,2u,0u,0u,1u,1u,130u,2u,0u,0u,1u,129u,
+  128u,0u,1u,1u,1u,1u,130u,2u,2u,2u,0u,0u,0u,0u,1u,129u,128u,1u,0u,129u,
+  0u,1u,0u,1u,2u,2u,2u,2u,2u,2u,2u,130u,128u,0u,0u,0u,0u,0u,0u,0u,
+  130u,1u,2u,1u,2u,1u,2u,129u,128u,0u,2u,2u,1u,129u,2u,2u,0u,0u,2u,2u,
+  1u,1u,2u,130u,128u,0u,2u,130u,0u,0u,1u,1u,0u,0u,2u,2u,0u,0u,1u,129u,
+  128u,2u,2u,0u,1u,2u,130u,1u,0u,2u,2u,0u,1u,2u,2u,129u,128u,1u,0u,1u,
+  2u,2u,130u,2u,2u,2u,2u,2u,0u,1u,0u,129u,128u,0u,0u,0u,2u,1u,2u,1u,
+  130u,1u,2u,1u,2u,1u,2u,129u,128u,1u,0u,129u,0u,1u,0u,1u,0u,1u,0u,1u,
+  2u,2u,2u,130u,128u,2u,2u,130u,0u,1u,1u,1u,0u,2u,2u,2u,0u,1u,1u,129u,
+  128u,0u,0u,2u,1u,129u,1u,2u,0u,0u,0u,2u,1u,1u,1u,130u,128u,0u,0u,0u,
+  2u,129u,1u,2u,2u,1u,1u,2u,2u,1u,1u,130u,128u,2u,2u,2u,0u,129u,1u,1u,
+  0u,1u,1u,1u,0u,2u,2u,130u,128u,0u,0u,2u,1u,1u,1u,2u,129u,1u,1u,2u,
+  0u,0u,0u,130u,128u,1u,1u,0u,0u,129u,1u,0u,0u,1u,1u,0u,2u,2u,2u,130u,
+  128u,0u,0u,0u,0u,0u,0u,0u,2u,1u,129u,2u,2u,1u,1u,130u,128u,1u,1u,0u,
+  0u,129u,1u,0u,2u,2u,2u,2u,2u,2u,2u,130u,128u,0u,2u,2u,0u,0u,1u,1u,
+  0u,0u,129u,1u,0u,0u,2u,130u,128u,0u,2u,2u,1u,1u,2u,2u,129u,1u,2u,2u,
+  0u,0u,2u,130u,128u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,2u,129u,1u,130u,
+  128u,0u,0u,130u,0u,0u,0u,1u,0u,0u,0u,2u,0u,0u,0u,129u,128u,2u,2u,2u,
+  1u,2u,2u,2u,0u,2u,2u,2u,129u,2u,2u,130u,128u,1u,0u,129u,2u,2u,2u,2u,
+  2u,2u,2u,2u,2u,2u,2u,130u,128u,1u,1u,129u,2u,0u,1u,1u,130u,2u,0u,1u,
+  2u,2u,2u,0u
+);
+
+const uint astc_trit5[243] = uint[](
+  0u,1u,2u,4u,5u,6u,8u,9u,10u,16u,17u,18u,20u,21u,22u,24u,25u,26u,3u,7u,
+  11u,19u,23u,27u,12u,13u,14u,32u,33u,34u,36u,37u,38u,40u,41u,42u,48u,49u,50u,52u,
+  53u,54u,56u,57u,58u,35u,39u,43u,51u,55u,59u,44u,45u,46u,64u,65u,66u,68u,69u,70u,
+  72u,73u,74u,80u,81u,82u,84u,85u,86u,88u,89u,90u,67u,71u,75u,83u,87u,91u,76u,77u,
+  78u,128u,129u,130u,132u,133u,134u,136u,137u,138u,144u,145u,146u,148u,149u,150u,152u,153u,154u,131u,
+  135u,139u,147u,151u,155u,140u,141u,142u,160u,161u,162u,164u,165u,166u,168u,169u,170u,176u,177u,178u,
+  180u,181u,182u,184u,185u,186u,163u,167u,171u,179u,183u,187u,172u,173u,174u,192u,193u,194u,196u,197u,
+  198u,200u,201u,202u,208u,209u,210u,212u,213u,214u,216u,217u,218u,195u,199u,203u,211u,215u,219u,204u,
+  205u,206u,96u,97u,98u,100u,101u,102u,104u,105u,106u,112u,113u,114u,116u,117u,118u,120u,121u,122u,
+  99u,103u,107u,115u,119u,123u,108u,109u,110u,224u,225u,226u,228u,229u,230u,232u,233u,234u,240u,241u,
+  242u,244u,245u,246u,248u,249u,250u,227u,231u,235u,243u,247u,251u,236u,237u,238u,28u,29u,30u,60u,
+  61u,62u,92u,93u,94u,156u,157u,158u,188u,189u,190u,220u,221u,222u,31u,63u,95u,159u,191u,223u,
+  124u,125u,126u
+);
+const uint astc_trit3[27] = uint[](
+  0u,1u,2u,4u,5u,6u,8u,9u,10u,16u,17u,18u,20u,21u,22u,24u,25u,26u,3u,7u,
+  11u,19u,23u,27u,12u,13u,14u
+);
+const uint astc_ce_unq[48] = uint[](
+  0u,255u,16u,239u,32u,223u,48u,207u,65u,190u,81u,174u,97u,158u,113u,142u,5u,250u,21u,234u,
+  38u,217u,54u,201u,70u,185u,86u,169u,103u,152u,119u,136u,11u,244u,27u,228u,43u,212u,59u,196u,
+  76u,179u,92u,163u,108u,147u,124u,131u
+);
+const uint astc_ce_quant[256] = uint[](
+  0u,0u,0u,16u,16u,16u,16u,16u,16u,32u,32u,32u,32u,32u,2u,2u,2u,2u,2u,18u,
+  18u,18u,18u,18u,18u,34u,34u,34u,34u,34u,4u,4u,4u,4u,4u,4u,20u,20u,20u,20u,
+  20u,36u,36u,36u,36u,36u,6u,6u,6u,6u,6u,6u,22u,22u,22u,22u,22u,38u,38u,38u,
+  38u,38u,8u,8u,8u,8u,8u,8u,24u,24u,24u,24u,24u,24u,40u,40u,40u,40u,40u,10u,
+  10u,10u,10u,10u,26u,26u,26u,26u,26u,26u,42u,42u,42u,42u,42u,12u,12u,12u,12u,12u,
+  12u,28u,28u,28u,28u,28u,44u,44u,44u,44u,44u,14u,14u,14u,14u,14u,14u,30u,30u,30u,
+  30u,30u,46u,46u,46u,46u,46u,46u,47u,47u,47u,47u,47u,47u,31u,31u,31u,31u,31u,15u,
+  15u,15u,15u,15u,15u,45u,45u,45u,45u,45u,29u,29u,29u,29u,29u,13u,13u,13u,13u,13u,
+  13u,43u,43u,43u,43u,43u,27u,27u,27u,27u,27u,27u,11u,11u,11u,11u,11u,41u,41u,41u,
+  41u,41u,25u,25u,25u,25u,25u,25u,9u,9u,9u,9u,9u,9u,39u,39u,39u,39u,39u,23u,
+  23u,23u,23u,23u,7u,7u,7u,7u,7u,7u,37u,37u,37u,37u,37u,21u,21u,21u,21u,21u,
+  5u,5u,5u,5u,5u,5u,35u,35u,35u,35u,35u,19u,19u,19u,19u,19u,19u,3u,3u,3u,
+  3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1u,1u,1u
+);
+
+/* 8x8 weight-grid infill pseudo-inverse (x256 fixed point), flattened [16*64]. */
+const int astc_pinv8[1024] = int[](
+  166,75,-16,-25,-4,10,4,-3,75,33,-9,-10,-3,5,2,-2,
+  -16,-9,-2,5,-1,-1,0,0,-25,-10,5,5,0,-2,-1,0,
+  -4,-3,-1,0,1,0,0,0,10,5,-1,-2,0,0,0,0,
+  4,2,0,-1,0,0,0,0,-3,-2,0,0,0,0,0,0,
+  -42,45,132,93,17,-39,-14,12,-20,21,62,39,10,-19,-6,6,
+  3,-3,-8,-15,4,1,1,0,5,-8,-21,-16,-1,6,2,-1,
+  1,-1,-3,-1,-2,1,0,0,-2,3,7,6,1,-2,-1,0,
+  -1,1,2,2,0,-1,0,0,1,-1,-2,-2,-1,0,0,0,
+  12,-14,-39,17,93,132,45,-42,6,-6,-19,10,39,62,21,-20,
+  0,1,1,4,-15,-8,-3,3,-1,2,6,-1,-16,-21,-8,5,
+  0,0,1,-2,-1,-3,-1,1,0,-1,-2,1,6,7,3,-2,
+  0,0,-1,0,2,2,1,-1,0,0,0,-1,-2,-2,-1,1,
+  -3,4,10,-4,-25,-16,75,166,-2,2,5,-3,-10,-9,33,75,
+  0,0,-1,-1,5,-2,-9,-16,0,-1,-2,0,5,5,-10,-25,
+  0,0,0,1,0,-1,-3,-4,0,0,0,0,-2,-1,5,10,
+  0,0,0,0,-1,0,2,4,0,0,0,0,0,0,-2,-3,
+  -42,-20,3,5,1,-2,-1,1,45,21,-3,-8,-1,3,1,-1,
+  132,62,-8,-21,-3,7,2,-2,93,39,-15,-16,-1,6,2,-2,
+  17,10,4,-1,-2,1,0,-1,-39,-19,1,6,1,-2,-1,0,
+  -14,-6,1,2,0,-1,0,0,12,6,0,-1,0,0,0,0,
+  12,-10,-32,-23,-5,9,3,-3,-10,12,34,28,2,-9,-3,3,
+  -32,34,99,79,10,-27,-9,9,-23,28,79,59,4,-22,-8,7,
+  -5,2,10,4,8,-4,-1,2,9,-9,-27,-22,-4,6,2,-2,
+  3,-3,-9,-8,-1,2,1,-1,-3,3,9,7,2,-2,-1,1,
+  -3,3,9,-5,-23,-32,-10,12,3,-3,-9,2,28,34,12,-10,
+  9,-9,-27,10,79,99,34,-32,7,-8,-22,4,59,79,28,-23,
+  2,-1,-4,8,4,10,2,-5,-2,2,6,-4,-22,-27,-9,9,
+  -1,1,2,-1,-8,-9,-3,3,1,-1,-2,2,7,9,3,-3,
+  1,-1,-2,1,5,3,-20,-42,-1,1,3,-1,-8,-3,21,45,
+  -2,2,7,-3,-21,-8,62,132,-2,2,6,-1,-16,-15,39,93,
+  -1,0,1,-2,-1,4,10,17,0,-1,-2,1,6,1,-19,-39,
+  0,0,-1,0,2,1,-6,-14,0,0,0,0,-1,0,6,12,
+  12,6,0,-1,0,0,0,0,-14,-6,1,2,0,-1,0,0,
+  -39,-19,1,6,1,-2,-1,0,17,10,4,-1,-2,1,0,-1,
+  93,39,-15,-16,-1,6,2,-2,132,62,-8,-21,-3,7,2,-2,
+  45,21,-3,-8,-1,3,1,-1,-42,-20,3,5,1,-2,-1,1,
+  -3,3,9,7,2,-2,-1,1,3,-3,-9,-8,-1,2,1,-1,
+  9,-9,-27,-22,-4,6,2,-2,-5,2,10,4,8,-4,-1,2,
+  -23,28,79,59,4,-22,-8,7,-32,34,99,79,10,-27,-9,9,
+  -10,12,34,28,2,-9,-3,3,12,-10,-32,-23,-5,9,3,-3,
+  1,-1,-2,2,7,9,3,-3,-1,1,2,-1,-8,-9,-3,3,
+  -2,2,6,-4,-22,-27,-9,9,2,-1,-4,8,4,10,2,-5,
+  7,-8,-22,4,59,79,28,-23,9,-9,-27,10,79,99,34,-32,
+  3,-3,-9,2,28,34,12,-10,-3,3,9,-5,-23,-32,-10,12,
+  0,0,0,0,-1,0,6,12,0,0,-1,0,2,1,-6,-14,
+  0,-1,-2,1,6,1,-19,-39,-1,0,1,-2,-1,4,10,17,
+  -2,2,6,-1,-16,-15,39,93,-2,2,7,-3,-21,-8,62,132,
+  -1,1,3,-1,-8,-3,21,45,1,-1,-2,1,5,3,-20,-42,
+  -3,-2,0,0,0,0,0,0,4,2,0,-1,0,0,0,0,
+  10,5,-1,-2,0,0,0,0,-4,-3,-1,0,1,0,0,0,
+  -25,-10,5,5,0,-2,-1,0,-16,-9,-2,5,-1,-1,0,0,
+  75,33,-9,-10,-3,5,2,-2,166,75,-16,-25,-4,10,4,-3,
+  1,-1,-2,-2,-1,0,0,0,-1,1,2,2,0,-1,0,0,
+  -2,3,7,6,1,-2,-1,0,1,-1,-3,-1,-2,1,0,0,
+  5,-8,-21,-16,-1,6,2,-1,3,-3,-8,-15,4,1,1,0,
+  -20,21,62,39,10,-19,-6,6,-42,45,132,93,17,-39,-14,12,
+  0,0,0,-1,-2,-2,-1,1,0,0,-1,0,2,2,1,-1,
+  0,-1,-2,1,6,7,3,-2,0,0,1,-2,-1,-3,-1,1,
+  -1,2,6,-1,-16,-21,-8,5,0,1,1,4,-15,-8,-3,3,
+  6,-6,-19,10,39,62,21,-20,12,-14,-39,17,93,132,45,-42,
+  0,0,0,0,0,0,-2,-3,0,0,0,0,-1,0,2,4,
+  0,0,0,0,-2,-1,5,10,0,0,0,1,0,-1,-3,-4,
+  0,-1,-2,0,5,5,-10,-25,0,0,-1,-1,5,-2,-9,-16,
+  -2,2,5,-3,-10,-9,33,75,-3,4,10,-4,-25,-16,75,166
+);
+
+/* 6x6 weight-grid infill pseudo-inverse (x256 fixed point), flattened [16*36]. */
+const int astc_pinv6[576] = int[](
+  217,50,-38,2,8,-3,50,7,-9,1,2,-1,-38,-9,8,-1,-1,0,2,1,-1,0,0,0,8,2,-1,0,0,0,-3,-1,0,0,0,0,
+  -50,134,186,-11,-38,14,-13,36,46,-6,-11,4,8,-24,-36,4,6,-2,0,0,4,-1,1,0,-1,4,6,1,-1,0,1,-2,-2,0,0,0,
+  14,-38,-11,186,134,-50,4,-11,-6,46,36,-13,-2,6,4,-36,-24,8,0,1,-1,4,0,0,0,-1,1,6,4,-1,0,0,0,-2,-2,1,
+  -3,8,2,-38,50,217,-1,2,1,-9,7,50,0,-1,-1,8,-9,-38,0,0,0,-1,1,2,0,0,0,-1,2,8,0,0,0,0,-1,-3,
+  -50,-13,8,0,-1,1,134,36,-24,0,4,-2,186,46,-36,4,6,-2,-11,-6,4,-1,1,0,-38,-11,6,1,-1,0,14,4,-2,0,0,0,
+  13,-31,-44,1,8,-3,-31,77,112,0,-20,8,-44,112,173,-18,-30,12,1,0,-18,6,-4,1,8,-20,-30,-4,3,-1,-3,8,12,1,-1,0,
+  -3,8,1,-44,-31,13,8,-20,0,112,77,-31,12,-30,-18,173,112,-44,1,-4,6,-18,0,1,-1,3,-4,-30,-20,8,0,-1,1,12,8,-3,
+  1,-1,0,8,-13,-50,-2,4,0,-24,36,134,-2,6,4,-36,46,186,0,1,-1,4,-6,-11,0,-1,1,6,-11,-38,0,0,0,-2,4,14,
+  14,4,-2,0,0,0,-38,-11,6,1,-1,0,-11,-6,4,-1,1,0,186,46,-36,4,6,-2,134,36,-24,0,4,-2,-50,-13,8,0,-1,1,
+  -3,8,12,1,-1,0,8,-20,-30,-4,3,-1,1,0,-18,6,-4,1,-44,112,173,-18,-30,12,-31,77,112,0,-20,8,13,-31,-44,1,8,-3,
+  0,-1,1,12,8,-3,-1,3,-4,-30,-20,8,1,-4,6,-18,0,1,12,-30,-18,173,112,-44,8,-20,0,112,77,-31,-3,8,1,-44,-31,13,
+  0,0,0,-2,4,14,0,-1,1,6,-11,-38,0,1,-1,4,-6,-11,-2,6,4,-36,46,186,-2,4,0,-24,36,134,1,-1,0,8,-13,-50,
+  -3,-1,0,0,0,0,8,2,-1,0,0,0,2,1,-1,0,0,0,-38,-9,8,-1,-1,0,50,7,-9,1,2,-1,217,50,-38,2,8,-3,
+  1,-2,-2,0,0,0,-1,4,6,1,-1,0,0,0,4,-1,1,0,8,-24,-36,4,6,-2,-13,36,46,-6,-11,4,-50,134,186,-11,-38,14,
+  0,0,0,-2,-2,1,0,-1,1,6,4,-1,0,1,-1,4,0,0,-2,6,4,-36,-24,8,4,-11,-6,46,36,-13,14,-38,-11,186,134,-50,
+  0,0,0,0,-1,-3,0,0,0,-1,2,8,0,0,0,-1,1,2,0,-1,-1,8,-9,-38,-1,2,1,-9,7,50,-3,8,2,-38,50,217
+);
+
+/* ---- decoded texels (0xAABBGGRR) ---- */
+uint texel[16];
+uint chan(uint px, uint c) { return (texel[px] >> (c * 8u)) & 0xffu; }
+
+/* 8x8 / 6x6 texel grid (up to 64 texels, row-major). */
+uint texel64[64];
+uint chan64(uint px, uint c) { return (texel64[px] >> (c * 8u)) & 0xffu; }
+
+/* ---- Safe source reader (bounds-checked against SrcBuf) ---- */
+uint read_src(uint idx) {
+   return (idx < uint(src.length())) ? src[idx] : 0u;
+}
+
+/* ---- BC1 decode (matches bcdec) ---- */
+void decode_bc1(uint w0) {
+   uint lo = read_src(w0), idx = read_src(w0 + 1u);
+   uint c0 = lo & 0xffffu, c1 = lo >> 16u;
+   uint r0=(c0>>11u)&0x1fu,g0=(c0>>5u)&0x3fu,b0=c0&0x1fu;
+   uint r1=(c1>>11u)&0x1fu,g1=(c1>>5u)&0x3fu,b1=c1&0x1fu;
+   uint ref[4]; uint r,g,b;
+   r=(r0*527u+23u)>>6u;g=(g0*259u+33u)>>6u;b=(b0*527u+23u)>>6u;ref[0]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   r=(r1*527u+23u)>>6u;g=(g1*259u+33u)>>6u;b=(b1*527u+23u)>>6u;ref[1]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   if (c0 > c1) {
+      r=((2u*r0+r1)*351u+61u)>>7u;g=((2u*g0+g1)*2763u+1039u)>>11u;b=((2u*b0+b1)*351u+61u)>>7u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;
+      r=((r0+2u*r1)*351u+61u)>>7u;g=((g0+2u*g1)*2763u+1039u)>>11u;b=((b0+2u*b1)*351u+61u)>>7u;ref[3]=0xff000000u|(b<<16u)|(g<<8u)|r;
+   } else {
+      r=((r0+r1)*1053u+125u)>>8u;g=((g0+g1)*4145u+1019u)>>11u;b=((b0+b1)*1053u+125u)>>8u;ref[2]=0xff000000u|(b<<16u)|(g<<8u)|r;ref[3]=0u;
+   }
+   for (uint i=0u;i<16u;i++) texel[i]=ref[(idx>>(i*2u))&3u];
+}
+
+/* ---- BC7 decode (128-bit reader over 4 words; matches bcdec, host-validated) ---- */
+uint B[4]; uint bitpos;
+uint rd(uint n) { uint r=0u; for(uint i=0u;i<n;i++){uint bp=bitpos+i;r|=((B[bp>>5u]>>(bp&31u))&1u)<<i;} bitpos+=n; return r; }
+int interp(int a,int b,int w) { return (a*(64-w)+b*w+32)>>6; }
+
+void decode_bc7(uint w0) {
+   for (uint i=0u;i<4u;i++) B[i]=read_src(w0+i);
+   bitpos=0u;
+   const int abc0[8]=int[](4,6,5,7,5,7,7,5);
+   const int abc1[8]=int[](0,0,0,0,6,8,7,5);
+   const int aW2[4]=int[](0,21,43,64);
+   const int aW3[8]=int[](0,9,18,27,37,46,55,64);
+   const int aW4[16]=int[](0,4,9,13,17,21,26,30,34,38,43,47,51,55,60,64);
+   int mode=0; while(mode<8 && rd(1u)==0u) mode++;
+   if (mode>=8) { for(uint i=0u;i<16u;i++) texel[i]=0u; return; }
+   int numPart=1,part_idx=0,rotation=0,isb=0;
+   if(mode==0||mode==1||mode==2||mode==3||mode==7){numPart=(mode==0||mode==2)?3:2;part_idx=int(rd((mode==0)?4u:6u));}
+   int numEP=numPart*2;
+   if(mode==4||mode==5){rotation=int(rd(2u));if(mode==4)isb=int(rd(1u));}
+   int ep[6][4];
+   for(int i=0;i<3;i++)for(int j=0;j<numEP;j++)ep[j][i]=int(rd(uint(abc0[mode])));
+   if(abc1[mode]>0)for(int j=0;j<numEP;j++)ep[j][3]=int(rd(uint(abc1[mode])));
+   int pbits=0xCB;
+   if(mode==0||mode==1||mode==3||mode==6||mode==7){
+      for(int i=0;i<numEP;i++)for(int j=0;j<4;j++)ep[i][j]<<=1;
+      if(mode==1){int pi=int(rd(1u)),pj=int(rd(1u));for(int k=0;k<3;k++){ep[0][k]|=pi;ep[1][k]|=pi;ep[2][k]|=pj;ep[3][k]|=pj;}}
+      else if((pbits&(1<<mode))!=0){for(int i=0;i<numEP;i++){int pj=int(rd(1u));for(int k=0;k<4;k++)ep[i][k]|=pj;}}
+   }
+   for(int i=0;i<numEP;i++){
+      int j=abc0[mode]+((pbits>>mode)&1);
+      for(int k=0;k<3;k++){ep[i][k]=ep[i][k]<<(8-j);ep[i][k]=ep[i][k]|(ep[i][k]>>j);}
+      j=abc1[mode]+((pbits>>mode)&1);
+      ep[i][3]=ep[i][3]<<(8-j);ep[i][3]=ep[i][3]|(ep[i][3]>>j);
+   }
+   if(abc1[mode]==0)for(int j=0;j<numEP;j++)ep[j][3]=0xFF;
+   int indexBits=(mode==0||mode==1)?3:((mode==6)?4:2);
+   int indexBits2=(mode==4)?3:((mode==5)?2:0);
+   int idxs[16];
+   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
+      int ps=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
+      int ib=(mode==0||mode==1)?3:((mode==6)?4:2);
+      if((ps&0x80)!=0)ib--;
+      idxs[i*4+j]=int(rd(uint(ib)));
+   }
+   for(int i=0;i<4;i++)for(int j=0;j<4;j++){
+      int psr=(numPart==1)?(((i|j)!=0)?0:128):((numPart==3)?int(bc7_part3[part_idx*16+i*4+j]):int(bc7_part2[part_idx*16+i*4+j]));
+      int ps=psr&3;
+      int idx=idxs[i*4+j],r,g,b,a;
+      int w0i=(indexBits==2)?aW2[idx]:((indexBits==3)?aW3[idx]:aW4[idx]);
+      if(indexBits2==0){
+         r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);
+         b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);
+      } else {
+         int idx2=int(rd(((i|j)!=0)?uint(indexBits2):uint(indexBits2-1)));
+         int w2i=(indexBits2==2)?aW2[idx2]:aW3[idx2];
+         if(isb==0){r=interp(ep[ps*2][0],ep[ps*2+1][0],w0i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w0i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w0i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w2i);}
+         else {r=interp(ep[ps*2][0],ep[ps*2+1][0],w2i);g=interp(ep[ps*2][1],ep[ps*2+1][1],w2i);b=interp(ep[ps*2][2],ep[ps*2+1][2],w2i);a=interp(ep[ps*2][3],ep[ps*2+1][3],w0i);}
+      }
+      if(rotation==1){int t=a;a=r;r=t;}else if(rotation==2){int t=a;a=g;g=t;}else if(rotation==3){int t=a;a=b;b=t;}
+      texel[i*4+j]=uint(r)|(uint(g)<<8u)|(uint(b)<<16u)|(uint(a)<<24u);
+   }
+}
+
+/* ============================================================================
+ * Decodificadores BC2 / BC3 / BC4 / BC5
+ * ========================================================================== */
+
+uint apal[8];
+
+void bc_alpha_palette(uint w0) {
+   uint word0 = read_src(w0);
+   uint a0 = word0 & 0xffu;
+   uint a1 = (word0 >> 8u) & 0xffu;
+   apal[0] = a0;
+   apal[1] = a1;
+   if (a0 > a1) {
+      apal[2] = (6u * a0 + a1) / 7u;
+      apal[3] = (5u * a0 + 2u * a1) / 7u;
+      apal[4] = (4u * a0 + 3u * a1) / 7u;
+      apal[5] = (3u * a0 + 4u * a1) / 7u;
+      apal[6] = (2u * a0 + 5u * a1) / 7u;
+      apal[7] = (a0 + 6u * a1) / 7u;
+   } else {
+      apal[2] = (4u * a0 + a1) / 5u;
+      apal[3] = (3u * a0 + 2u * a1) / 5u;
+      apal[4] = (2u * a0 + 3u * a1) / 5u;
+      apal[5] = (a0 + 4u * a1) / 5u;
+      apal[6] = 0u;
+      apal[7] = 255u;
+   }
+}
+
+uint bc_alpha_index(uint w0, uint k) {
+   uint p = 16u + 3u * k;
+   uint wi = w0 + (p >> 5u);
+   uint sh = p & 31u;
+   uint v = read_src(wi) >> sh;
+   if (sh > 29u) v |= read_src(wi + 1u) << (32u - sh);
+   return v & 7u;
+}
+
+void bc_color_block_opaque(uint cw) {
+   uint lo = read_src(cw), idx = read_src(cw + 1u);
+   uint c0 = lo & 0xffffu, c1 = lo >> 16u;
+   uint r0 = (c0 >> 11u) & 0x1fu, g0 = (c0 >> 5u) & 0x3fu, b0 = c0 & 0x1fu;
+   uint r1 = (c1 >> 11u) & 0x1fu, g1 = (c1 >> 5u) & 0x3fu, b1 = c1 & 0x1fu;
+   uint pal[4];
+   uint r, g, b;
+   r = (r0 * 527u + 23u) >> 6u; g = (g0 * 259u + 33u) >> 6u; b = (b0 * 527u + 23u) >> 6u;
+   pal[0] = 0xff000000u | (b << 16u) | (g << 8u) | r;
+   r = (r1 * 527u + 23u) >> 6u; g = (g1 * 259u + 33u) >> 6u; b = (b1 * 527u + 23u) >> 6u;
+   pal[1] = 0xff000000u | (b << 16u) | (g << 8u) | r;
+   r = ((2u * r0 + r1) * 351u + 61u) >> 7u; g = ((2u * g0 + g1) * 2763u + 1039u) >> 11u; b = ((2u * b0 + b1) * 351u + 61u) >> 7u;
+   pal[2] = 0xff000000u | (b << 16u) | (g << 8u) | r;
+   r = ((r0 + 2u * r1) * 351u + 61u) >> 7u; g = ((g0 + 2u * g1) * 2763u + 1039u) >> 11u; b = ((b0 + 2u * b1) * 351u + 61u) >> 7u;
+   pal[3] = 0xff000000u | (b << 16u) | (g << 8u) | r;
+   for (uint i = 0u; i < 16u; i++) texel[i] = pal[(idx >> (i * 2u)) & 3u];
+}
+
+void decode_bc2(uint w0) {
+   bc_color_block_opaque(w0 + 2u);
+   for (uint i = 0u; i < 16u; i++) {
+      uint row = i >> 2u, col = i & 3u;
+      uint word = read_src(w0 + (row >> 1u));
+      uint sh = (row & 1u) * 16u + col * 4u;
+      uint a = ((word >> sh) & 15u) * 17u;
+      texel[i] = (texel[i] & 0x00ffffffu) | (a << 24u);
+   }
+}
+
+void decode_bc3(uint w0) {
+   bc_color_block_opaque(w0 + 2u);
+   bc_alpha_palette(w0);
+   for (uint i = 0u; i < 16u; i++) {
+      uint a = apal[bc_alpha_index(w0, i)];
+      texel[i] = (texel[i] & 0x00ffffffu) | (a << 24u);
+   }
+}
+
+void decode_bc4(uint w0) {
+   bc_alpha_palette(w0);
+   for (uint i = 0u; i < 16u; i++)
+      texel[i] = 0xff000000u | apal[bc_alpha_index(w0, i)];
+}
+
+void decode_bc5(uint w0) {
+   bc_alpha_palette(w0);
+   for (uint i = 0u; i < 16u; i++)
+      texel[i] = 0xff000000u | apal[bc_alpha_index(w0, i)];
+   bc_alpha_palette(w0 + 2u);
+   for (uint i = 0u; i < 16u; i++)
+      texel[i] |= apal[bc_alpha_index(w0 + 2u, i)] << 8u;
+}
+
+uint bc_block_words(uint fmt) { return (fmt == 0u || fmt == 4u) ? 2u : 4u; }
+
+void decode_bc_any(uint fmt, uint w0) {
+   if (fmt == 0u) decode_bc1(w0);
+   else if (fmt == 1u) decode_bc7(w0);
+   else if (fmt == 2u) decode_bc2(w0);
+   else if (fmt == 3u) decode_bc3(w0);
+   else if (fmt == 4u) decode_bc4(w0);
+   else decode_bc5(w0);
+}
+
+/* ---- ASTC block assembly ---- */
+uint blk[4];
+void set_bits(int pos,int count,uint value){for(int i=0;i<count;i++)if((value&(1u<<uint(i)))!=0u){int p=pos+i;blk[p>>5]|=1u<<uint(p&31);}}
+uint rev_bits(uint v,int count){uint o=0u;for(int i=0;i<count;i++)o|=((v>>uint(i))&1u)<<uint(count-1-i);return o;}
+
+const int trit_Tpos[8]=int[](4,5,10,11,16,21,22,27);
+const int trit_Mpos[5]=int[](0,6,12,17,23);
+void write_trit_ep(int q[8]) {
+   int base=17;
+   int t=int(astc_trit5[(q[0]>>4)+3*(q[1]>>4)+9*(q[2]>>4)+27*(q[3]>>4)+81*(q[4]>>4)]);
+   for(int j=0;j<5;j++)set_bits(base+trit_Mpos[j],4,uint(q[j]&15));
+   for(int j=0;j<8;j++)if(((t>>j)&1)!=0)set_bits(base+trit_Tpos[j],1,1u);
+   base=45;int t3=int(astc_trit3[(q[5]>>4)+3*(q[6]>>4)+9*(q[7]>>4)]);
+   for(int j=0;j<3;j++)set_bits(base+trit_Mpos[j],4,uint(q[5+j]&15));
+   for(int j=0;j<5;j++)if(((t3>>j)&1)!=0)set_bits(base+trit_Tpos[j],1,1u);
+}
+int quant_ce(int v){if(v<0)v=0;if(v>255)v=255;return int(astc_ce_quant[v]);}
+
+/* Fast extreme-candidate endpoint finder for N-texel grids (N=36 or 64).
+ * Selects min/max across R, G, B and luma (up to 8 candidates, <=28 pairs)
+ * instead of O(N^2) brute force, saving ~70x ALU on Mali-G52. */
+void find_endpoints_grid(int count, out int lo_out, out int hi_out) {
+   int cand[8];
+   for (int k = 0; k < 8; k++) cand[k] = 0;
+   int min_r = 256, max_r = -1;
+   int min_g = 256, max_g = -1;
+   int min_b = 256, max_b = -1;
+   int min_l = 1024, max_l = -1;
+   for (int i = 0; i < count; i++) {
+      int r = int(chan64(uint(i), 0u));
+      int g = int(chan64(uint(i), 1u));
+      int b = int(chan64(uint(i), 2u));
+      int l = r + g + b;
+      if (r < min_r) { min_r = r; cand[0] = i; }
+      if (r > max_r) { max_r = r; cand[1] = i; }
+      if (g < min_g) { min_g = g; cand[2] = i; }
+      if (g > max_g) { max_g = g; cand[3] = i; }
+      if (b < min_b) { min_b = b; cand[4] = i; }
+      if (b > max_b) { max_b = b; cand[5] = i; }
+      if (l < min_l) { min_l = l; cand[6] = i; }
+      if (l > max_l) { max_l = l; cand[7] = i; }
+   }
+   int ai = cand[6], bi = cand[7], best = -1;
+   for (int a = 0; a < 8; a++) {
+      for (int b = a + 1; b < 8; b++) {
+         int ia = cand[a], ib = cand[b];
+         int d2 = 0;
+         for (uint c = 0u; c < 3u; c++) {
+            int dc = int(chan64(uint(ia), c)) - int(chan64(uint(ib), c));
+            d2 += dc * dc;
+         }
+         if (d2 > best) { best = d2; ai = ia; bi = ib; }
+      }
+   }
+   int sa = int(chan64(uint(ai), 0u) + chan64(uint(ai), 1u) + chan64(uint(ai), 2u));
+   int sb = int(chan64(uint(bi), 0u) + chan64(uint(bi), 1u) + chan64(uint(bi), 2u));
+   lo_out = (sb >= sa) ? ai : bi;
+   hi_out = (sb >= sa) ? bi : ai;
+}
+
+/* ---- 4x4 encoders ---- */
+void encode_rgb() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   int ai=0,bi=0,best=-1;
+   for(int i=0;i<16;i++)for(int j=i+1;j<16;j++){int d2=0;for(uint c=0u;c<3u;c++){int dc=int(chan(uint(i),c))-int(chan(uint(j),c));d2+=dc*dc;}if(d2>best){best=d2;ai=i;bi=j;}}
+   int sa=int(chan(uint(ai),0u)+chan(uint(ai),1u)+chan(uint(ai),2u));
+   int sb=int(chan(uint(bi),0u)+chan(uint(bi),1u)+chan(uint(bi),2u));
+   int lo=(sb>=sa)?ai:bi,hi=(sb>=sa)?bi:ai;
+   int e0[3],e1[3];for(uint c=0u;c<3u;c++){e0[c]=int(chan(uint(lo),c));e1[c]=int(chan(uint(hi),c));}
+   set_bits(0,11,0x53u);set_bits(13,4,8u);
+   set_bits(17,8,uint(e0[0]));set_bits(25,8,uint(e1[0]));set_bits(33,8,uint(e0[1]));set_bits(41,8,uint(e1[1]));set_bits(49,8,uint(e0[2]));set_bits(57,8,uint(e1[2]));
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   for(int t=0;t<16;t++){uint q;if(dlen2==0)q=0u;else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan(uint(t),c))-e0[c])*dir[c];if(dot<=0)q=0u;else if(dot>=dlen2)q=7u;else q=uint((dot*7+dlen2/2)/dlen2);}set_bits(128-(t+1)*3,3,rev_bits(q,3));}
+}
+
+void encode_rgba() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int ai=0,bi=0,best=-1;
+   for(int i=0;i<16;i++)for(int j=i+1;j<16;j++){int d2=0;for(uint c=0u;c<3u;c++){int dc=int(chan(uint(i),c))-int(chan(uint(j),c));d2+=dc*dc;}if(d2>best){best=d2;ai=i;bi=j;}}
+   int sa=int(chan(uint(ai),0u)+chan(uint(ai),1u)+chan(uint(ai),2u));
+   int sb=int(chan(uint(bi),0u)+chan(uint(bi),1u)+chan(uint(bi),2u));
+   int lo=(sb>=sa)?ai:bi,hi=(sb>=sa)?bi:ai;
+   int amin=255,amax=0;for(int i=0;i<16;i++){int a=int(chan(uint(i),3u));if(a<amin)amin=a;if(a>amax)amax=a;}
+   int e0[4]=int[](int(chan(uint(lo),0u)),int(chan(uint(lo),1u)),int(chan(uint(lo),2u)),amin);
+   int e1[4]=int[](int(chan(uint(hi),0u)),int(chan(uint(hi),1u)),int(chan(uint(hi),2u)),amax);
+   int q[8]=int[](quant_ce(e0[0]),quant_ce(e1[0]),quant_ce(e0[1]),quant_ce(e1[1]),quant_ce(e0[2]),quant_ce(e1[2]),quant_ce(e0[3]),quant_ce(e1[3]));
+   int s0=int(astc_ce_unq[q[0]])+int(astc_ce_unq[q[2]])+int(astc_ce_unq[q[4]]);
+   int s1=int(astc_ce_unq[q[1]])+int(astc_ce_unq[q[3]])+int(astc_ce_unq[q[5]]);
+   int swap=(s1<s0)?1:0;
+   if(swap!=0)for(int k=0;k<8;k+=2){int tmp=q[k];q[k]=q[k+1];q[k+1]=tmp;}
+   write_trit_ep(q);
+   set_bits(62,2,3u);
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   int arange=amax-amin;
+   for(int px=0;px<16;px++){
+      uint q0;if(dlen2==0)q0=0u;else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan(uint(px),c))-e0[c])*dir[c];if(dot<=0)q0=0u;else if(dot>=dlen2)q0=3u;else q0=uint((dot*3+dlen2/2)/dlen2);}
+      uint q1;if(arange==0)q1=0u;else{int a=int(chan(uint(px),3u))-amin;int t=(a*3+arange/2)/arange;if(t<0)t=0;if(t>3)t=3;q1=uint(t);}
+      if(swap!=0){q0=3u-q0;q1=3u-q1;}
+      set_bits(128-(2*px+1)*2,2,rev_bits(q0,2));
+      set_bits(128-(2*px+2)*2,2,rev_bits(q1,2));
+   }
+}
+
+/* Dedicated RG (BC5) 4x4 dual-plane encoder (CCS = 1 = Green) */
+void encode_rg() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int rmin=255,rmax=0,gmin=255,gmax=0;
+   for(int i=0;i<16;i++){
+      int r=int(chan(uint(i),0u)),g=int(chan(uint(i),1u));
+      if(r<rmin)rmin=r;if(r>rmax)rmax=r;
+      if(g<gmin)gmin=g;if(g>gmax)gmax=g;
+   }
+   int q[8]=int[](quant_ce(rmin),quant_ce(rmax),quant_ce(gmin),quant_ce(gmax),quant_ce(0),quant_ce(0),quant_ce(255),quant_ce(255));
+   write_trit_ep(q);
+   set_bits(62,2,1u);
+   int r0=int(astc_ce_unq[q[0]]),r1=int(astc_ce_unq[q[1]]);
+   int g0=int(astc_ce_unq[q[2]]),g1=int(astc_ce_unq[q[3]]);
+   int rrange=r1-r0,grange=g1-g0;
+   for(int px=0;px<16;px++){
+      uint q0=0u,q1=0u;
+      if(rrange>0){int v=int(chan(uint(px),0u))-r0;q0=(v<=0)?0u:(v>=rrange?3u:uint((v*3+rrange/2)/rrange));}
+      if(grange>0){int v=int(chan(uint(px),1u))-g0;q1=(v<=0)?0u:(v>=grange?3u:uint((v*3+grange/2)/grange));}
+      set_bits(128-(2*px+1)*2,2,rev_bits(q0,2));
+      set_bits(128-(2*px+2)*2,2,rev_bits(q1,2));
+   }
+}
+
+/* ---- 8x8 encoders ---- */
+void encode_rgb_8x8() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   int lo, hi;
+   find_endpoints_grid(64, lo, hi);
+   int e0[3],e1[3];for(uint c=0u;c<3u;c++){e0[c]=int(chan64(uint(lo),c));e1[c]=int(chan64(uint(hi),c));}
+   set_bits(0,11,0x53u);set_bits(13,4,8u);
+   set_bits(17,8,uint(e0[0]));set_bits(25,8,uint(e1[0]));set_bits(33,8,uint(e0[1]));set_bits(41,8,uint(e1[1]));set_bits(49,8,uint(e0[2]));set_bits(57,8,uint(e1[2]));
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   for(int g=0;g<16;g++){
+      float a=0.0;
+      for(int t=0;t<64;t++){
+         float w;
+         if(dlen2==0)w=0.0;
+         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w=f*7.0;}
+         a+=float(astc_pinv8[g*64+t])*w;
+      }
+      int q=int(floor(a/256.0+0.5));
+      if(q<0)q=0;if(q>7)q=7;
+      set_bits(128-(g+1)*3,3,rev_bits(uint(q),3));
+   }
+}
+
+void encode_rgba_8x8() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int lo, hi;
+   find_endpoints_grid(64, lo, hi);
+   int amin=255,amax=0;for(int i=0;i<64;i++){int a=int(chan64(uint(i),3u));if(a<amin)amin=a;if(a>amax)amax=a;}
+   int e0[4]=int[](int(chan64(uint(lo),0u)),int(chan64(uint(lo),1u)),int(chan64(uint(lo),2u)),amin);
+   int e1[4]=int[](int(chan64(uint(hi),0u)),int(chan64(uint(hi),1u)),int(chan64(uint(hi),2u)),amax);
+   int q[8]=int[](quant_ce(e0[0]),quant_ce(e1[0]),quant_ce(e0[1]),quant_ce(e1[1]),quant_ce(e0[2]),quant_ce(e1[2]),quant_ce(e0[3]),quant_ce(e1[3]));
+   int s0=int(astc_ce_unq[q[0]])+int(astc_ce_unq[q[2]])+int(astc_ce_unq[q[4]]);
+   int s1=int(astc_ce_unq[q[1]])+int(astc_ce_unq[q[3]])+int(astc_ce_unq[q[5]]);
+   int swap=(s1<s0)?1:0;
+   if(swap!=0)for(int k=0;k<8;k+=2){int tmp=q[k];q[k]=q[k+1];q[k+1]=tmp;}
+   write_trit_ep(q);
+   set_bits(62,2,3u);
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   int arange=amax-amin;
+   for(int g=0;g<16;g++){
+      float a0=0.0,a1=0.0;
+      for(int t=0;t<64;t++){
+         float w0;
+         if(dlen2==0)w0=0.0;
+         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
+         float w1;
+         if(arange==0)w1=0.0;
+         else{float f=float(int(chan64(uint(t),3u))-amin)/float(arange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
+         if(swap!=0){w0=3.0-w0;w1=3.0-w1;}
+         a0+=float(astc_pinv8[g*64+t])*w0;a1+=float(astc_pinv8[g*64+t])*w1;
+      }
+      int q0=int(floor(a0/256.0+0.5)),q1=int(floor(a1/256.0+0.5));
+      if(q0<0)q0=0;if(q0>3)q0=3;if(q1<0)q1=0;if(q1>3)q1=3;
+      set_bits(128-(2*g+1)*2,2,rev_bits(uint(q0),2));
+      set_bits(128-(2*g+2)*2,2,rev_bits(uint(q1),2));
+   }
+}
+
+void encode_rg_8x8() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int rmin=255,rmax=0,gmin=255,gmax=0;
+   for(int i=0;i<64;i++){
+      int r=int(chan64(uint(i),0u)),g=int(chan64(uint(i),1u));
+      if(r<rmin)rmin=r;if(r>rmax)rmax=r;
+      if(g<gmin)gmin=g;if(g>gmax)gmax=g;
+   }
+   int q[8]=int[](quant_ce(rmin),quant_ce(rmax),quant_ce(gmin),quant_ce(gmax),quant_ce(0),quant_ce(0),quant_ce(255),quant_ce(255));
+   write_trit_ep(q);
+   set_bits(62,2,1u);
+   int r0=int(astc_ce_unq[q[0]]),r1=int(astc_ce_unq[q[1]]);
+   int g0=int(astc_ce_unq[q[2]]),g1=int(astc_ce_unq[q[3]]);
+   int rrange=r1-r0,grange=g1-g0;
+   for(int g=0;g<16;g++){
+      float a0=0.0,a1=0.0;
+      for(int t=0;t<64;t++){
+         float w0=0.0,w1=0.0;
+         if(rrange>0){float f=float(int(chan64(uint(t),0u))-r0)/float(rrange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
+         if(grange>0){float f=float(int(chan64(uint(t),1u))-g0)/float(grange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
+         a0+=float(astc_pinv8[g*64+t])*w0;a1+=float(astc_pinv8[g*64+t])*w1;
+      }
+      int q0=int(floor(a0/256.0+0.5)),q1=int(floor(a1/256.0+0.5));
+      if(q0<0)q0=0;if(q0>3)q0=3;if(q1<0)q1=0;if(q1>3)q1=3;
+      set_bits(128-(2*g+1)*2,2,rev_bits(uint(q0),2));
+      set_bits(128-(2*g+2)*2,2,rev_bits(uint(q1),2));
+   }
+}
+
+/* ---- 6x6 encoders (uses top-left 36 texels of texel64) ---- */
+void encode_rgb_6x6() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   int lo, hi;
+   find_endpoints_grid(36, lo, hi);
+   int e0[3],e1[3];for(uint c=0u;c<3u;c++){e0[c]=int(chan64(uint(lo),c));e1[c]=int(chan64(uint(hi),c));}
+   set_bits(0,11,0x53u);set_bits(13,4,8u);
+   set_bits(17,8,uint(e0[0]));set_bits(25,8,uint(e1[0]));set_bits(33,8,uint(e0[1]));set_bits(41,8,uint(e1[1]));set_bits(49,8,uint(e0[2]));set_bits(57,8,uint(e1[2]));
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   for(int g=0;g<16;g++){
+      float a=0.0;
+      for(int t=0;t<36;t++){
+         float w;
+         if(dlen2==0)w=0.0;
+         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w=f*7.0;}
+         a+=float(astc_pinv6[g*36+t])*w;
+      }
+      int q=int(floor(a/256.0+0.5));
+      if(q<0)q=0;if(q>7)q=7;
+      set_bits(128-(g+1)*3,3,rev_bits(uint(q),3));
+   }
+}
+
+void encode_rgba_6x6() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int lo, hi;
+   find_endpoints_grid(36, lo, hi);
+   int amin=255,amax=0;for(int i=0;i<36;i++){int a=int(chan64(uint(i),3u));if(a<amin)amin=a;if(a>amax)amax=a;}
+   int e0[4]=int[](int(chan64(uint(lo),0u)),int(chan64(uint(lo),1u)),int(chan64(uint(lo),2u)),amin);
+   int e1[4]=int[](int(chan64(uint(hi),0u)),int(chan64(uint(hi),1u)),int(chan64(uint(hi),2u)),amax);
+   int q[8]=int[](quant_ce(e0[0]),quant_ce(e1[0]),quant_ce(e0[1]),quant_ce(e1[1]),quant_ce(e0[2]),quant_ce(e1[2]),quant_ce(e0[3]),quant_ce(e1[3]));
+   int s0=int(astc_ce_unq[q[0]])+int(astc_ce_unq[q[2]])+int(astc_ce_unq[q[4]]);
+   int s1=int(astc_ce_unq[q[1]])+int(astc_ce_unq[q[3]])+int(astc_ce_unq[q[5]]);
+   int swap=(s1<s0)?1:0;
+   if(swap!=0)for(int k=0;k<8;k+=2){int tmp=q[k];q[k]=q[k+1];q[k+1]=tmp;}
+   write_trit_ep(q);
+   set_bits(62,2,3u);
+   int dir[3],dlen2=0;for(uint c=0u;c<3u;c++){dir[c]=e1[c]-e0[c];dlen2+=dir[c]*dir[c];}
+   int arange=amax-amin;
+   for(int g=0;g<16;g++){
+      float a0=0.0,a1=0.0;
+      for(int t=0;t<36;t++){
+         float w0;
+         if(dlen2==0)w0=0.0;
+         else{int dot=0;for(uint c=0u;c<3u;c++)dot+=(int(chan64(uint(t),c))-e0[c])*dir[c];float f=float(dot)/float(dlen2);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
+         float w1;
+         if(arange==0)w1=0.0;
+         else{float f=float(int(chan64(uint(t),3u))-amin)/float(arange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
+         if(swap!=0){w0=3.0-w0;w1=3.0-w1;}
+         a0+=float(astc_pinv6[g*36+t])*w0;a1+=float(astc_pinv6[g*36+t])*w1;
+      }
+      int q0=int(floor(a0/256.0+0.5)),q1=int(floor(a1/256.0+0.5));
+      if(q0<0)q0=0;if(q0>3)q0=3;if(q1<0)q1=0;if(q1>3)q1=3;
+      set_bits(128-(2*g+1)*2,2,rev_bits(uint(q0),2));
+      set_bits(128-(2*g+2)*2,2,rev_bits(uint(q1),2));
+   }
+}
+
+void encode_rg_6x6() {
+   blk[0]=0u;blk[1]=0u;blk[2]=0u;blk[3]=0u;
+   set_bits(0,11,0x442u);set_bits(13,4,12u);
+   int rmin=255,rmax=0,gmin=255,gmax=0;
+   for(int i=0;i<36;i++){
+      int r=int(chan64(uint(i),0u)),g=int(chan64(uint(i),1u));
+      if(r<rmin)rmin=r;if(r>rmax)rmax=r;
+      if(g<gmin)gmin=g;if(g>gmax)gmax=g;
+   }
+   int q[8]=int[](quant_ce(rmin),quant_ce(rmax),quant_ce(gmin),quant_ce(gmax),quant_ce(0),quant_ce(0),quant_ce(255),quant_ce(255));
+   write_trit_ep(q);
+   set_bits(62,2,1u);
+   int r0=int(astc_ce_unq[q[0]]),r1=int(astc_ce_unq[q[1]]);
+   int g0=int(astc_ce_unq[q[2]]),g1=int(astc_ce_unq[q[3]]);
+   int rrange=r1-r0,grange=g1-g0;
+   for(int g=0;g<16;g++){
+      float a0=0.0,a1=0.0;
+      for(int t=0;t<36;t++){
+         float w0=0.0,w1=0.0;
+         if(rrange>0){float f=float(int(chan64(uint(t),0u))-r0)/float(rrange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w0=f*3.0;}
+         if(grange>0){float f=float(int(chan64(uint(t),1u))-g0)/float(grange);if(f<0.0)f=0.0;if(f>1.0)f=1.0;w1=f*3.0;}
+         a0+=float(astc_pinv6[g*36+t])*w0;a1+=float(astc_pinv6[g*36+t])*w1;
+      }
+      int q0=int(floor(a0/256.0+0.5)),q1=int(floor(a1/256.0+0.5));
+      if(q0<0)q0=0;if(q0>3)q0=3;if(q1<0)q1=0;if(q1>3)q1=3;
+      set_bits(128-(2*g+1)*2,2,rev_bits(uint(q0),2));
+      set_bits(128-(2*g+2)*2,2,rev_bits(uint(q1),2));
+   }
+}
+
+/* Decode one BC block at (bcx,bcy) into the (qx,qy) 4x4 quadrant of texel64 (stride = 8). */
+void decode_into_quadrant_8(uint bcx, uint bcy, uint qx, uint qy) {
+   uint words=bc_block_words(pc.format);
+   uint srcWord=pc.src_word_off+(bcy*pc.block_x_src+bcx)*words;
+   decode_bc_any(pc.format,srcWord);
+   for(uint r=0u;r<4u;r++)for(uint c=0u;c<4u;c++)
+      texel64[(qy*4u+r)*8u+(qx*4u+c)]=texel[r*4u+c];
+}
+
+/* Decode one BC block at (bcx,bcy) into texel64 with stride = 6 (clipped to 6x6). */
+void decode_into_quadrant_6(uint bcx, uint bcy, uint qx, uint qy) {
+   uint words=bc_block_words(pc.format);
+   uint srcWord=pc.src_word_off+(bcy*pc.block_x_src+bcx)*words;
+   decode_bc_any(pc.format,srcWord);
+   for(uint r=0u;r<4u;r++){
+      uint y=qy*4u+r;
+      if(y>=6u)break;
+      for(uint c=0u;c<4u;c++){
+         uint x=qx*4u+c;
+         if(x>=6u)break;
+         texel64[y*6u+x]=texel[r*4u+c];
+      }
+   }
+}
+
+void main() {
+   uint bx=gl_GlobalInvocationID.x, by=gl_GlobalInvocationID.y;
+   if (bx>=pc.block_x || by>=pc.block_y) return;
+   if (pc.astc8 == 1u) {
+      /* 8x8 ASTC block from 2x2 group of BC blocks */
+      for (uint i=0u;i<64u;i++) texel64[i]=0u;
+      for (uint dy=0u;dy<2u;dy++) for (uint dx=0u;dx<2u;dx++) {
+         uint bcx=2u*bx+dx, bcy=2u*by+dy;
+         if (bcx>=pc.bc_bx || bcy>=pc.bc_by) continue;
+         decode_into_quadrant_8(bcx,bcy,dx,dy);
+      }
+      if (pc.format==5u) encode_rg_8x8();
+      else if (pc.has_alpha!=0u) encode_rgba_8x8();
+      else encode_rgb_8x8();
+   } else if (pc.astc8 == 2u) {
+      /* 6x6 ASTC block: each 6x6 block starts at pixel (6*bx, 6*by), spanning BC blocks
+         from floor(6*bx/4) .. floor((6*bx+5)/4) in X and Y. */
+      for (uint i=0u;i<36u;i++) texel64[i]=0u;
+      uint px0 = 6u * bx, py0 = 6u * by;
+      uint bcx0 = px0 >> 2u, bcy0 = py0 >> 2u;
+      uint bcx1 = (px0 + 5u) >> 2u, bcy1 = (py0 + 5u) >> 2u;
+      for (uint bcy = bcy0; bcy <= bcy1; bcy++) {
+         if (bcy >= pc.bc_by) break;
+         for (uint bcx = bcx0; bcx <= bcx1; bcx++) {
+            if (bcx >= pc.bc_bx) break;
+            uint words = bc_block_words(pc.format);
+            uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * words;
+            decode_bc_any(pc.format, srcWord);
+            uint bpx = bcx << 2u, bpy = bcy << 2u;
+            for (uint r = 0u; r < 4u; r++) {
+               uint y = bpy + r;
+               if (y < py0 || y >= py0 + 6u) continue;
+               for (uint c = 0u; c < 4u; c++) {
+                  uint x = bpx + c;
+                  if (x < px0 || x >= px0 + 6u) continue;
+                  texel64[(y - py0) * 6u + (x - px0)] = texel[r * 4u + c];
+               }
+            }
+         }
+      }
+      if (pc.format==5u) encode_rg_6x6();
+      else if (pc.has_alpha!=0u) encode_rgba_6x6();
+      else encode_rgb_6x6();
+   } else {
+      /* 4x4 ASTC block from 1 BC block */
+      uint words=bc_block_words(pc.format);
+      uint srcWord=pc.src_word_off+(by*pc.block_x_src+bx)*words;
+      decode_bc_any(pc.format,srcWord);
+      if (pc.format==5u) encode_rg();
+      else if (pc.has_alpha!=0u) encode_rgba();
+      else encode_rgb();
+   }
+   uint dstWord=(by*pc.block_x+bx)*4u;
+   if (dstWord + 3u < uint(dst.length())) {
+      dst[dstWord+0u]=blk[0];dst[dstWord+1u]=blk[1];dst[dstWord+2u]=blk[2];dst[dstWord+3u]=blk[3];
+   }
+}
