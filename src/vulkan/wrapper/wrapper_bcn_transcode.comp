@@ -165,7 +165,7 @@ const uint astc_ce_quant[256] = uint[](
   41u,41u,25u,25u,25u,25u,25u,25u,9u,9u,9u,9u,9u,9u,39u,39u,39u,39u,39u,23u,
   23u,23u,23u,23u,7u,7u,7u,7u,7u,7u,37u,37u,37u,37u,37u,21u,21u,21u,21u,21u,
   5u,5u,5u,5u,5u,5u,35u,35u,35u,35u,35u,19u,19u,19u,19u,19u,19u,3u,3u,3u,
-  3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1.0,1u,1u
+  3u,3u,33u,33u,33u,33u,33u,17u,17u,17u,17u,17u,17u,1u,1u,1u
 );
 
 const int astc_pinv8[1024] = int[](
