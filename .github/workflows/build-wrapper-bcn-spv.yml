@@ -9,7 +9,7 @@ on:
       - '.github/workflows/build-wrapper-bcn-spv.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   generate-spv-header:
@@ -77,15 +77,3 @@ jobs:
         with:
           name: wrapper-bcn-spv-header
           path: src/vulkan/wrapper/wrapper_bcn_spv.h
-
-      - name: Commit and push wrapper_bcn_spv.h to fusion
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/vulkan/wrapper/wrapper_bcn_spv.h
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(vulkan/wrapper): auto-generate wrapper_bcn_spv.h [skip ci]"
-            git push origin HEAD:fusion
-          else
-            echo "Sin cambios en wrapper_bcn_spv.h"
-          fi
