@@ -1,0 +1,597 @@
+#version 450
+/*
+ * BC6H (HDR) -> ASTC HDR transcode compute shader.
+ * One invocation per ASTC block (supports 4x4, 6x6, and 8x8 ASTC block sizes):
+ *   - Decodes BC6H (UF16 / SF16, all 14 modes) to linear/FP16 RGB HDR texels.
+ *   - Encodes a 128-bit ASTC HDR block using CEM 11 (HDR RGB Direct, 12-bit endpoints)
+ *     and a 4x4 weight grid with 2-bit weights (0..3, block_mode = 0x144).
+ *
+ * Push constant `block_dim`:
+ *   0 or 4 -> 4x4 ASTC block (1x1 BC6H block  = 16 texels)
+ *   6      -> 6x6 ASTC block (2x2 BC6H blocks cropped to 6x6 = 36 texels)
+ *   8      -> 8x8 ASTC block (2x2 BC6H blocks = 64 texels)
+ * `is_signed`:
+ *   0 -> BC6H_UF16 (unsigned half-float)
+ *   1 -> BC6H_SF16 (signed half-float, clamped >= 0.0 for standard ASTC HDR)
+ */
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer SrcBuf { uint src[]; };
+layout(std430, binding = 1) writeonly buffer DstBuf { uint dst[]; };
+
+layout(push_constant) uniform PC {
+   uint block_x;      /* ASTC grid width  in blocks */
+   uint block_x_src;  /* BC6H source stride in blocks */
+   uint block_y;      /* ASTC grid height in blocks */
+   uint src_word_off; /* Word offset into src[] */
+   uint block_dim;    /* 4 (or 0) = 4x4, 6 = 6x6, 8 = 8x8 */
+   uint is_signed;    /* 0 = BC6H_UF16, 1 = BC6H_SF16 */
+   uint bc_bx;        /* Real texture extent in BC6H blocks (X) */
+   uint bc_by;        /* Real texture extent in BC6H blocks (Y) */
+} pc;
+
+/* ---- BC6H partition tables (modes 0..9, 32 partitions, 16 texels, 1 bit/texel) ---- */
+const uint bc6h_part2[32] = uint[](
+  0xCCCCu, 0x8888u, 0xEEEEu, 0xECC8u, 0xC880u, 0xFEECu, 0xFEC8u, 0xEC80u,
+  0xC800u, 0xFFECu, 0xFE80u, 0xE800u, 0xFFE8u, 0xFF00u, 0xFFF0u, 0xF000u,
+  0xF710u, 0x008Eu, 0x7100u, 0x08CEu, 0x008Cu, 0x7310u, 0x3100u, 0x8CCEu,
+  0x088Cu, 0x3110u, 0x6666u, 0x366Cu, 0x17E8u, 0x0FF0u, 0x718Eu, 0x399Cu
+);
+
+/* Anchor index for subset 1 in 2-region BC6H partitions (subset 0 anchor is always 0) */
+const uint bc6h_anchor2[32] = uint[](
+  15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u,
+  15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u,
+  15u,  2u,  8u,  2u,  2u,  8u,  8u, 15u,
+  2u,   8u,  2u,  2u,  8u,  8u,  2u,  2u
+);
+
+/* BC6H weight interpolation tables (3-bit for 2-region modes, 4-bit for 1-region modes) */
+const int bc6h_w3[8]  = int[](0, 9, 18, 27, 37, 46, 55, 64);
+const int bc6h_w4[16] = int[](0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64);
+
+/* ---- ASTC weight-grid infill pseudo-inverse matrices (x256 fixed point) ---- */
+/* 6x6 texels (36) -> 4x4 weight grid (16) */
+const int astc_pinv6[576] = int[](
+  217,50,-39,3,8,-3,50,11,-9,1,2,-1,-39,-9,7,0,-1,1,3,1,0,0,0,0,8,2,-1,0,0,0,-3,-1,1,0,0,0,
+  -51,136,188,-13,-40,15,-12,31,43,-3,-9,3,9,-24,-34,2,7,-3,-1,2,2,0,0,0,-2,5,7,0,-2,1,1,-2,-3,0,1,0,
+  15,-40,-13,188,136,-51,3,-9,-3,43,31,-12,-3,7,2,-34,-24,9,0,0,0,2,2,-1,1,-2,0,7,5,-2,0,1,0,-3,-2,1,
+  -3,8,3,-39,50,217,-1,2,1,-9,11,50,1,-1,0,7,-9,-39,0,0,0,0,1,3,0,0,0,-1,2,8,0,0,0,1,-1,-3,
+  -51,-12,9,-1,-2,1,136,31,-24,2,5,-2,188,43,-34,2,7,-3,-13,-3,2,0,0,0,-40,-9,7,0,-2,1,15,3,-3,0,1,0,
+  12,-32,-44,3,9,-4,-32,85,118,-8,-25,9,-44,118,163,-11,-35,13,3,-8,-11,1,2,-1,9,-25,-35,2,7,-3,-4,9,13,-1,-3,1,
+  -4,9,3,-44,-32,12,9,-25,-8,118,85,-32,13,-35,-11,163,118,-44,-1,2,1,-11,-8,3,-3,7,2,-35,-25,9,1,-3,-1,13,9,-4,
+  1,-2,-1,9,-12,-51,-2,5,2,-24,31,136,-3,7,2,-34,43,188,0,0,0,2,-3,-13,1,-2,0,7,-9,-40,0,1,0,-3,3,15,
+  15,3,-3,0,1,0,-40,-9,7,0,-2,1,-13,-3,2,0,0,0,188,43,-34,2,7,-3,136,31,-24,2,5,-2,-51,-12,9,-1,-2,1,
+  -4,9,13,-1,-3,1,9,-25,-35,2,7,-3,3,-8,-11,1,2,-1,-44,118,163,-11,-35,13,-32,85,118,-8,-25,9,12,-32,-44,3,9,-4,
+  1,-3,-1,13,9,-4,-3,7,2,-35,-25,9,-1,2,1,-11,-8,3,13,-35,-11,163,118,-44,9,-25,-8,118,85,-32,-4,9,3,-44,-32,12,
+  0,1,0,-3,3,15,1,-2,0,7,-9,-40,0,0,0,2,-3,-13,-3,7,2,-34,43,188,-2,5,2,-24,31,136,1,-2,-1,9,-12,-51,
+  -3,-1,1,0,0,0,8,2,-1,0,0,0,3,1,0,0,0,0,-39,-9,7,0,-1,1,50,11,-9,1,2,-1,217,50,-39,3,8,-3,
+  1,-2,-3,0,1,0,-2,5,7,0,-2,1,-1,2,2,0,0,0,9,-24,-34,2,7,-3,-12,31,43,-3,-9,3,-51,136,188,-13,-40,15,
+  0,1,0,-3,-2,1,1,-2,0,7,5,-2,0,0,0,2,2,-1,-3,7,2,-34,-24,9,3,-9,-3,43,31,-12,15,-40,-13,188,136,-51,
+  0,0,0,1,-1,-3,0,0,0,-1,2,8,0,0,0,0,1,3,1,-1,0,7,-9,-39,-1,2,1,-9,11,50,-3,8,3,-39,50,217
+);
+
+/* 8x8 texels (64) -> 4x4 weight grid (16) */
+const int astc_pinv8[1024] = int[](
+  166,75,-16,-25,-4,10,4,-3,75,33,-9,-10,-3,5,2,-2,
+  -16,-9,-2,5,-1,-1,0,0,-25,-10,5,5,0,-2,-1,0,
+  -4,-3,-1,0,1,0,0,0,10,5,-1,-2,0,0,0,0,
+  4,2,0,-1,0,0,0,0,-3,-2,0,0,0,0,0,0,
+  -42,45,132,93,17,-39,-14,12,-20,21,62,39,10,-19,-6,6,
+  3,-3,-8,-15,4,1,1,0,5,-8,-21,-16,-1,6,2,-1,
+  1,-1,-3,-1,-2,1,0,0,-2,3,7,6,1,-2,-1,0,
+  -1,1,2,2,0,-1,0,0,1,-1,-2,-2,-1,0,0,0,
+  12,-14,-39,17,93,132,45,-42,6,-6,-19,10,39,62,21,-20,
+  0,1,1,4,-15,-8,-3,3,-1,2,6,-1,-16,-21,-8,5,
+  0,0,1,-2,-1,-3,-1,1,0,-1,-2,1,6,7,3,-2,
+  0,0,-1,0,2,2,1,-1,0,0,0,-1,-2,-2,-1,1,
+  -3,4,10,-4,-25,-16,75,166,-2,2,5,-3,-10,-9,33,75,
+  0,0,-1,-1,5,-2,-9,-16,0,-1,-2,0,5,5,-10,-25,
+  0,0,0,1,0,-1,-3,-4,0,0,0,0,-2,-1,5,10,
+  0,0,0,0,-1,0,2,4,0,0,0,0,0,0,-2,-3,
+  -42,-20,3,5,1,-2,-1,1,45,21,-3,-8,-1,3,1,-1,
+  132,62,-8,-21,-3,7,2,-2,93,39,-15,-16,-1,6,2,-2,
+  17,10,4,-1,-2,1,0,-1,-39,-19,1,6,1,-2,-1,0,
+  -14,-6,1,2,0,-1,0,0,12,6,0,-1,0,0,0,0,
+  12,-10,-32,-23,-5,9,3,-3,-10,12,34,28,2,-9,-3,3,
+  -32,34,99,79,10,-27,-9,9,-23,28,79,59,4,-22,-8,7,
+  -5,2,10,4,8,-4,-1,2,9,-9,-27,-22,-4,6,2,-2,
+  3,-3,-9,-8,-1,2,1,-1,-3,3,9,7,2,-2,-1,1,
+  -3,3,9,-5,-23,-32,-10,12,3,-3,-9,2,28,34,12,-10,
+  9,-9,-27,10,79,99,34,-32,7,-8,-22,4,59,79,28,-23,
+  2,-1,-4,8,4,10,2,-5,-2,2,6,-4,-22,-27,-9,9,
+  -1,1,2,-1,-8,-9,-3,3,1,-1,-2,2,7,9,3,-3,
+  1,-1,-2,1,5,3,-20,-42,-1,1,3,-1,-8,-3,21,45,
+  -2,2,7,-3,-21,-8,62,132,-2,2,6,-1,-16,-15,39,93,
+  -1,0,1,-2,-1,4,10,17,0,-1,-2,1,6,1,-19,-39,
+  0,0,-1,0,2,1,-6,-14,0,0,0,0,-1,0,6,12,
+  12,6,0,-1,0,0,0,0,-14,-6,1,2,0,-1,0,0,
+  -39,-19,1,6,1,-2,-1,0,17,10,4,-1,-2,1,0,-1,
+  93,39,-15,-16,-1,6,2,-2,132,62,-8,-21,-3,7,2,-2,
+  45,21,-3,-8,-1,3,1,-1,-42,-20,3,5,1,-2,-1,1,
+  -3,3,9,7,2,-2,-1,1,3,-3,-9,-8,-1,2,1,-1,
+  9,-9,-27,-22,-4,6,2,-2,-5,2,10,4,8,-4,-1,2,
+  -23,28,79,59,4,-22,-8,7,-32,34,99,79,10,-27,-9,9,
+  -10,12,34,28,2,-9,-3,3,12,-10,-32,-23,-5,9,3,-3,
+  1,-1,-2,2,7,9,3,-3,-1,1,2,-1,-8,-9,-3,3,
+  -2,2,6,-4,-22,-27,-9,9,2,-1,-4,8,4,10,2,-5,
+  7,-8,-22,4,59,79,28,-23,9,-9,-27,10,79,99,34,-32,
+  3,-3,-9,2,28,34,12,-10,-3,3,9,-5,-23,-32,-10,12,
+  0,0,0,0,-1,0,6,12,0,0,-1,0,2,1,-6,-14,
+  0,-1,-2,1,6,1,-19,-39,-1,0,1,-2,-1,4,10,17,
+  -2,2,6,-1,-16,-15,39,93,-2,2,7,-3,-21,-8,62,132,
+  -1,1,3,-1,-8,-3,21,45,1,-1,-2,1,5,3,-20,-42,
+  -3,-2,0,0,0,0,0,0,4,2,0,-1,0,0,0,0,
+  10,5,-1,-2,0,0,0,0,-4,-3,-1,0,1,0,0,0,
+  -25,-10,5,5,0,-2,-1,0,-16,-9,-2,5,-1,-1,0,0,
+  75,33,-9,-10,-3,5,2,-2,166,75,-16,-25,-4,10,4,-3,
+  1,-1,-2,-2,-1,0,0,0,-1,1,2,2,0,-1,0,0,
+  -2,3,7,6,1,-2,-1,0,1,-1,-3,-1,-2,1,0,0,
+  5,-8,-21,-16,-1,6,2,-1,3,-3,-8,-15,4,1,1,0,
+  -20,21,62,39,10,-19,-6,6,-42,45,132,93,17,-39,-14,12,
+  0,0,0,-1,-2,-2,-1,1,0,0,-1,0,2,2,1,-1,
+  0,-1,-2,1,6,7,3,-2,0,0,1,-2,-1,-3,-1,1,
+  -1,2,6,-1,-16,-21,-8,5,0,1,1,4,-15,-8,-3,3,
+  6,-6,-19,10,39,62,21,-20,12,-14,-39,17,93,132,45,-42,
+  0,0,0,0,0,0,-2,-3,0,0,0,0,-1,0,2,4,
+  0,0,0,0,-2,-1,5,10,0,0,0,1,0,-1,-3,-4,
+  0,-1,-2,0,5,5,-10,-25,0,0,-1,-1,5,-2,-9,-16,
+  -2,2,5,-3,-10,-9,33,75,-3,4,10,-4,-25,-16,75,166
+);
+
+/* ---- Decoded HDR texels (linear float RGB) ---- */
+vec3 texel_hdr[16];
+vec3 texel36_hdr[36];
+vec3 texel64_hdr[64];
+
+/* ---- Bitstream reader for 128-bit BC6H block ---- */
+uint B6[4];
+uint get_bits(uint pos, uint n) {
+   uint r = 0u;
+   for (uint i = 0u; i < n; i++) {
+      uint p = pos + i;
+      r |= ((B6[p >> 5u] >> (p & 31u)) & 1u) << i;
+   }
+   return r;
+}
+uint get_bit(uint pos) {
+   return (B6[pos >> 5u] >> (pos & 31u)) & 1u;
+}
+int sign_extend(int v, int bits) {
+   int shift = 32 - bits;
+   return (v << shift) >> shift;
+}
+
+/* Convert BC6H unquantized integer endpoint value to IEEE 754 binary16 (FP16) bits, then float */
+float bc6h_unquant_to_float(int val, bool is_signed) {
+   if (!is_signed) {
+      /* UF16: val in 0..65535 -> FP16 = (val * 31) >> 6 */
+      uint h = uint((val * 31) >> 6);
+      if (h >= 0x7c00u) h = 0x7bffu;
+      return unpackHalf2x16(h).x;
+   } else {
+      /* SF16: val in -32768..32767 -> sign + magnitude * 31 >> 5 */
+      uint s = (val < 0) ? 0x8000u : 0u;
+      int mag = (val < 0) ? -val : val;
+      uint h = uint((mag * 31) >> 5);
+      if (h >= 0x7c00u) h = 0x7bffu;
+      float f = unpackHalf2x16(s | h).x;
+      return max(f, 0.0); /* Standard ASTC HDR endpoints are non-negative */
+   }
+}
+
+/* Unquantize BC6H endpoint component to 16-bit signed/unsigned range before interpolation */
+int bc6h_unquant_ep(int val, int bits, bool is_signed) {
+   if (!is_signed) {
+      if (bits >= 15) return val;
+      if (val == 0) return 0;
+      if (val == ((1 << bits) - 1)) return 0xFFFF;
+      return ((val << 16) + 0x8000) >> bits;
+   } else {
+      if (bits >= 16) return val;
+      bool neg = val < 0;
+      int mag = neg ? -val : val;
+      int u;
+      if (mag == 0) u = 0;
+      else if (mag >= ((1 << (bits - 1)) - 1)) u = 0x7FFF;
+      else u = ((mag << 15) + 0x4000) >> (bits - 1);
+      return neg ? -u : u;
+   }
+}
+
+/* Decode one 4x4 BC6H block at src[w0..w0+3] into texel_hdr[0..15] */
+void decode_bc6h(uint w0) {
+   for (uint i = 0u; i < 4u; i++) B6[i] = src[w0 + i];
+   bool sgn = (pc.is_signed != 0u);
+
+   uint m2 = get_bits(0u, 2u);
+   uint mode = (m2 <= 1u) ? m2 : get_bits(0u, 5u);
+
+   /* Mode descriptor: ep_bits, delta_bits[3], num_subsets, transformed */
+   int ep_bits = 0;
+   ivec3 d_bits = ivec3(0);
+   int subsets = 2;
+   bool transformed = true;
+
+   if      (mode == 0u)  { ep_bits = 10; d_bits = ivec3(5, 5, 5); }
+   else if (mode == 1u)  { ep_bits = 7;  d_bits = ivec3(6, 6, 6); }
+   else if (mode == 2u)  { ep_bits = 11; d_bits = ivec3(5, 4, 4); }
+   else if (mode == 6u)  { ep_bits = 11; d_bits = ivec3(4, 5, 4); }
+   else if (mode == 10u) { ep_bits = 11; d_bits = ivec3(4, 4, 5); }
+   else if (mode == 14u) { ep_bits = 9;  d_bits = ivec3(5, 5, 5); }
+   else if (mode == 18u) { ep_bits = 8;  d_bits = ivec3(6, 5, 5); }
+   else if (mode == 22u) { ep_bits = 8;  d_bits = ivec3(5, 6, 5); }
+   else if (mode == 26u) { ep_bits = 8;  d_bits = ivec3(5, 5, 6); }
+   else if (mode == 30u) { ep_bits = 6;  d_bits = ivec3(6, 6, 6); transformed = false; }
+   else if (mode == 3u)  { ep_bits = 10; d_bits = ivec3(10,10,10); subsets = 1; transformed = false; }
+   else if (mode == 7u)  { ep_bits = 11; d_bits = ivec3(9, 9, 9);  subsets = 1; }
+   else if (mode == 11u) { ep_bits = 12; d_bits = ivec3(8, 8, 8);  subsets = 1; }
+   else if (mode == 15u) { ep_bits = 16; d_bits = ivec3(4, 4, 4);  subsets = 1; }
+   else {
+      for (uint i = 0u; i < 16u; i++) texel_hdr[i] = vec3(0.0);
+      return;
+   }
+
+   ivec3 ep[4]; /* [0]=A0, [1]=B0, [2]=A1, [3]=B1 */
+   for (int i = 0; i < 4; i++) ep[i] = ivec3(0);
+
+   uint part = 0u;
+   uint idx_bitpos = 0u;
+
+   if (subsets == 1) {
+      /* 1-region modes (3, 7, 11, 15): base endpoints start at bit 5 */
+      ep[0].r = int(get_bits(5u,  10u));
+      ep[0].g = int(get_bits(15u, 10u));
+      ep[0].b = int(get_bits(25u, 10u));
+      ep[1].r = int(get_bits(35u, uint(d_bits.r)));
+      ep[1].g = int(get_bits(35u + uint(d_bits.r), uint(d_bits.g)));
+      ep[1].b = int(get_bits(35u + uint(d_bits.r + d_bits.g), uint(d_bits.b)));
+
+      /* High bits of ep[0] for ep_bits > 10 */
+      if (mode == 7u) {
+         ep[0].r |= int(get_bit(44u)) << 10;
+         ep[0].g |= int(get_bit(54u)) << 10;
+         ep[0].b |= int(get_bit(64u)) << 10;
+      } else if (mode == 11u) {
+         ep[0].r |= int(get_bit(44u)) << 10 | int(get_bit(43u)) << 11;
+         ep[0].g |= int(get_bit(54u)) << 10 | int(get_bit(53u)) << 11;
+         ep[0].b |= int(get_bit(64u)) << 10 | int(get_bit(63u)) << 11;
+      } else if (mode == 15u) {
+         for (int k = 0; k < 6; k++) {
+            ep[0].r |= int(get_bit(uint(44 - k))) << (10 + k);
+            ep[0].g |= int(get_bit(uint(54 - k))) << (10 + k);
+            ep[0].b |= int(get_bit(uint(64 - k))) << (10 + k);
+         }
+      }
+      idx_bitpos = 65u;
+   } else {
+      /* 2-region modes */
+      uint bp = (mode <= 1u) ? 2u : 5u;
+      if (mode == 0u) {
+         ep[2].g = int(get_bit(2u)) << 4;
+         ep[2].b = int(get_bit(3u)) << 4;
+         ep[3].b = int(get_bit(4u)) << 4;
+         bp = 5u;
+      } else if (mode == 1u) {
+         ep[2].g = int(get_bit(2u)) << 5;
+         ep[3].g = int(get_bit(3u)) << 4 | int(get_bit(4u)) << 5;
+         bp = 5u;
+      }
+      int base_w = min(ep_bits, 10);
+      ep[0].r = int(get_bits(bp, uint(base_w))); bp += uint(base_w);
+      ep[0].g = int(get_bits(bp, uint(base_w))); bp += uint(base_w);
+      ep[0].b = int(get_bits(bp, uint(base_w))); bp += uint(base_w);
+
+      ep[1].r = int(get_bits(bp, uint(d_bits.r))); bp += uint(d_bits.r);
+      ep[1].g = int(get_bits(bp, uint(d_bits.g))); bp += uint(d_bits.g);
+      ep[1].b = int(get_bits(bp, uint(d_bits.b))); bp += uint(d_bits.b);
+
+      ep[2].r = int(get_bits(bp, uint(d_bits.r))); bp += uint(d_bits.r);
+      ep[2].g |= int(get_bits(bp, uint(min(d_bits.g, 4)))); bp += uint(min(d_bits.g, 4));
+      ep[2].b |= int(get_bits(bp, uint(min(d_bits.b, 4)))); bp += uint(min(d_bits.b, 4));
+
+      ep[3].r = int(get_bits(bp, uint(d_bits.r))); bp += uint(d_bits.r);
+      ep[3].g |= int(get_bits(bp, uint(min(d_bits.g, 4)))); bp += uint(min(d_bits.g, 4));
+      ep[3].b |= int(get_bits(bp, uint(min(d_bits.b, 4)))); bp += uint(min(d_bits.b, 4));
+
+      /* Extra upper bits for 11-bit modes (2, 6, 10) and 5/6-bit delta fields */
+      if (mode == 2u) {
+         ep[0].r |= int(get_bit(40u)) << 10;
+         ep[0].g |= int(get_bit(49u)) << 10;
+         ep[0].b |= int(get_bit(59u)) << 10;
+         ep[2].r |= int(get_bit(39u)) << 4;
+         ep[3].r |= int(get_bit(50u)) << 4;
+      } else if (mode == 6u) {
+         ep[0].r |= int(get_bit(39u)) << 10;
+         ep[0].g |= int(get_bit(50u)) << 10;
+         ep[0].b |= int(get_bit(59u)) << 10;
+         ep[2].g |= int(get_bit(49u)) << 4;
+         ep[3].g |= int(get_bit(60u)) << 4;
+      } else if (mode == 10u) {
+         ep[0].r |= int(get_bit(39u)) << 10;
+         ep[0].g |= int(get_bit(49u)) << 10;
+         ep[0].b |= int(get_bit(60u)) << 10;
+         ep[2].b |= int(get_bit(50u)) << 4;
+         ep[3].b |= int(get_bit(61u)) << 4;
+      } else if (mode == 14u) {
+         ep[2].g |= int(get_bit(40u)) << 4;
+         ep[2].b |= int(get_bit(49u)) << 4;
+         ep[3].g |= int(get_bit(50u)) << 4;
+         ep[3].b |= int(get_bit(59u)) << 4;
+      } else if (mode == 18u) {
+         ep[2].g |= int(get_bit(40u)) << 4;
+         ep[2].b |= int(get_bit(49u)) << 4;
+         ep[3].g |= int(get_bit(50u)) << 4;
+         ep[3].b |= int(get_bit(59u)) << 4;
+         ep[2].r |= int(get_bit(39u)) << 5;
+         ep[3].r |= int(get_bit(60u)) << 5;
+      } else if (mode == 22u) {
+         ep[2].g |= int(get_bit(40u)) << 4 | int(get_bit(39u)) << 5;
+         ep[2].b |= int(get_bit(49u)) << 4;
+         ep[3].g |= int(get_bit(50u)) << 4 | int(get_bit(60u)) << 5;
+         ep[3].b |= int(get_bit(59u)) << 4;
+      } else if (mode == 26u) {
+         ep[2].g |= int(get_bit(40u)) << 4;
+         ep[2].b |= int(get_bit(49u)) << 4 | int(get_bit(39u)) << 5;
+         ep[3].g |= int(get_bit(50u)) << 4;
+         ep[3].b |= int(get_bit(59u)) << 4 | int(get_bit(60u)) << 5;
+      } else if (mode == 30u) {
+         ep[2].g |= int(get_bit(40u)) << 4 | int(get_bit(39u)) << 5;
+         ep[2].b |= int(get_bit(49u)) << 4 | int(get_bit(48u)) << 5;
+         ep[3].g |= int(get_bit(50u)) << 4 | int(get_bit(60u)) << 5;
+         ep[3].b |= int(get_bit(59u)) << 4 | int(get_bit(61u)) << 5;
+      } else if (mode == 1u) {
+         ep[2].r |= int(get_bit(40u)) << 5;
+         ep[3].r |= int(get_bit(50u)) << 5;
+         ep[2].b |= int(get_bit(49u)) << 4 | int(get_bit(39u)) << 5;
+         ep[3].b |= int(get_bit(59u)) << 4 | int(get_bit(60u)) << 5;
+      }
+
+      part = get_bits(77u, 5u);
+      idx_bitpos = 82u;
+   }
+
+   if (sgn) {
+      ep[0].r = sign_extend(ep[0].r, ep_bits);
+      ep[0].g = sign_extend(ep[0].g, ep_bits);
+      ep[0].b = sign_extend(ep[0].b, ep_bits);
+   }
+   int max_ep = (subsets == 1) ? 2 : 4;
+   for (int i = 1; i < max_ep; i++) {
+      if (transformed) {
+         ep[i].r = sign_extend(ep[i].r, d_bits.r) + ep[0].r;
+         ep[i].g = sign_extend(ep[i].g, d_bits.g) + ep[0].g;
+         ep[i].b = sign_extend(ep[i].b, d_bits.b) + ep[0].b;
+         int mask = (1 << ep_bits) - 1;
+         ep[i].r &= mask;
+         ep[i].g &= mask;
+         ep[i].b &= mask;
+         if (sgn) {
+            ep[i].r = sign_extend(ep[i].r, ep_bits);
+            ep[i].g = sign_extend(ep[i].g, ep_bits);
+            ep[i].b = sign_extend(ep[i].b, ep_bits);
+         }
+      } else if (sgn) {
+         ep[i].r = sign_extend(ep[i].r, ep_bits);
+         ep[i].g = sign_extend(ep[i].g, ep_bits);
+         ep[i].b = sign_extend(ep[i].b, ep_bits);
+      }
+   }
+
+   for (int i = 0; i < max_ep; i++) {
+      ep[i].r = bc6h_unquant_ep(ep[i].r, ep_bits, sgn);
+      ep[i].g = bc6h_unquant_ep(ep[i].g, ep_bits, sgn);
+      ep[i].b = bc6h_unquant_ep(ep[i].b, ep_bits, sgn);
+   }
+
+   uint pmask = (subsets == 2) ? bc6h_part2[part] : 0u;
+   uint anch1 = (subsets == 2) ? bc6h_anchor2[part] : 0u;
+   uint ibits = (subsets == 1) ? 4u : 3u;
+
+   for (uint i = 0u; i < 16u; i++) {
+      uint sub = (subsets == 2) ? ((pmask >> i) & 1u) : 0u;
+      bool is_anchor = (i == 0u) || (subsets == 2 && i == anch1);
+      uint nbits = is_anchor ? (ibits - 1u) : ibits;
+      uint idx = get_bits(idx_bitpos, nbits);
+      idx_bitpos += nbits;
+      int w = (subsets == 1) ? bc6h_w4[idx] : bc6h_w3[idx];
+      ivec3 c0 = ep[sub * 2u];
+      ivec3 c1 = ep[sub * 2u + 1u];
+      ivec3 ci = ((c0 * (64 - w) + c1 * w + 32) >> 6);
+      texel_hdr[i] = vec3(
+         bc6h_unquant_to_float(ci.r, sgn),
+         bc6h_unquant_to_float(ci.g, sgn),
+         bc6h_unquant_to_float(ci.b, sgn)
+      );
+   }
+}
+
+/* ---- ASTC HDR block assembly (CEM 11: HDR RGB Direct, 12-bit endpoints, 4x4 weight grid) ---- */
+uint blk[4];
+void set_bits(int pos, int count, uint value) {
+   for (int i = 0; i < count; i++) {
+      if ((value & (1u << uint(i))) != 0u) {
+         int p = pos + i;
+         blk[p >> 5] |= 1u << uint(p & 31);
+      }
+   }
+}
+uint rev_bits(uint v, int count) {
+   uint o = 0u;
+   for (int i = 0; i < count; i++) {
+      o |= ((v >> uint(i)) & 1u) << uint(count - 1 - i);
+   }
+   return o;
+}
+
+/* Convert linear float >= 0.0 to ASTC HDR 12-bit endpoint encoding (CEM 11 direct FP16-derived).
+ * In ASTC HDR (Section C.2.14 / C.2.15), a 12-bit HDR endpoint encodes FP16 exponent+mantissa
+ * via shift-left by 4 bits into FP16 (bits [14:0] = val12 << 3, clamped to max finite FP16 0x7BFF). */
+uint float_to_astc_hdr12(float v) {
+   float c = clamp(v, 0.0, 65504.0);
+   uint h = packHalf2x16(vec2(c, 0.0)) & 0x7FFFu;
+   if (h > 0x7BFFu) h = 0x7BFFu;
+   return (h + 4u) >> 3u;
+}
+float astc_hdr12_to_float(uint e12) {
+   uint h = min(e12 << 3u, 0x7BFFu);
+   return unpackHalf2x16(h).x;
+}
+
+/* Write ASTC HDR header + 6x 12-bit endpoints (CEM = 11: HDR RGB Direct, block_mode = 0x144) */
+void write_hdr_header_and_endpoints(vec3 min_c, vec3 max_c) {
+   blk[0] = 0u; blk[1] = 0u; blk[2] = 0u; blk[3] = 0u;
+   /* block_mode = 0x144 -> 4x4 weight grid (16 weights), 2-bit weights (0..3), 1 plane */
+   set_bits(0, 11, 0x144u);
+   /* bits 11..12 = 00 (1 partition), bits 13..16 = CEM 11 (HDR RGB Direct) */
+   set_bits(13, 4, 11u);
+
+   uint e0r = float_to_astc_hdr12(min_c.r);
+   uint e1r = float_to_astc_hdr12(max_c.r);
+   uint e0g = float_to_astc_hdr12(min_c.g);
+   uint e1g = float_to_astc_hdr12(max_c.g);
+   uint e0b = float_to_astc_hdr12(min_c.b);
+   uint e1b = float_to_astc_hdr12(max_c.b);
+
+   set_bits(17, 12, e0r);
+   set_bits(29, 12, e1r);
+   set_bits(41, 12, e0g);
+   set_bits(53, 12, e1g);
+   set_bits(65, 12, e0b);
+   set_bits(77, 12, e1b);
+}
+
+/* Project an HDR RGB texel onto the segment [e0, e1] in log2/perceptual HDR space for weight estimation */
+float hdr_weight_01(vec3 c, vec3 e0, vec3 e1) {
+   vec3 lc  = log2(max(c,  vec3(1e-6)));
+   vec3 le0 = log2(max(e0, vec3(1e-6)));
+   vec3 le1 = log2(max(e1, vec3(1e-6)));
+   vec3 dir = le1 - le0;
+   float dlen2 = dot(dir, dir);
+   if (dlen2 <= 1e-12) return 0.0;
+   return clamp(dot(lc - le0, dir) / dlen2, 0.0, 1.0);
+}
+
+/* ---- 4x4 ASTC HDR encoder (16 texels -> 16 weights) ---- */
+void encode_hdr_4x4() {
+   vec3 cmin = texel_hdr[0], cmax = texel_hdr[0];
+   for (int i = 1; i < 16; i++) {
+      cmin = min(cmin, texel_hdr[i]);
+      cmax = max(cmax, texel_hdr[i]);
+   }
+   write_hdr_header_and_endpoints(cmin, cmax);
+   for (int t = 0; t < 16; t++) {
+      float f = hdr_weight_01(texel_hdr[t], cmin, cmax);
+      uint q = uint(clamp(floor(f * 3.0 + 0.5), 0.0, 3.0));
+      set_bits(128 - (t + 1) * 2, 2, rev_bits(q, 2));
+   }
+}
+
+/* ---- 6x6 ASTC HDR encoder (36 texels -> 4x4 weight grid via astc_pinv6) ---- */
+void encode_hdr_6x6() {
+   vec3 cmin = texel36_hdr[0], cmax = texel36_hdr[0];
+   for (int i = 1; i < 36; i++) {
+      cmin = min(cmin, texel36_hdr[i]);
+      cmax = max(cmax, texel36_hdr[i]);
+   }
+   write_hdr_header_and_endpoints(cmin, cmax);
+   for (int g = 0; g < 16; g++) {
+      float a = 0.0;
+      for (int t = 0; t < 36; t++) {
+         float w = hdr_weight_01(texel36_hdr[t], cmin, cmax) * 3.0;
+         a += float(astc_pinv6[g * 36 + t]) * w;
+      }
+      int q = int(floor(a / 256.0 + 0.5));
+      q = clamp(q, 0, 3);
+      set_bits(128 - (g + 1) * 2, 2, rev_bits(uint(q), 2));
+   }
+}
+
+/* ---- 8x8 ASTC HDR encoder (64 texels -> 4x4 weight grid via astc_pinv8) ---- */
+void encode_hdr_8x8() {
+   vec3 cmin = texel64_hdr[0], cmax = texel64_hdr[0];
+   for (int i = 1; i < 64; i++) {
+      cmin = min(cmin, texel64_hdr[i]);
+      cmax = max(cmax, texel64_hdr[i]);
+   }
+   write_hdr_header_and_endpoints(cmin, cmax);
+   for (int g = 0; g < 16; g++) {
+      float a = 0.0;
+      for (int t = 0; t < 64; t++) {
+         float w = hdr_weight_01(texel64_hdr[t], cmin, cmax) * 3.0;
+         a += float(astc_pinv8[g * 64 + t]) * w;
+      }
+      int q = int(floor(a / 256.0 + 0.5));
+      q = clamp(q, 0, 3);
+      set_bits(128 - (g + 1) * 2, 2, rev_bits(uint(q), 2));
+   }
+}
+
+/* Decode one BC6H block at (bcx, bcy) into texel64_hdr quadrant (qx, qy) */
+void decode_bc6h_into_64(uint bcx, uint bcy, uint qx, uint qy) {
+   uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * 4u;
+   decode_bc6h(srcWord);
+   for (uint r = 0u; r < 4u; r++) {
+      for (uint c = 0u; c < 4u; c++) {
+         texel64_hdr[(qy * 4u + r) * 8u + (qx * 4u + c)] = texel_hdr[r * 4u + c];
+      }
+   }
+}
+
+/* Decode BC6H blocks covering a 6x6 region starting at texel (bx*6, by*6) */
+void gather_6x6_hdr(uint bx, uint by) {
+   for (uint i = 0u; i < 36u; i++) texel36_hdr[i] = vec3(0.0);
+   uint base_tx = bx * 6u;
+   uint base_ty = by * 6u;
+   uint min_bcx = base_tx >> 2u;
+   uint min_bcy = base_ty >> 2u;
+   uint max_bcx = (base_tx + 5u) >> 2u;
+   uint max_bcy = (base_ty + 5u) >> 2u;
+
+   for (uint bcy = min_bcy; bcy <= max_bcy; bcy++) {
+      if (bcy >= pc.bc_by) continue;
+      for (uint bcx = min_bcx; bcx <= max_bcx; bcx++) {
+         if (bcx >= pc.bc_bx) continue;
+         uint srcWord = pc.src_word_off + (bcy * pc.block_x_src + bcx) * 4u;
+         decode_bc6h(srcWord);
+         for (uint r = 0u; r < 4u; r++) {
+            uint ty = bcy * 4u + r;
+            if (ty < base_ty || ty >= base_ty + 6u) continue;
+            for (uint c = 0u; c < 4u; c++) {
+               uint tx = bcx * 4u + c;
+               if (tx < base_tx || tx >= base_tx + 6u) continue;
+               texel36_hdr[(ty - base_ty) * 6u + (tx - base_tx)] = texel_hdr[r * 4u + c];
+            }
+         }
+      }
+   }
+}
+
+void main() {
+   uint bx = gl_GlobalInvocationID.x, by = gl_GlobalInvocationID.y;
+   if (bx >= pc.block_x || by >= pc.block_y) return;
+
+   if (pc.block_dim == 8u) {
+      for (uint i = 0u; i < 64u; i++) texel64_hdr[i] = vec3(0.0);
+      for (uint dy = 0u; dy < 2u; dy++) {
+         for (uint dx = 0u; dx < 2u; dx++) {
+            uint bcx = 2u * bx + dx, bcy = 2u * by + dy;
+            if (bcx >= pc.bc_bx || bcy >= pc.bc_by) continue;
+            decode_bc6h_into_64(bcx, bcy, dx, dy);
+         }
+      }
+      encode_hdr_8x8();
+   } else if (pc.block_dim == 6u) {
+      gather_6x6_hdr(bx, by);
+      encode_hdr_6x6();
+   } else {
+      uint srcWord = pc.src_word_off + (by * pc.block_x_src + bx) * 4u;
+      decode_bc6h(srcWord);
+      encode_hdr_4x4();
+   }
+
+   uint dstWord = (by * pc.block_x + bx) * 4u;
+   dst[dstWord + 0u] = blk[0];
+   dst[dstWord + 1u] = blk[1];
+   dst[dstWord + 2u] = blk[2];
+   dst[dstWord + 3u] = blk[3];
+}
