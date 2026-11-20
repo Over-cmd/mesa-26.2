@@ -17,10 +17,12 @@ jobs:
 
       - name: Compile GLSL to SPIR-V and Validate
         run: |
-          # 1. Compila usando la ruta exacta de tu archivo en el repositorio
+          # 1. Compila y valida el shader SDR (BCn -> ASTC)
           glslangValidator -V -S comp src/vulkan/wrapper/wrapper_bcn_transcode.comp -o wrapper_bcn_transcode.spv
-          
-          # 2. Valida estrictamente el binario SPIR-V resultante
           spirv-val wrapper_bcn_transcode.spv
-          
-          echo "¡El shader es completamente válido y compatible con SPIR-V!"
+
+          # 2. Compila y valida el shader HDR (BC6H -> ASTC HDR, 4x4 / 6x6 / 8x8)
+          glslangValidator -V -S comp src/vulkan/wrapper/bc6h_to_astc.comp -o bc6h_to_astc.spv
+          spirv-val bc6h_to_astc.spv
+
+          echo "¡Ambos shaders son completamente válidos y compatibles con SPIR-V!"
