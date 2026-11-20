@@ -1,0 +1,332 @@
+name: Auto Generate wrapper_bcn6h_spv.h
+
+on:
+  push:
+    branches:
+      - fusion
+    paths:
+      - 'src/vulkan/wrapper/bc6h_to_astc.comp'
+      - '.github/workflows/build-wrapper-bcn6h-spv.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  generate-bcn6h-spv-header:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: fusion
+
+      - name: Install glslc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          glslc --version
+
+      - name: Compile bc6h_to_astc.comp to wrapper_bcn6h_spv.h
+        run: |
+          SHADER_COMP="src/vulkan/wrapper/bc6h_to_astc.comp"
+          TMP_SPV="/tmp/bc6h_to_astc.spv"
+          OUT_H="src/vulkan/wrapper/wrapper_bcn6h_spv.h"
+
+          glslc "$SHADER_COMP" -o "$TMP_SPV"
+
+          python3 - "$TMP_SPV" "$SHADER_COMP" "$OUT_H" <<'EOF'
+          import struct
+          import sys
+
+          spv_path, comp_name, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          with open(spv_path, "rb") as f:
+              data = f.read()
+
+          if len(data) % 4 != 0:
+              raise ValueError("El archivo .spv no tiene un tamano multiplo de 4 bytes.")
+
+          words = struct.unpack("<" + "I" * (len(data) // 4), data)
+          lines = []
+          for i in range(0, len(words), 4):
+              chunk = words[i : i + 4]
+              lines.append("    {" + ",".join(f"0x{w:08x}" for w in chunk) + "}")
+          array_body = ",\n".join(lines)
+
+          header = f"""/* Auto-generated from {comp_name} via glslc. Do not edit. */
+          #ifndef WRAPPER_BCN6H_SPV_H
+          #define WRAPPER_BCN6H_SPV_H
+
+          #include <vulkan/vulkan.h>
+          #include <stdint.h>
+          #include <stddef.h>
+          #include <string.h>
+
+          #ifdef __cplusplus
+          extern "C" {{
+          #endif
+
+          static const uint32_t bc6h_to_astc_spv[] =
+          {{
+          {array_body}
+          }};
+
+          static const size_t bc6h_to_astc_spv_size = sizeof(bc6h_to_astc_spv);
+
+          /* Coincide con `layout(push_constant) uniform PC` en bc6h_to_astc.comp */
+          typedef struct Bcn6hPushConstants {{
+              uint32_t block_x;      /* Ancho de la rejilla ASTC de salida en bloques */
+              uint32_t block_x_src;  /* Stride de origen BC6H en bloques */
+              uint32_t block_y;      /* Alto de la rejilla ASTC de salida en bloques */
+              uint32_t src_word_off; /* Offset en palabras uint32 dentro de src[] */
+              uint32_t block_dim;    /* 4 (o 0) = 4x4, 6 = 6x6, 8 = 8x8 */
+              uint32_t is_signed;    /* 0 = BC6H_UF16, 1 = BC6H_SF16 */
+              uint32_t bc_bx;        /* Extension real en bloques BC6H (X) */
+              uint32_t bc_by;        /* Extension real en bloques BC6H (Y) */
+          }} Bcn6hPushConstants;
+
+          typedef struct Bcn6hSpvContext {{
+              VkDevice              device;
+              VkShaderModule        shader_module;
+              VkDescriptorSetLayout desc_set_layout;
+              VkPipelineLayout      pipeline_layout;
+              VkPipeline            pipeline;
+              VkDescriptorPool      desc_pool;
+              uint32_t              max_sets;
+          }} Bcn6hSpvContext;
+
+          static inline int bcn6h_is_bc6h_format(VkFormat fmt) {{
+              return (fmt == VK_FORMAT_BC6H_UFLOAT_BLOCK ||
+                      fmt == VK_FORMAT_BC6H_SFLOAT_BLOCK);
+          }}
+
+          static inline uint32_t bcn6h_is_signed_format(VkFormat fmt) {{
+              return (fmt == VK_FORMAT_BC6H_SFLOAT_BLOCK) ? 1u : 0u;
+          }}
+
+          static inline VkFormat bcn6h_astc_hdr_format(uint32_t block_dim) {{
+              switch (block_dim) {{
+                  case 6u:  return VK_FORMAT_ASTC_6x6_SFLOAT_BLOCK;
+                  case 8u:  return VK_FORMAT_ASTC_8x8_SFLOAT_BLOCK;
+                  case 4u:
+                  case 0u:
+                  default:  return VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK;
+              }}
+          }}
+
+          static inline VkResult bcn6h_spv_init(Bcn6hSpvContext *ctx,
+                                                VkDevice         device,
+                                                uint32_t         max_descriptor_sets) {{
+              if (!ctx || device == VK_NULL_HANDLE) return VK_ERROR_INITIALIZATION_FAILED;
+              memset(ctx, 0, sizeof(*ctx));
+              ctx->device = device;
+              ctx->max_sets = (max_descriptor_sets > 0u) ? max_descriptor_sets : 64u;
+
+              VkShaderModuleCreateInfo sm_ci;
+              memset(&sm_ci, 0, sizeof(sm_ci));
+              sm_ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+              sm_ci.codeSize = bc6h_to_astc_spv_size;
+              sm_ci.pCode = bc6h_to_astc_spv;
+
+              VkResult res = vkCreateShaderModule(device, &sm_ci, NULL, &ctx->shader_module);
+              if (res != VK_SUCCESS) return res;
+
+              VkDescriptorSetLayoutBinding bindings[2];
+              memset(bindings, 0, sizeof(bindings));
+              bindings[0].binding = 0u;
+              bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              bindings[0].descriptorCount = 1u;
+              bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+              bindings[1].binding = 1u;
+              bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              bindings[1].descriptorCount = 1u;
+              bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+              VkDescriptorSetLayoutCreateInfo dsl_ci;
+              memset(&dsl_ci, 0, sizeof(dsl_ci));
+              dsl_ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+              dsl_ci.bindingCount = 2u;
+              dsl_ci.pBindings = bindings;
+
+              res = vkCreateDescriptorSetLayout(device, &dsl_ci, NULL, &ctx->desc_set_layout);
+              if (res != VK_SUCCESS) goto fail;
+
+              VkPushConstantRange pc_range;
+              memset(&pc_range, 0, sizeof(pc_range));
+              pc_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+              pc_range.offset = 0u;
+              pc_range.size = (uint32_t)sizeof(Bcn6hPushConstants);
+
+              VkPipelineLayoutCreateInfo pl_ci;
+              memset(&pl_ci, 0, sizeof(pl_ci));
+              pl_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+              pl_ci.setLayoutCount = 1u;
+              pl_ci.pSetLayouts = &ctx->desc_set_layout;
+              pl_ci.pushConstantRangeCount = 1u;
+              pl_ci.pPushConstantRanges = &pc_range;
+
+              res = vkCreatePipelineLayout(device, &pl_ci, NULL, &ctx->pipeline_layout);
+              if (res != VK_SUCCESS) goto fail;
+
+              VkComputePipelineCreateInfo cp_ci;
+              memset(&cp_ci, 0, sizeof(cp_ci));
+              cp_ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+              cp_ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+              cp_ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+              cp_ci.stage.module = ctx->shader_module;
+              cp_ci.stage.pName = "main";
+              cp_ci.layout = ctx->pipeline_layout;
+
+              res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1u, &cp_ci, NULL, &ctx->pipeline);
+              if (res != VK_SUCCESS) goto fail;
+
+              VkDescriptorPoolSize pool_size;
+              pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              pool_size.descriptorCount = ctx->max_sets * 2u;
+
+              VkDescriptorPoolCreateInfo dp_ci;
+              memset(&dp_ci, 0, sizeof(dp_ci));
+              dp_ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+              dp_ci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+              dp_ci.maxSets = ctx->max_sets;
+              dp_ci.poolSizeCount = 1u;
+              dp_ci.pPoolSizes = &pool_size;
+
+              res = vkCreateDescriptorPool(device, &dp_ci, NULL, &ctx->desc_pool);
+              if (res != VK_SUCCESS) goto fail;
+
+              return VK_SUCCESS;
+
+          fail:
+              if (ctx->desc_pool)       vkDestroyDescriptorPool(ctx->device, ctx->desc_pool, NULL);
+              if (ctx->pipeline)        vkDestroyPipeline(ctx->device, ctx->pipeline, NULL);
+              if (ctx->pipeline_layout) vkDestroyPipelineLayout(ctx->device, ctx->pipeline_layout, NULL);
+              if (ctx->desc_set_layout) vkDestroyDescriptorSetLayout(ctx->device, ctx->desc_set_layout, NULL);
+              if (ctx->shader_module)   vkDestroyShaderModule(ctx->device, ctx->shader_module, NULL);
+              memset(ctx, 0, sizeof(*ctx));
+              return res;
+          }}
+
+          static inline VkResult bcn6h_spv_reset_pool(Bcn6hSpvContext *ctx) {{
+              if (!ctx || !ctx->device || !ctx->desc_pool) return VK_ERROR_INITIALIZATION_FAILED;
+              return vkResetDescriptorPool(ctx->device, ctx->desc_pool, 0u);
+          }}
+
+          static inline VkResult bcn6h_spv_cmd_transcode(Bcn6hSpvContext *ctx,
+                                                         VkCommandBuffer  cmd,
+                                                         VkBuffer         src_buf,
+                                                         VkDeviceSize     src_offset,
+                                                         VkDeviceSize     src_size,
+                                                         VkBuffer         dst_buf,
+                                                         VkDeviceSize     dst_offset,
+                                                         VkDeviceSize     dst_size,
+                                                         uint32_t         tex_width,
+                                                         uint32_t         tex_height,
+                                                         uint32_t         src_row_stride,
+                                                         VkFormat         bc6h_format,
+                                                         uint32_t         astc_block_dim,
+                                                         VkDescriptorSet *out_desc_set) {{
+              if (!ctx || !ctx->pipeline || cmd == VK_NULL_HANDLE) {{
+                  return VK_ERROR_INITIALIZATION_FAILED;
+              }}
+
+              uint32_t dim = (astc_block_dim == 6u || astc_block_dim == 8u) ? astc_block_dim : 4u;
+              uint32_t bc_bx = (tex_width  + 3u) / 4u;
+              uint32_t bc_by = (tex_height + 3u) / 4u;
+              uint32_t astc_bx = (tex_width  + dim - 1u) / dim;
+              uint32_t astc_by = (tex_height + dim - 1u) / dim;
+
+              if (astc_bx == 0u || astc_by == 0u) return VK_SUCCESS;
+
+              VkDescriptorSetAllocateInfo alloc_info;
+              memset(&alloc_info, 0, sizeof(alloc_info));
+              alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+              alloc_info.descriptorPool = ctx->desc_pool;
+              alloc_info.descriptorSetCount = 1u;
+              alloc_info.pSetLayouts = &ctx->desc_set_layout;
+
+              VkDescriptorSet desc_set = VK_NULL_HANDLE;
+              VkResult res = vkAllocateDescriptorSets(ctx->device, &alloc_info, &desc_set);
+              if (res != VK_SUCCESS) return res;
+
+              VkDescriptorBufferInfo src_info;
+              src_info.buffer = src_buf;
+              src_info.offset = src_offset;
+              src_info.range  = (src_size > 0) ? src_size : VK_WHOLE_SIZE;
+
+              VkDescriptorBufferInfo dst_info;
+              dst_info.buffer = dst_buf;
+              dst_info.offset = dst_offset;
+              dst_info.range  = (dst_size > 0) ? dst_size : VK_WHOLE_SIZE;
+
+              VkWriteDescriptorSet writes[2];
+              memset(writes, 0, sizeof(writes));
+              writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+              writes[0].dstSet = desc_set;
+              writes[0].dstBinding = 0u;
+              writes[0].descriptorCount = 1u;
+              writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              writes[0].pBufferInfo = &src_info;
+
+              writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+              writes[1].dstSet = desc_set;
+              writes[1].dstBinding = 1u;
+              writes[1].descriptorCount = 1u;
+              writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              writes[1].pBufferInfo = &dst_info;
+
+              vkUpdateDescriptorSets(ctx->device, 2u, writes, 0u, NULL);
+
+              Bcn6hPushConstants pc;
+              pc.block_x      = astc_bx;
+              pc.block_x_src  = (src_row_stride > 0u) ? src_row_stride : bc_bx;
+              pc.block_y      = astc_by;
+              pc.src_word_off = 0u;
+              pc.block_dim    = dim;
+              pc.is_signed    = bcn6h_is_signed_format(bc6h_format);
+              pc.bc_bx        = bc_bx;
+              pc.bc_by        = bc_by;
+
+              vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->pipeline);
+              vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      ctx->pipeline_layout, 0u, 1u, &desc_set, 0u, NULL);
+              vkCmdPushConstants(cmd, ctx->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                                 0u, (uint32_t)sizeof(pc), &pc);
+
+              uint32_t group_x = (astc_bx + 7u) / 8u;
+              uint32_t group_y = (astc_by + 7u) / 8u;
+              vkCmdDispatch(cmd, group_x, group_y, 1u);
+
+              if (out_desc_set) *out_desc_set = desc_set;
+              return VK_SUCCESS;
+          }}
+
+          static inline void bcn6h_spv_destroy(Bcn6hSpvContext *ctx) {{
+              if (!ctx || ctx->device == VK_NULL_HANDLE) return;
+              if (ctx->desc_pool)       vkDestroyDescriptorPool(ctx->device, ctx->desc_pool, NULL);
+              if (ctx->pipeline)        vkDestroyPipeline(ctx->device, ctx->pipeline, NULL);
+              if (ctx->pipeline_layout) vkDestroyPipelineLayout(ctx->device, ctx->pipeline_layout, NULL);
+              if (ctx->desc_set_layout) vkDestroyDescriptorSetLayout(ctx->device, ctx->desc_set_layout, NULL);
+              if (ctx->shader_module)   vkDestroyShaderModule(ctx->device, ctx->shader_module, NULL);
+              memset(ctx, 0, sizeof(*ctx));
+          }}
+
+          #ifdef __cplusplus
+          }}
+          #endif
+
+          #endif /* WRAPPER_BCN6H_SPV_H */
+          """
+
+          with open(out_path, "w", encoding="utf-8") as f:
+              f.write(header)
+          EOF
+
+          head -n 8 "$OUT_H"
+
+      - name: Upload wrapper_bcn6h_spv.h artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wrapper-bcn6h-spv-header
+          path: src/vulkan/wrapper/wrapper_bcn6h_spv.h
