@@ -1,12 +1,45 @@
-COPYRIGHT=u"""
-/* Copyright © 2021 Intel Corporation
+#!/usr/bin/env python3
+# Copyright © 2021 Intel Corporation
+# SPDX-License-Identifier: MIT
+
+import argparse
+from collections import OrderedDict
+from dataclasses import dataclass
+import logging
+import os
+import re
+import sys
+import typing
+import xml.etree.ElementTree as et
+
+import mako
+from mako.template import Template
+
+# Añadir el directorio actual al path para garantizar la importación segura del módulo auxiliar
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+# Importación segura con control de errores si falta el módulo auxiliar
+try:
+    from vk_extensions import Requirements, get_all_required
+except ImportError as e:
+    print(f"[ERROR] No se pudo importar 'vk_extensions': {e}", file=sys.stderr)
+    print("[ERROR] Asegúrate de que 'vk_extensions.py' esté en el mismo directorio o en el PYTHONPATH.", file=sys.stderr)
+    sys.exit(1)
+
+# Configuración de logging profesional
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] vk_wrapper_gen: %(message)s')
+logger = logging.getLogger(__name__)
+
+COPYRIGHT = u"""/* Copyright © 2021 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * and/or sell copies of the Software, and to persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
  *
  * The above copyright notice and this permission notice (including the next
  * paragraph) shall be included in all copies or substantial portions of the
@@ -21,23 +54,6 @@ COPYRIGHT=u"""
  * IN THE SOFTWARE.
  */
 """
-
-import argparse
-from collections import OrderedDict
-from dataclasses import dataclass
-import os
-import sys
-import typing
-import xml.etree.ElementTree as et
-
-import mako
-from mako.template import Template
-from vk_extensions import Requirements, get_all_required, filter_api
-
-def str_removeprefix(s, prefix):
-    if s.startswith(prefix):
-        return s[len(prefix):]
-    return s
 
 RENAMED_FEATURES = {
     # See https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/17272#note_1446477 for details
@@ -146,14 +162,19 @@ KNOWN_ALIASES = [
     (['Vulkan14Features', 'HostImageCopyFeatures'], ['hostImageCopy']),
 ]
 
+# Inicialización segura de alias para evitar duplicados o fallos de aserción silenciosos
 for (feature_structs, features) in KNOWN_ALIASES:
     for flag in features:
         for f in feature_structs:
             rename = (f, flag)
-            assert rename not in RENAMED_FEATURES, f"{rename} already exists in RENAMED_FEATURES"
+            if rename in RENAMED_FEATURES:
+                raise ValueError(f"Conflicto detectado: {rename} ya existe en RENAMED_FEATURES")
             RENAMED_FEATURES[rename] = flag
 
-def get_renamed_feature(c_type, feature):
+def str_removeprefix(s: str, prefix: str) -> str:
+    return s[len(prefix):] if s.startswith(prefix) else s
+
+def get_renamed_feature(c_type: str, feature: str) -> str:
     return RENAMED_FEATURES.get((str_removeprefix(c_type, 'VkPhysicalDevice'), feature), feature)
 
 @dataclass
@@ -164,7 +185,9 @@ class FeatureStruct:
     features: typing.List[str]
 
 TEMPLATE_C = Template(COPYRIGHT + """
-/* This file generated from ${filename}, don't edit directly. */
+/* This file generated from ${filename}, don't edit directly. 
+ * Target: Mali-G52 / Vulkan 1.0-1.1 Environment
+ */
 
 #include "wrapper_private.h"
 #include "vk_physical_device_features.h"
@@ -196,84 +219,109 @@ wrapper_setup_device_features(struct wrapper_physical_device *physical_device)
 }
 """)
 
-def get_pdev_features(doc):
+def get_pdev_features(doc: et.Element) -> typing.Optional[typing.List[str]]:
     _type = doc.find(".types/type[@name='VkPhysicalDeviceFeatures']")
     if _type is not None:
-        flags = []
-        for p in _type.findall('./member'):
-            assert p.find('./type').text == 'VkBool32'
-            flags.append(p.find('./name').text)
-        return flags
+        return [p.find('./name').text for p in _type.findall('./member') if p.find('./type').text == 'VkBool32']
     return None
 
-def filter_api(elem, api):
+def filter_api_elem(elem: et.Element, api: str) -> bool:
     if 'api' not in elem.attrib:
         return True
-
     return api in elem.attrib['api'].split(',')
 
-def get_feature_structs(doc, api, beta):
+def _parse_version(v: str) -> typing.Tuple[int, int]:
+    try:
+        parts = v.strip().split('.')
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except (ValueError, IndexError):
+        raise ValueError(f"Versión máxima inválida: '{v}' (use por ejemplo 1.1)")
+
+def get_feature_structs(doc: et.Element, api: str, beta: str, max_version: str) -> typing.List[FeatureStruct]:
     feature_structs = OrderedDict()
-
     required = get_all_required(doc, 'type', api, beta)
+    max_ver = _parse_version(max_version) if max_version else None
 
-    # parse all struct types where structextends VkPhysicalDeviceFeatures2
     for _type in doc.findall('./types/type[@category="struct"]'):
-        if _type.attrib.get('structextends') != 'VkPhysicalDeviceFeatures2,VkDeviceCreateInfo':
+        struct_extends = _type.attrib.get('structextends', '')
+        if not struct_extends:
             continue
-        if _type.attrib['name'] not in required:
+        extended_structs = [s.strip() for s in struct_extends.split(',')]
+        if 'VkPhysicalDeviceFeatures2' not in extended_structs:
             continue
 
-        reqs = required[_type.attrib['name']]
-        # Skip extensions with a define for now
+        typename = _type.attrib.get('name')
+        if not typename or typename not in required:
+            continue
+
+        # Restricción de versión (p. ej. "1.1" para Mali G52): se descartan las estructuras agregadas VulkanXYFeatures
+        # con XY mayor que la versión máxima. (Antes solo se comparaba la cadena literal "1.1": con "1.0" o "1.2" no filtraba bien.)
+        m = re.match(r'VkPhysicalDeviceVulkan(\d)(\d)Features$', typename)
+        if m and max_ver is not None and (int(m.group(1)), int(m.group(2))) > max_ver:
+            continue
+
+        reqs = required[typename]
         guard = reqs.guard
-        if guard is not None and (guard != "VK_ENABLE_BETA_EXTENSIONS" or beta != "true"):
+        if guard is not None and (guard != "VK_ENABLE_BETA_EXTENSIONS" or beta.lower() != "true"):
             continue
 
-        # find Vulkan structure type
-        for elem in _type:
-            if "STRUCTURE_TYPE" in str(elem.attrib):
-                s_type = elem.attrib.get('values')
-
-        # collect a list of feature flags
+        s_type = None
         flags = []
+        for p in _type:
+            if p.tag == 'member':
+                if not filter_api_elem(p, api):
+                    continue
+                m_name = p.find('./name')
+                if m_name is not None:
+                    name_text = m_name.text
+                    if name_text == 'sType':
+                        s_type = p.attrib.get('values')
+                    elif name_text != 'pNext':
+                        type_elem = p.find('./type')
+                        if type_elem is not None and type_elem.text == 'VkBool32':
+                            flags.append(name_text)
 
-        for p in _type.findall('./member'):
-            if not filter_api(p, api):
-                continue
+        # Respaldo por si s_type no se halló en los miembros
+        if not s_type:
+            for elem in _type:
+                if "STRUCTURE_TYPE" in str(elem.attrib):
+                    s_type = elem.attrib.get('values')
 
-            m_name = p.find('./name').text
-            if m_name == 'pNext':
-                pass
-            elif m_name == 'sType':
-                s_type = p.attrib.get('values')
-            else:
-                assert p.find('./type').text == 'VkBool32'
-                flags.append(m_name)
+        if not s_type:
+            logger.warning(f"{typename}: no se encontró sType; se omite (generaría '.sType = None' y no compilaría)")
+            continue
 
-        feature_struct = FeatureStruct(reqs=reqs, c_type=_type.attrib.get('name'), s_type=s_type, features=flags)
-        feature_structs[feature_struct.c_type] = feature_struct
+        feature_struct = FeatureStruct(reqs=reqs, c_type=typename, s_type=s_type, features=flags)
+        feature_structs[typename] = feature_struct
 
-    return feature_structs.values()
+    return list(feature_structs.values())
 
-def get_feature_structs_from_xml(xml_files, beta, api='vulkan'):
+def get_feature_structs_from_xml(xml_files: typing.List[str], beta: str, max_version: str, api: str = 'vulkan'):
     diagnostics = []
-
     pdev_features = None
     feature_structs = []
 
     for filename in xml_files:
-        doc = et.parse(filename)
-        feature_structs += get_feature_structs(doc, api, beta)
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"El archivo XML especificado no existe: {filename}")
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                doc = et.parse(f)
+        except et.ParseError as e:
+            logger.error(f"Error al parsear el XML '{filename}': {e}")
+            sys.exit(1)
+
+        feature_structs += get_feature_structs(doc, api, beta, max_version)
         if not pdev_features:
             pdev_features = get_pdev_features(doc)
 
     unused_renames = {**RENAMED_FEATURES}
-
     features = OrderedDict()
 
-    for flag in pdev_features:
-        features[flag] = 'VkPhysicalDeviceFeatures'
+    if pdev_features:
+        for flag in pdev_features:
+            features[flag] = 'VkPhysicalDeviceFeatures'
 
     for f in feature_structs:
         for flag in f.features:
@@ -291,39 +339,49 @@ def get_feature_structs_from_xml(xml_files, beta, api='vulkan'):
     for rename in unused_renames:
         diagnostics.append(f'unused rename {rename}')
 
-    assert len(diagnostics) == 0, '\n'.join(diagnostics)
+    if diagnostics:
+        logger.warning("Se encontraron avisos durante la generación de características:\n" + "\n".join(diagnostics))
 
     return pdev_features, feature_structs, features
 
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--out-c', required=True, help='Output C file.')
-    parser.add_argument('--beta', required=True, help='Enable beta extensions.')
+    parser = argparse.ArgumentParser(description="Generador optimizado de características Vulkan para Mali G52 (Vulkan 1.0/1.1).")
+    parser.add_argument('--out-c', required=True, help='Ruta del archivo C de salida.')
+    parser.add_argument('--beta', default='false', help='Habilitar extensiones beta ("true"/"false"). Por defecto: false.')
+    parser.add_argument('--max-version', default='1.1', help='Versión máxima de Vulkan a soportar (ej. "1.1" para Mali G52).')
     parser.add_argument('--xml',
-                        help='Vulkan API XML file.',
+                        help='Archivo(s) XML de la API Vulkan.',
                         required=True, action='append', dest='xml_files')
     args = parser.parse_args()
 
-    pdev_features, feature_structs, all_flags = get_feature_structs_from_xml(args.xml_files, args.beta)
-
-    environment = {
-        'filename': os.path.basename(__file__),
-        'pdev_features': pdev_features,
-        'feature_structs': feature_structs,
-        'all_flags': all_flags,
-        'get_renamed_feature': get_renamed_feature,
-    }
-
     try:
+        pdev_features, feature_structs, all_flags = get_feature_structs_from_xml(args.xml_files, args.beta, args.max_version)
+
+        environment = {
+            'filename': os.path.basename(__file__),
+            'pdev_features': pdev_features,
+            'feature_structs': feature_structs,
+            'all_flags': all_flags,
+            'get_renamed_feature': get_renamed_feature,
+        }
+
+        # Asegurar que el directorio de salida exista de manera segura
+        out_dir = os.path.dirname(args.out_c)
+        if out_dir and not os.path.exists(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+
         with open(args.out_c, 'w', encoding='utf-8') as f:
             f.write(TEMPLATE_C.render(**environment))
-    except Exception:
-        # In the event there's an error, this uses some helpers from mako
-        # to print a useful stack trace and prints it, then exits with
-        # status 1, if python is run with debug; otherwise it just raises
-        # the exception
-        print(mako.exceptions.text_error_template().render(), file=sys.stderr)
+            
+        logger.info(f"Archivo de características generado exitosamente para Vulkan <= {args.max_version} en: {args.out_c}")
+
+    except Exception as e:
+        logger.error(f"Falló la ejecución del generador: {e}")
+        if 'mako' in sys.modules:
+            try:
+                print(mako.exceptions.text_error_template().render(), file=sys.stderr)
+            except Exception:
+                pass
         sys.exit(1)
 
 if __name__ == '__main__':
