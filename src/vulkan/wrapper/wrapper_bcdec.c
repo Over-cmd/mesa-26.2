@@ -17,6 +17,7 @@
 
 #include "bcdec.h"
 #include "wrapper_astc.h"
+#include "bcdec_mali_ext.h" // <- Aquí incluyes la cabecera para tener acceso
 
 /* Transcode BCn to ASTC 4x4 (Mali-native, stays compressed) instead of
  * decoding to RGBA8 (4-8x larger). Default on; WRAPPER_BCN_ASTC=0 falls back
