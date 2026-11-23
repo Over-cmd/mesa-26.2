@@ -54,7 +54,7 @@ jobs:
           per_line = 4
           for i in range(0, len(words), per_line):
               chunk = words[i : i + per_line]
-              lines.append("{" + ",".join(f"0x{w:08x}" for w in chunk) + "}")
+              lines.append(",".join(f"0x{w:08x}" for w in chunk))
 
           header = f"""/* Auto-generated from wrapper_bcn_transcode.comp via glslc. Do not edit. */
           #ifndef {guard}
