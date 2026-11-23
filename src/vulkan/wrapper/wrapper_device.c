@@ -5305,10 +5305,11 @@ wrapper_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
 static void
 wrapper_free_staging_list(struct wrapper_device *device, struct list_head *pending)
 {
-   struct wrapper_buffer *wb, *next;
-   
-   list_for_each_entry_safe(struct wrapper_buffer, wb, next, pending, link) {
-      if (!wb) continue;
+   struct wrapper_buffer *wb;
+
+   list_for_each_entry_safe(struct wrapper_buffer, wb, pending, link) {
+      if (!wb)
+         continue;
       VkDeviceMemory memory = wb->memory;
       if (wb->desc_pool)
          device->dispatch_table.DestroyDescriptorPool(device->dispatch_handle,
