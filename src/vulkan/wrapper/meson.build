@@ -7,8 +7,8 @@ wrapper_icd = custom_target(
     '@INPUT0@',
     '--api-version', '1.3',
     '--xml', '@INPUT1@',
-    '--icd-lib-path', join_paths(get_option('prefix'), get_option('libdir'), 'libvulkan_wrapper.so'),
-    '--icd-filename', '@OUTPUT@',
+    '--icd-lib-path', get_option('prefix') / get_option('libdir'),
+    '--icd-filename', 'libvulkan_wrapper.so',
     '--out', '@OUTPUT@',
   ],
   build_by_default: true,
@@ -85,6 +85,7 @@ wrapper_files = files(
   'graphicsenv_hook.cpp',
   'spirv_patcher.cpp',
   'wrapper_bcdec.c',
+  'bcdec_mali_ext.c',      # 🚀 Añadido aquí para que Meson lo compile
   'wrapper_log.c',
   'wrapper_physical_device.c',
   'wrapper_native_audio.c',
@@ -97,6 +98,7 @@ wrapper_deps = [
   adrenotools_dep,
   dep_android,
   dep_aaudio, # 🚀 COMPILACIÓN INDESTRUCTIBLE: Fuerza el linkeo de AAudio en libvulkan_wrapper.so
+  dep_m, # 🚀 Añadido para resolver sqrtf() en bcdec_mali_ext.c
 ]
 
 libvulkan_wrapper = shared_library(
