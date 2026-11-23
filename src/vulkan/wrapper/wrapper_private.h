@@ -1,6 +1,9 @@
 #ifndef __WRAPPER_PRIVATE_H
 #define __WRAPPER_PRIVATE_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "vulkan/runtime/vk_instance.h"
 #include "vulkan/runtime/vk_physical_device.h"
 #include "vulkan/runtime/vk_device.h"
@@ -24,9 +27,8 @@ extern const struct vk_device_extension_table wrapper_device_extensions;
 extern const struct vk_device_extension_table wrapper_filter_extensions;
 
 /* 🚨 BALANCER MULTI-ARCH INSTANCIA:
-   Forzamos un empaquetamiento compacto de 4 bytes exclusivo si el juego que está corriendo 
-   es un ejecutable antiguo de 32 bits. Esto garantiza que las tablas de despacho 'dispatch_table' 
-   no sufran desfasamientos de punteros ni fugas de bytes, permitiendo un arranque estable de largo. */
+   Forzamos un empaquetamiento compacto de 4 bytes si el juego corre en 32 bits,
+   evitando desfasamientos en las tablas de despacho. */
 #if defined(__arm__) || defined(__i386__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4)
 #pragma pack(push, 4)
 #endif
@@ -45,11 +47,7 @@ struct wrapper_instance {
 VK_DEFINE_HANDLE_CASTS(wrapper_instance, vk.base, VkInstance,
                        VK_OBJECT_TYPE_INSTANCE)
 
-/* 🚨 BALANCER MULTI-ARCH DISPOSITIVO FÍSICO Y COLA:
-   Forzamos un empaquetamiento compacto de 4 bytes exclusivo si el juego que está corriendo 
-   es un ejecutable antiguo de 32 bits. Esto garantiza que las estructuras masivas como properties2, 
-   memory_properties y wsi_device mantengan su alineación milimétrica y no corrompan los punteros 
-   vecinos, permitiendo que los juegos de 32 bits levanten estables de largo en tu tablet. */
+/* 🚨 BALANCER MULTI-ARCH DISPOSITIVO FÍSICO Y COLA */
 #if defined(__arm__) || defined(__i386__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4)
 #pragma pack(push, 4)
 #endif
@@ -59,12 +57,13 @@ struct wrapper_physical_device {
 
    int dma_heap_fd;
    
-   // 🚨 EXCLUSIVO MALI Y AUDIO: Forzamos la lectura directa en RAM de los estados críticos
+   // 🚨 EXCLUSIVO MALI: Lectura directa en RAM de estados críticos
    volatile int emulate_bcn;
    volatile bool is_vkd3d;
+   bool emulate_imageless_framebuffer;
+   bool emulate_vulkan13;
    
-   // 🚨 DETECTOR DE SILICIO MALI: Forzamos la activación de extensiones avanzadas
-   // basadas en las capacidades físicas de OpenGL ES verificadas en la tablet.
+   // 🚨 DETECTOR DE SILICIO MALI: Extensiones avanzadas basadas en GLES
    bool has_tessellation_shaders;
    bool has_geometry_shaders;
    bool has_custom_bgra_formats;
@@ -98,11 +97,7 @@ struct wrapper_queue {
 VK_DEFINE_HANDLE_CASTS(wrapper_queue, vk.base, VkQueue,
                        VK_OBJECT_TYPE_QUEUE)
 
-/* 🚨 BALANCER MULTI-ARCH DISPOSITIVO LÓGICO:
-   Forzamos un empaquetamiento compacto de 4 bytes exclusivo si el juego que está corriendo 
-   es un ejecutable antiguo de 32 bits. Esto garantiza que las tablas hash, los mutex y el motor 
-   de transcodificación BCn->ASTC mantengan su alineación milimétrica y no sufran desfasamientos 
-   de punteros en la RAM virtual, permitiendo un arranque 100% exitoso en ambas arquitecturas. */
+/* 🚨 BALANCER MULTI-ARCH DISPOSITIVO LÓGICO */
 #if defined(__arm__) || defined(__i386__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4)
 #pragma pack(push, 4)
 #endif
@@ -119,13 +114,17 @@ struct wrapper_device {
    struct list_head fence_list;
    struct hash_table_u64 *buffer_table;
    struct hash_table_u64 *image_table;
+   struct hash_table_u64 *image_view_table;
+   struct hash_table_u64 *imageless_fb_table;
+   struct hash_table_u64 *dynamic_pipeline_table;
    struct hash_table_u64 *fence_table;
    struct wrapper_physical_device *physical;
    struct vk_device_dispatch_table dispatch_table;
 
-   // 🚨 EXCLUSIVO MALI: Forzamos lectura directa en RAM para evitar hilos cruzados corruptos
+   // 🚨 EXCLUSIVO MALI: Prevención de hilos cruzados corruptos
    volatile bool emulate_null_descriptor;
    volatile bool device_fault_enabled;
+   bool emulate_imageless_framebuffer;
 
    /* VK_KHR_push_descriptor emulation (for drivers lacking it, e.g. Mali r44).
     * Enabled when the app uses push descriptors and either the base driver
@@ -152,6 +151,16 @@ struct wrapper_device {
    VkPipelineLayout bcn_pipe_layout;
    VkPipeline bcn_pipeline;
    VkDeviceSize bcn_gpu_inflight;        /* transient GPU-transcode bytes not yet freed */
+
+   /* Private queue and synchronous command buffer for host query reset. */
+   simple_mtx_t query_reset_mutex;
+   VkCommandPool query_reset_pool;
+   VkCommandBuffer query_reset_cmd;
+   VkFence query_reset_fence;
+   VkQueue query_reset_queue;
+   uint32_t query_reset_queue_family;
+   uint32_t query_reset_queue_index;
+   bool query_reset_shared_queue;        /* no spare queue: shares the app's */
 };
 
 #if defined(__arm__) || defined(__i386__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4)
@@ -203,6 +212,7 @@ struct wrapper_image {
    bool is_emulated_bgra8;
    bool is_wsi_image;
    VkExternalMemoryHandleTypeFlags handle_types;
+   uint32_t mip_drop;
 };
 
 struct wrapper_image *
@@ -240,11 +250,9 @@ struct wrapper_command_buffer {
    struct wrapper_fence *fence;
    VkCommandBuffer dispatch_handle;
    struct wrapper_push_pool *push_pools;   /* emulated push-descriptor pools */
-
-   /* Buffers temporales de transcodificacion BCn creados al GRABAR este command
-    * buffer. Al enviarlo con un fence pasan a la lista del fence; si no, se
-    * liberan en Begin/Reset/Free (el CB ya no esta en ejecucion). */
-   struct list_head staging_buffers_list;
+   struct list_head dynamic_render_objects;
+   struct list_head staging_buffers_list;   /* 👈 AÑADIDO: Requerido por wrapper_cb_take_staging */
+   bool dynamic_rendering_active;
 };
 
 VK_DEFINE_HANDLE_CASTS(wrapper_command_buffer, vk.base, VkCommandBuffer,
@@ -282,6 +290,35 @@ struct wrapper_push_template {         /* per VkDescriptorUpdateTemplate */
    uint32_t set;
 };
 
+struct wrapper_image_view {
+   VkImageView handle;
+   VkImage image;
+   VkFormat format;
+   VkSampleCountFlagBits samples;
+};
+
+struct wrapper_dynamic_pipeline {
+   VkPipeline pipeline;
+   VkRenderPass render_pass;
+};
+
+struct wrapper_dynamic_render_object {
+   struct list_head link;
+   VkRenderPass render_pass;
+   VkFramebuffer framebuffer;
+};
+
+/* An imageless VkFramebuffer the wrapper handed out itself, because the base
+ * driver has no VK_KHR_imageless_framebuffer.  It holds no driver object: the
+ * real framebuffer is built at vkCmdBeginRenderPass, once the image views
+ * arrive in VkRenderPassAttachmentBeginInfo. */
+struct wrapper_imageless_framebuffer {
+   uint32_t attachment_count;
+   uint32_t width;
+   uint32_t height;
+   uint32_t layers;
+};
+
 VkResult enumerate_physical_device(struct vk_instance *_instance);
 void destroy_physical_device(struct vk_physical_device *pdevice);
 
@@ -300,7 +337,9 @@ wrapper_device_memory_create(struct wrapper_device *device,
 void
 wrapper_device_memory_destroy(struct wrapper_device_memory *mem);
 
-void 
-wrapper_sync_cached_memory(struct wrapper_device *device);
+/* Sincronización y diagnóstico avanzados */
+void wrapper_sync_cached_memory(struct wrapper_device *device);
+int wrapper_diag_on(void);
+void wrapper_diag_append(const char *fmt, ...);
 
-#endif
+#endif /* __WRAPPER_PRIVATE_H */
