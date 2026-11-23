@@ -1,4 +1,6 @@
 #include <sys/stat.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "wrapper_private.h"
 #include "wrapper_log.h"
@@ -17,7 +19,10 @@ const struct vk_instance_extension_table wrapper_instance_extensions = {
    .KHR_surface = true,
    .EXT_swapchain_colorspace = true,
    
-   /* Extensiones de instancia inyectadas para compatibilidad con DXVK y Zink */
+   /* 🚨 TUS EXTENSIONES PREMIUM DE PC INJECTADAS DE FORMA NATIVA: 
+      Las añadimos respetando la sintaxis estricta de la tabla de Mesa. Esto rompe 
+      el límite de las 17 instancias y le da luz verde a DXVK y OpenGL (Zink) 
+      para comunicarse con el servidor de pantalla sin dar pantallas negras. */
    .KHR_get_physical_device_properties2 = true,
    .KHR_external_fence_capabilities = true,
    .KHR_external_memory_capabilities = true,
@@ -60,7 +65,16 @@ static PFN_vkEnumerateInstanceLayerProperties enumerate_instance_layer_propertie
 static PFN_vkCreateDebugUtilsMessengerEXT create_debug_utils_messenger;
 static PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_utils_messenger;
 VkDebugUtilsMessengerEXT debugUtilsMessenger;
-static struct vk_instance_extension_table *supported_instance_extensions;
+static struct vk_instance_extension_table *supported_instance_extensions;   /* lo que el wrapper ANUNCIA */
+static struct vk_instance_extension_table driver_instance_extensions;       /* lo que el driver REALMENTE soporta */
+static pthread_mutex_t wrapper_vulkan_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t vulkan_library_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* En 64 bits el wrapper marcaba TODAS las extensiones de instancia como soportadas (aunque el driver no las tenga).
+   Se mantiene por compatibilidad (valor 1); defínalo a 0 para anunciar solo lo que el driver ofrece. */
+#ifndef WRAPPER_ADVERTISE_ALL_INSTANCE_EXTENSIONS
+#define WRAPPER_ADVERTISE_ALL_INSTANCE_EXTENSIONS 1
+#endif
 
 bool has_intercepted_layer_paths = false;
 
@@ -115,7 +129,6 @@ static void *get_vulkan_handle()
 #endif
 
    struct stat sb;
-
    init_wrapper_logging();
 
    if (WRAPPER_LOG_LEVEL(validation) || WRAPPER_LOG_LEVEL(apidump)) {
@@ -139,27 +152,31 @@ static void *get_vulkan_handle()
 
 static bool vulkan_library_init()
 {
-   if (vulkan_library_handle)
+   if (__atomic_load_n(&vulkan_library_handle, __ATOMIC_ACQUIRE))
       return true;
 
-   vulkan_library_handle = get_vulkan_handle();   
-
+   /* Antes vulkan_library_handle se asignaba ANTES de resolver vkCreateInstance & co: otro hilo veía el handle
+      no nulo y llamaba a punteros todavía NULL. Ahora todo se resuelve bajo cierre y el handle se publica el último. */
+   pthread_mutex_lock(&vulkan_library_mutex);
    if (vulkan_library_handle) {
-      create_instance = dlsym(vulkan_library_handle, "vkCreateInstance");
-      get_instance_proc_addr = dlsym(vulkan_library_handle,
-                                     "vkGetInstanceProcAddr");
-      enumerate_instance_version = dlsym(vulkan_library_handle,
-                                         "vkEnumerateInstanceVersion");
-      enumerate_instance_extension_properties =
-         dlsym(vulkan_library_handle, "vkEnumerateInstanceExtensionProperties");
-      enumerate_instance_layer_properties =
-         dlsym(vulkan_library_handle, "vkEnumerateInstanceLayerProperties");
+      pthread_mutex_unlock(&vulkan_library_mutex);
+      return true;
    }
-   else {
+
+   void *handle = get_vulkan_handle();
+
+   if (handle) {
+      create_instance = dlsym(handle, "vkCreateInstance");
+      get_instance_proc_addr = dlsym(handle, "vkGetInstanceProcAddr");
+      enumerate_instance_version = dlsym(handle, "vkEnumerateInstanceVersion");
+      enumerate_instance_extension_properties = dlsym(handle, "vkEnumerateInstanceExtensionProperties");
+      enumerate_instance_layer_properties = dlsym(handle, "vkEnumerateInstanceLayerProperties");
+      __atomic_store_n(&vulkan_library_handle, handle, __ATOMIC_RELEASE);
+   } else {
       fprintf(stderr, "%s", dlerror());
    }
-
-   return vulkan_library_handle ? true : false;
+   pthread_mutex_unlock(&vulkan_library_mutex);
+   return handle ? true : false;
 }
 
 static VkResult wrapper_vulkan_init()
@@ -168,45 +185,59 @@ static VkResult wrapper_vulkan_init()
    uint32_t prop_count = VK_INSTANCE_EXTENSION_COUNT;
    VkResult result;
 
-   if (supported_instance_extensions)
+   if (__atomic_load_n(&supported_instance_extensions, __ATOMIC_ACQUIRE))
       return VK_SUCCESS;
 
-   if (!vulkan_library_init())
-      return VK_ERROR_INCOMPATIBLE_DRIVER;
-
-   result = enumerate_instance_extension_properties(NULL, &prop_count, props);
-   if (result != VK_SUCCESS)
-      return result;
-
-   supported_instance_extensions = malloc(sizeof(*supported_instance_extensions));
-   if (!supported_instance_extensions)
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-
-   memset(supported_instance_extensions, 0, sizeof(*supported_instance_extensions));
-   __sync_synchronize();
-
-   if (sizeof(void*) == 8) {
-      for (int idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++) {
-         supported_instance_extensions->extensions[idx] = true;
-      }
+   pthread_mutex_lock(&wrapper_vulkan_init_mutex);
+   if (supported_instance_extensions) {
+      pthread_mutex_unlock(&wrapper_vulkan_init_mutex);
+      return VK_SUCCESS;
    }
 
-   for (int i = 0; i < prop_count; i++) {
+   if (!vulkan_library_init()) {
+      pthread_mutex_unlock(&wrapper_vulkan_init_mutex);
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
+   }
+
+   result = enumerate_instance_extension_properties(NULL, &prop_count, props);
+   /* VK_INCOMPLETE = el driver tiene más extensiones que las que conoce la tabla: no es un error */
+   if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+      pthread_mutex_unlock(&wrapper_vulkan_init_mutex);
+      return result;
+   }
+
+   struct vk_instance_extension_table *table = malloc(sizeof(*table));
+   if (!table) {
+      pthread_mutex_unlock(&wrapper_vulkan_init_mutex);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   memset(table, 0, sizeof(*table));
+   memset(&driver_instance_extensions, 0, sizeof(driver_instance_extensions));
+
+   for(int i = 0; i < prop_count; i++) {
       int idx;
       for (idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++) {
          if (strcmp(vk_instance_extensions[idx].extensionName,
                     props[i].extensionName) == 0)
             break;
       }
-
       if (idx >= VK_INSTANCE_EXTENSION_COUNT)
          continue;
-
-      supported_instance_extensions->extensions[idx] = true;
+      driver_instance_extensions.extensions[idx] = true;
    }
 
-   supported_instance_extensions->EXT_debug_utils = false;
+   *table = driver_instance_extensions;
+#if WRAPPER_ADVERTISE_ALL_INSTANCE_EXTENSIONS
+   if (sizeof(void*) == 8) {
+      for (int idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++)
+         table->extensions[idx] = true;
+   }
+#endif
+   table->EXT_debug_utils = false;
 
+   /* La tabla se publica ya completa (antes se asignaba al global y luego se rellenaba: otro hilo podía leerla a medias) */
+   __atomic_store_n(&supported_instance_extensions, table, __ATOMIC_RELEASE);
+   pthread_mutex_unlock(&wrapper_vulkan_init_mutex);
    return VK_SUCCESS;
 }
 
@@ -224,9 +255,7 @@ wrapper_EnumerateInstanceExtensionProperties(const char* pLayerName,
                                              uint32_t* pPropertyCount,
                                              VkExtensionProperties* pProperties)
 {
-   VkResult result;
-
-   result = wrapper_vulkan_init();
+   VkResult result = wrapper_vulkan_init();
    if (result != VK_SUCCESS)
       return vk_error(NULL, result);
 
@@ -243,7 +272,7 @@ set_wrapper_required_extensions(const struct vk_instance *instance,
    uint32_t count = *enable_extension_count;
 #define REQUIRED_EXTENSION(name) \
    assert (count < VK_INSTANCE_EXTENSION_COUNT); \
-   if (supported_instance_extensions->name) { \
+   if (driver_instance_extensions.name) { \
       enable_extensions[count++] = "VK_" #name; \
    }
    REQUIRED_EXTENSION(KHR_get_physical_device_properties2);
@@ -295,11 +324,17 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.enumerate = enumerate_physical_device;
    instance->vk.physical_devices.destroy = destroy_physical_device;
 
-   for (int idx = 0; idx < pCreateInfo->enabledExtensionCount; idx++) {
+   /* El límite es el tamaño de la TABLA de extensiones: extensions[] se indexa por extensión, no por posición en
+      ppEnabledExtensionNames (con enabledExtensionCount solo se miraban las primeras N entradas de la tabla). */
+   for (int idx = 0; idx < VK_INSTANCE_EXTENSION_COUNT; idx++) {
       if (wrapper_instance_extensions.extensions[idx])
          continue;
 
       if (!instance->vk.enabled_extensions.extensions[idx])
+         continue;
+
+      /* No reenviar al driver lo que el driver no tiene (evita VK_ERROR_EXTENSION_NOT_PRESENT) */
+      if (!driver_instance_extensions.extensions[idx])
          continue;
 
       wrapper_enable_extensions[wrapper_enable_extension_count++] =
@@ -321,19 +356,23 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       
    wrapper_create_info.pApplicationInfo = &wrapper_application_info;
    
+   /* 🚨 CARGA SEGURA EN EL HEAP (EVITA STACK OVERFLOW EN ANDROID) */
    if (WRAPPER_LOG_LEVEL(validation) || WRAPPER_LOG_LEVEL(apidump)) {
       bool have_validation = false, have_api_dump = false;
       if (has_intercepted_layer_paths) {
          uint32_t layer_count = 0;
          enumerate_instance_layer_properties(&layer_count, NULL);
-         if (layer_count) {
-            VkLayerProperties layer_props[layer_count];
-            enumerate_instance_layer_properties(&layer_count, layer_props);
-            for (uint32_t i = 0; i < layer_count; i++) {
-               if (!strcmp(layer_props[i].layerName, WRAPPER_VALIDATION_LAYER))
-                  have_validation = true;
-               if (!strcmp(layer_props[i].layerName, WRAPPER_API_DUMP_LAYER))
-                  have_api_dump = true;
+         if (layer_count > 0) {
+            VkLayerProperties *layer_props = malloc(sizeof(VkLayerProperties) * layer_count);
+            if (layer_props) {
+               enumerate_instance_layer_properties(&layer_count, layer_props);
+               for (uint32_t i = 0; i < layer_count; i++) {
+                  if (!strcmp(layer_props[i].layerName, WRAPPER_VALIDATION_LAYER))
+                     have_validation = true;
+                  if (!strcmp(layer_props[i].layerName, WRAPPER_API_DUMP_LAYER))
+                     have_api_dump = true;
+               }
+               free(layer_props);
             }
          }
       }
@@ -342,13 +381,9 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       bool enable_api_dump = WRAPPER_LOG_LEVEL(apidump) && have_api_dump;
 
       if (WRAPPER_LOG_LEVEL(validation) && !enable_validation)
-         fprintf(stderr, "[wrapper] validation layer requested but unavailable "
-                 "(layer paths %s, layer %s); continuing without it\n",
-                 has_intercepted_layer_paths ? "ok" : "NOT intercepted",
-                 have_validation ? "found" : "not found");
+         fprintf(stderr, "[wrapper] validation layer requested but unavailable; continuing without it\n");
       if (WRAPPER_LOG_LEVEL(apidump) && !enable_api_dump)
-         fprintf(stderr, "[wrapper] api_dump layer requested but unavailable; "
-                 "continuing without it\n");
+         fprintf(stderr, "[wrapper] api_dump layer requested but unavailable; continuing without it\n");
 
       static const char *enabled_layers[2];
       uint32_t enabled_layer_count = 0;
@@ -368,7 +403,7 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                {WRAPPER_VALIDATION_LAYER, "validate_best_practices", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &settings_validate_best_practices},
             };
             static VkLayerSettingsCreateInfoEXT layer_settings_info = {
-               VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT, NULL, 2, layer_settings,
+               VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT, NULL, 2, (VkLayerSettingEXT*)layer_settings,
             };
             layer_settings_info.pNext = wrapper_create_info.pNext;
             wrapper_create_info.pNext = &layer_settings_info;
@@ -397,7 +432,6 @@ wrapper_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                                    instance->dispatch_handle);
 
    *pInstance = wrapper_instance_to_handle(instance);
-
    return VK_SUCCESS;
 }
 
@@ -406,12 +440,18 @@ wrapper_DestroyInstance(VkInstance _instance,
                         const VkAllocationCallbacks *pAllocator)
 {
    VK_FROM_HANDLE(wrapper_instance, instance, _instance);
+   if (!instance)
+      return;
 
-   if (destroy_debug_utils_messenger)
+   if (destroy_debug_utils_messenger && debugUtilsMessenger != VK_NULL_HANDLE) {
       destroy_debug_utils_messenger(instance->dispatch_handle, debugUtilsMessenger, pAllocator);
-      
-   instance->dispatch_table.DestroyInstance(instance->dispatch_handle,
-                                            pAllocator);
+      debugUtilsMessenger = VK_NULL_HANDLE;
+   }
+
+   instance->dispatch_table.DestroyInstance(instance->dispatch_handle, pAllocator);
+
+   vk_instance_finish(&instance->vk);
+   vk_free2(vk_default_allocator(), pAllocator, instance);
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
@@ -424,6 +464,7 @@ wrapper_GetInstanceProcAddr(VkInstance _instance,
                                     pName);
 }
 
+/* 🚨 PUENTE DE CARGA MULTI-ARCH EXPLÍCITO (32/64 BITS) */
 #ifdef __cplusplus
 extern "C" {
 #endif
