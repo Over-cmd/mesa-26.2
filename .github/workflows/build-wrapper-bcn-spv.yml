@@ -7,9 +7,10 @@ on:
     paths:
       - 'src/vulkan/wrapper/wrapper_bcn_transcode.comp'
       - '.github/workflows/build-wrapper-bcn-spv.yml'
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate-spv-header:
@@ -71,6 +72,18 @@ jobs:
           EOF
 
           head -n 8 "$OUT_H"
+
+      - name: Commit and push wrapper_bcn_spv.h
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vulkan/wrapper/wrapper_bcn_spv.h
+          if git diff --staged --quiet; then
+            echo "Sin cambios en wrapper_bcn_spv.h; no se crea commit."
+          else
+            git commit -m "chore: auto-generate wrapper_bcn_spv.h [skip ci]"
+            git push origin HEAD:fusion
+          fi
 
       - name: Upload wrapper_bcn_spv.h artifact
         uses: actions/upload-artifact@v4
